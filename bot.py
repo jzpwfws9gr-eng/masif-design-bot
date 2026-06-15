@@ -5,10 +5,9 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("BOT_TOKEN")
 
+
 def get_font(size):
     fonts = [
-        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
@@ -21,6 +20,7 @@ def get_font(size):
 
     return ImageFont.load_default()
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Send like this:\n"
@@ -30,6 +30,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Uruguay 1\n"
         "New Zealand 0"
     )
+
 
 async def group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = update.message.text.splitlines()
@@ -46,51 +47,61 @@ async def group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     img = Image.new("RGB", (1080, 1350), (18, 8, 45))
     draw = ImageDraw.Draw(img)
 
-    title_font = get_font(100)
-    group_font = get_font(120)
-    row_font = get_font(76)
-    pts_font = get_font(78)
-    small_font = get_font(44)
+    title_font = get_font(140)
+    group_font = get_font(180)
+    row_font = get_font(110)
+    pts_font = get_font(110)
+    small_font = get_font(60)
 
     gold = (218, 172, 62)
     purple = (55, 24, 100)
     dark = (18, 8, 45)
     box_dark = (30, 12, 65)
 
-    draw.text((540, 95), "GROUP STANDINGS", fill="white", font=title_font, anchor="mm")
+    draw.text((540, 120), "GROUP STANDINGS", fill="white", font=title_font, anchor="mm")
 
-    draw.rounded_rectangle((390, 165, 690, 275), radius=35, fill=gold)
-    draw.text((540, 220), group_name.upper(), fill=dark, font=group_font, anchor="mm")
+    draw.rounded_rectangle((340, 170, 740, 320), radius=40, fill=gold)
+    draw.text((540, 245), group_name.upper(), fill=dark, font=group_font, anchor="mm")
 
-    y = 405
+    y = 500
+
     for i in range(4):
         name, pts = teams[i] if i < len(teams) else ("-", "0")
 
-        draw.rounded_rectangle((70, y - 60, 1010, y + 70), radius=30, fill=purple)
+        draw.rounded_rectangle((60, y - 70, 1020, y + 80), radius=35, fill=purple)
 
-        draw.rounded_rectangle((835, y - 60, 1010, y + 70), radius=30, fill=gold)
-        draw.text((922, y), str(i + 1), fill=dark, font=pts_font, anchor="mm")
+        draw.rounded_rectangle((830, y - 70, 1020, y + 80), radius=35, fill=gold)
+        draw.text((925, y), str(i + 1), fill=dark, font=pts_font, anchor="mm")
 
-        draw.text((780, y), name, fill="white", font=row_font, anchor="rm")
+        draw.text((760, y), name, fill="white", font=row_font, anchor="rm")
 
-        draw.rounded_rectangle((70, y - 60, 220, y + 70), radius=28, fill=box_dark, outline=gold, width=4)
+        draw.rounded_rectangle(
+            (60, y - 70, 230, y + 80),
+            radius=30,
+            fill=box_dark,
+            outline=gold,
+            width=5,
+        )
+
         draw.text((145, y), pts, fill="white", font=pts_font, anchor="mm")
 
-        y += 160
+        y += 180
 
-    draw.text((540, 1130), "POINTS", fill=gold, font=small_font, anchor="mm")
-    draw.text((540, 1210), "MONDIAL ALMASIF 2026", fill=gold, font=small_font, anchor="mm")
+    draw.text((540, 1230), "POINTS", fill=gold, font=small_font, anchor="mm")
+    draw.text((540, 1290), "MONDIAL ALMASIF 2026", fill=gold, font=small_font, anchor="mm")
 
     path = "group.png"
     img.save(path)
 
     await update.message.reply_photo(photo=open(path, "rb"))
 
+
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("group", group))
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
