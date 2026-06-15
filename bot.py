@@ -11,7 +11,7 @@ FONT_PATH = "Cairo-Bold-1.ttf"
 def get_font(size):
     return ImageFont.truetype(FONT_PATH, size)
 
-def fix_ar(text):
+def ar(text):
     return get_display(arabic_reshaper.reshape(str(text)))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -37,21 +37,22 @@ async def group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     img = Image.new("RGB", (1080, 1080), (18, 8, 45))
     draw = ImageDraw.Draw(img)
 
-    title_font = get_font(72)
+    title_font = get_font(76)
     group_font = get_font(90)
-    row_font = get_font(62)
+    row_font = get_font(66)
     pts_font = get_font(70)
-    small_font = get_font(34)
+    small_font = get_font(36)
 
     gold = (218, 172, 62)
     purple = (55, 24, 100)
     dark = (18, 8, 45)
 
-    draw.text((540, 75), fix_ar("ترتيب المجموعة"), fill="white", font=title_font, anchor="mm")
-    draw.rounded_rectangle((390, 125, 690, 225), radius=28, fill=gold)
-    draw.text((540, 175), group_name.upper(), fill=dark, font=group_font, anchor="mm")
+    draw.text((540, 80), ar("ترتيب المجموعة"), fill="white", font=title_font, anchor="mm")
 
-    y = 315
+    draw.rounded_rectangle((390, 130, 690, 230), radius=28, fill=gold)
+    draw.text((540, 180), group_name.upper(), fill=dark, font=group_font, anchor="mm")
+
+    y = 320
     for i in range(4):
         name, pts = teams[i] if i < len(teams) else ("-", "0")
 
@@ -60,18 +61,19 @@ async def group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         draw.rounded_rectangle((840, y - 45, 1010, y + 55), radius=25, fill=gold)
         draw.text((925, y), str(i + 1), fill=dark, font=pts_font, anchor="mm")
 
-        draw.text((780, y), fix_ar(name), fill="white", font=row_font, anchor="rm")
+        draw.text((780, y), ar(name), fill="white", font=row_font, anchor="rm")
 
         draw.rounded_rectangle((70, y - 45, 200, y + 55), radius=22, outline=gold, width=4)
         draw.text((135, y), str(pts), fill="white", font=pts_font, anchor="mm")
 
         y += 130
 
-    draw.text((540, 910), fix_ar("النقاط"), fill=gold, font=small_font, anchor="mm")
-    draw.text((540, 965), fix_ar("مونديال المصيف 2026"), fill=gold, font=small_font, anchor="mm")
+    draw.text((540, 910), ar("النقاط"), fill=gold, font=small_font, anchor="mm")
+    draw.text((540, 965), ar("مونديال المصيف 2026"), fill=gold, font=small_font, anchor="mm")
 
     path = "group.png"
     img.save(path)
+
     with open(path, "rb") as photo:
         await update.message.reply_photo(photo=photo)
 
