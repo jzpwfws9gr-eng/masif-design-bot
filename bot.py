@@ -7,10 +7,13 @@ TOKEN = os.getenv("BOT_TOKEN")
 
 
 def get_font(size):
-    return ImageFont.truetype(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        size
-    )
+    try:
+        return ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            size
+        )
+    except:
+        return ImageFont.load_default()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
