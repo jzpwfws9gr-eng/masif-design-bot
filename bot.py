@@ -16,17 +16,6 @@ def get_font(size):
         return ImageFont.load_default()
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Send like this:\n"
-        "/group A\n"
-        "Spain 6\n"
-        "Saudi Arabia 4\n"
-        "Uruguay 1\n"
-        "New Zealand 0"
-    )
-
-
 async def group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = update.message.text.splitlines()
     group_name = lines[0].replace("/group", "").strip() or "A"
@@ -39,58 +28,111 @@ async def group(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pts = parts[1].strip()
             teams.append((name, pts))
 
-    img = Image.new("RGB", (1080, 1350), (18, 8, 45))
+    img = Image.new("RGB", (1080, 1080), (18, 8, 45))
     draw = ImageDraw.Draw(img)
 
-    title_font = get_font(140)
-    group_font = get_font(180)
-    row_font = get_font(110)
-    pts_font = get_font(110)
-    small_font = get_font(60)
+    title_font = get_font(60)
+    group_font = get_font(80)
+    row_font = get_font(52)
+    pts_font = get_font(55)
+    small_font = get_font(28)
 
     gold = (218, 172, 62)
     purple = (55, 24, 100)
     dark = (18, 8, 45)
-    box_dark = (30, 12, 65)
 
-    draw.text((540, 120), "GROUP STANDINGS", fill="white", font=title_font, anchor="mm")
+    draw.text(
+        (540, 70),
+        "GROUP STANDINGS",
+        fill="white",
+        font=title_font,
+        anchor="mm"
+    )
 
-    draw.rounded_rectangle((340, 170, 740, 320), radius=40, fill=gold)
-    draw.text((540, 245), group_name.upper(), fill=dark, font=group_font, anchor="mm")
+    draw.rounded_rectangle(
+        (390, 110, 690, 200),
+        radius=25,
+        fill=gold
+    )
 
-    y = 500
+    draw.text(
+        (540, 155),
+        group_name.upper(),
+        fill=dark,
+        font=group_font,
+        anchor="mm"
+    )
+
+    y = 290
 
     for i in range(4):
         name, pts = teams[i] if i < len(teams) else ("-", "0")
 
-        draw.rounded_rectangle((60, y - 70, 1020, y + 80), radius=35, fill=purple)
-
-        draw.rounded_rectangle((830, y - 70, 1020, y + 80), radius=35, fill=gold)
-        draw.text((925, y), str(i + 1), fill=dark, font=pts_font, anchor="mm")
-
-        draw.text((760, y), name, fill="white", font=row_font, anchor="rm")
-
         draw.rounded_rectangle(
-            (60, y - 70, 230, y + 80),
-            radius=30,
-            fill=box_dark,
-            outline=gold,
-            width=5,
+            (80, y - 40, 1000, y + 50),
+            radius=22,
+            fill=purple
         )
 
-        draw.text((145, y), pts, fill="white", font=pts_font, anchor="mm")
+        draw.rounded_rectangle(
+            (850, y - 40, 1000, y + 50),
+            radius=22,
+            fill=gold
+        )
 
-        y += 180
+        draw.text(
+            (925, y),
+            str(i + 1),
+            fill=dark,
+            font=pts_font,
+            anchor="mm"
+        )
 
-    draw.text((540, 1230), "POINTS", fill=gold, font=small_font, anchor="mm")
-    draw.text((540, 1290), "MONDIAL ALMASIF 2026", fill=gold, font=small_font, anchor="mm")
+        draw.text(
+            (760, y),
+            name,
+            fill="white",
+            font=row_font,
+            anchor="rm"
+        )
+
+        draw.rounded_rectangle(
+            (80, y - 40, 180, y + 50),
+            radius=20,
+            outline=gold,
+            width=3
+        )
+
+        draw.text(
+            (130, y),
+            pts,
+            fill="white",
+            font=pts_font,
+            anchor="mm"
+        )
+
+        y += 130
+
+    draw.text(
+        (540, 930),
+        "POINTS",
+        fill=gold,
+        font=small_font,
+        anchor="mm"
+    )
+
+    draw.text(
+        (540, 980),
+        "MONDIAL ALMASIF 2026",
+        fill=gold,
+        font=small_font,
+        anchor="mm"
+    )
 
     path = "group.png"
     img.save(path)
 
     await update.message.reply_photo(photo=open(path, "rb"))
-
-
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
