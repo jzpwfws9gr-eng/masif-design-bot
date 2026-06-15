@@ -38,18 +38,15 @@ async def group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     img = Image.open(TEMPLATE_PATH).convert("RGB")
     draw = ImageDraw.Draw(img)
 
-    group_font = get_font(95)
-    team_font = get_font(78)
-    num_font = get_font(76)
+    team_font = get_font(58)
+    num_font = get_font(62)
 
     dark = (20, 8, 45)
     white = (255, 255, 255)
 
-    # حرف المجموعة
-    draw.text((540, 407), str(group_name).upper(), fill=(222, 174, 55), font=group_font, anchor="mm")
+    # ملاحظة: حرف المجموعة موجود داخل القالب نفسه، لذلك ما نكتبه بالكود
 
-    # الإحداثيات حسب القالب
-    rows_y = [605, 755, 905, 1055]
+    rows_y = [610, 760, 910, 1060]
 
     for i in range(4):
         name, pts = teams[i] if i < len(teams) else ("-", "0")
@@ -58,8 +55,8 @@ async def group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # النقاط يسار
         draw.text((143, y), str(pts), fill=white, font=num_font, anchor="mm")
 
-        # اسم المنتخب وسط
-        draw.text((690, y), ar(name), fill=white, font=team_font, anchor="rm")
+        # المنتخب
+        draw.text((760, y), ar(name), fill=white, font=team_font, anchor="rm")
 
         # المركز يمين
         draw.text((925, y), str(i + 1), fill=dark, font=num_font, anchor="mm")
