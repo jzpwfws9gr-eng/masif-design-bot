@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("BOT_TOKEN")
-FONT_PATH = "Cairo-Bold-1.ttf"
+FONT_PATH = "NotoNaskhArabic-Bold.ttf"
 
 def get_font(size):
     return ImageFont.truetype(FONT_PATH, size)
