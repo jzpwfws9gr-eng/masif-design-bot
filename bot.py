@@ -19,6 +19,15 @@ HEADERS = [
     "نقاط الكابتن", "مجموع اليوم"
 ]
 
+GOAL_POINTS = {
+    1: 5,
+    2: 10,
+    3: 15,
+    4: 20,
+    5: 25,
+    6: 30,
+}
+
 def excel_file(day):
     return f"fantasy_day_{day}.xlsx"
 
@@ -107,7 +116,8 @@ def create_excel(day, data):
     return file_name
 
 def parse_results(text):
-    goals, clean_sheets = [], []
+    goals = {}
+    clean_sheets = []
     mode = None
 
     for line in text.splitlines()[1:]:
@@ -124,7 +134,20 @@ def parse_results(text):
             continue
 
         if mode == "goals":
-            goals.append(normalize_name(line))
+            if "|" in line:
+                player, count = line.split("|", 1)
+                player = normalize_name(player)
+
+                try:
+                    count = int(count.strip())
+                except:
+                    count = 1
+
+                goals[player] = GOAL_POINTS.get(count, count * 5)
+            else:
+                player = normalize_name(line)
+                goals[player] = 5
+
         elif mode == "clean":
             clean_sheets.append(normalize_name(line))
 
@@ -146,15 +169,19 @@ def calculate_points(day, goals, clean_sheets):
         captain = normalize_name(ws.cell(row=row, column=6).value)
 
         keeper_points = 5 if keeper in clean_sheets else 0
-        p1_points = 5 if p1 in goals else 0
-        p2_points = 5 if p2 in goals else 0
-        p3_points = 5 if p3 in goals else 0
+        p1_points = goals.get(p1, 0)
+        p2_points = goals.get(p2, 0)
+        p3_points = goals.get(p3, 0)
 
         captain_points = 0
-        if captain in goals:
-            captain_points = 5
-        if captain == keeper and keeper in clean_sheets:
-            captain_points = 5
+        if captain == p1:
+            captain_points = p1_points
+        elif captain == p2:
+            captain_points = p2_points
+        elif captain == p3:
+            captain_points = p3_points
+        elif captain == keeper:
+            captain_points = keeper_points
 
         total = keeper_points + p1_points + p2_points + p3_points + captain_points
 
@@ -224,7 +251,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "البوت جاهز ✅\n\n"
         "/اضافه 5\n"
         "/نتائج 5\n"
-        "/الترتيب_العام"
+        "/الترتيب_العام\n\n"
+        "مثال النتائج:\n"
+        "/نتائج 5\n\n"
+        "الأهداف:\n"
+        "داروين نونيز|2\n"
+        "أويارزابال|1\n\n"
+        "الكلين شيت:\n"
+        "أوناي سيمون"
     )
 
 async def add_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
