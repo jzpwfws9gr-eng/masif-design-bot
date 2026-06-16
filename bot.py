@@ -1,11 +1,11 @@
 import os
+import re
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("BOT_TOKEN")
-EXCEL_FILE = "fantasy.xlsx"
 
 PARTICIPANTS = [
     "عادل عيد",
@@ -28,6 +28,16 @@ HEADERS = [
     "نقاط الكابتن", "مجموع اليوم"
 ]
 
+
+def excel_file(day):
+    return f"fantasy_day_{day}.xlsx"
+
+
+def get_day(text):
+    match = re.search(r"(\d+)", text)
+    return match.group(1) if match else "5"
+
+
 def normalize_name(name):
     fixes = {
         "سيمون": "أوناي سيمون",
@@ -48,6 +58,7 @@ def normalize_name(name):
     }
     name = str(name).strip()
     return fixes.get(name, name)
+
 
 def style_sheet(ws):
     header_fill = PatternFill("solid", fgColor="1F4E78")
@@ -95,11 +106,11 @@ def style_sheet(ws):
             if cell.value == "لم يشارك":
                 cell.font = gray_font
 
-            if cell.row != 1 and cell.column in [7, 8, 9, 10] and cell.value and cell.value > 0:
+            if cell.row != 1 and cell.column in [7, 8, 9, 10] and isinstance(cell.value, int) and cell.value > 0:
                 cell.fill = green_fill
                 cell.font = bold_font
 
-            if cell.row != 1 and cell.column == 11 and cell.value and cell.value > 0:
+            if cell.row != 1 and cell.column == 11 and isinstance(cell.value, int) and cell.value > 0:
                 cell.fill = yellow_fill
                 cell.font = bold_font
 
@@ -107,10 +118,13 @@ def style_sheet(ws):
     for r in range(2, ws.max_row + 1):
         ws.row_dimensions[r].height = 24
 
-def create_excel(data):
+
+def create_excel(day, data):
+    file_name = excel_file(day)
+
     wb = Workbook()
     ws = wb.active
-    ws.title = "اليوم5"
+    ws.title = f"اليوم{day}"
     ws.append(HEADERS)
 
     for name in PARTICIPANTS:
@@ -120,7 +134,9 @@ def create_excel(data):
         ws.append([name] + values + points + [total])
 
     style_sheet(ws)
-    wb.save(EXCEL_FILE)
+    wb.save(file_name)
+    return file_name
+
 
 def parse_results(text):
     goals = []
@@ -147,12 +163,15 @@ def parse_results(text):
 
     return goals, clean_sheets
 
-def calculate_points(goals, clean_sheets):
-    if not os.path.exists(EXCEL_FILE):
-        return False
 
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb["اليوم5"]
+def calculate_points(day, goals, clean_sheets):
+    file_name = excel_file(day)
+
+    if not os.path.exists(file_name):
+        return None
+
+    wb = load_workbook(file_name)
+    ws = wb[f"اليوم{day}"]
 
     for row in range(2, ws.max_row + 1):
         keeper = normalize_name(ws.cell(row=row, column=2).value)
@@ -173,7 +192,6 @@ def calculate_points(goals, clean_sheets):
             captain_base = 5
 
         captain_points = captain_base * 2
-
         total = keeper_points + p1_points + p2_points + p3_points + captain_points
 
         ws.cell(row=row, column=7).value = keeper_points
@@ -184,18 +202,29 @@ def calculate_points(goals, clean_sheets):
         ws.cell(row=row, column=12).value = total
 
     style_sheet(ws)
-    wb.save(EXCEL_FILE)
-    return True
+    wb.save(file_name)
+    return file_name
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "البوت جاهز ✅\n\n"
-        "/اضافه_اليوم5 لإضافة التشكيلات\n"
-        "/نتائج_اليوم5 لإضافة الأهداف والكلين شيت"
+        "إضافة التشكيلات:\n"
+        "/اضافه 5\n"
+        "فهد فارس|أوناي سيمون|داني أولمو|سالم الدوسري|داروين نونيز|داروين نونيز\n\n"
+        "إضافة النتائج:\n"
+        "/نتائج 5\n\n"
+        "الأهداف:\n"
+        "داروين نونيز\n\n"
+        "الكلين شيت:\n"
+        "أوناي سيمون"
     )
 
-async def add_day5(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lines = update.message.text.splitlines()[1:]
+
+async def add_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    day = get_day(text)
+    lines = text.splitlines()[1:]
     data = {}
 
     for line in lines:
@@ -210,36 +239,45 @@ async def add_day5(update: Update, context: ContextTypes.DEFAULT_TYPE):
             values = [normalize_name(x) for x in parts[1:]]
             data[participant] = values
 
-    create_excel(data)
+    file_name = create_excel(day, data)
 
-    with open(EXCEL_FILE, "rb") as file:
+    with open(file_name, "rb") as file:
         await update.message.reply_document(
             document=file,
-            filename=EXCEL_FILE,
-            caption="تم إنشاء ملف اليوم الخامس مع أعمدة النقاط ✅"
+            filename=file_name,
+            caption=f"تم إنشاء ملف اليوم {day} مع أعمدة النقاط ✅"
         )
 
-async def results_day5(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    goals, clean_sheets = parse_results(update.message.text)
 
-    ok = calculate_points(goals, clean_sheets)
-    if not ok:
-        await update.message.reply_text("ما لقيت ملف fantasy.xlsx. أضف التشكيلات أولًا.")
+async def results_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    day = get_day(text)
+
+    goals, clean_sheets = parse_results(text)
+    file_name = calculate_points(day, goals, clean_sheets)
+
+    if not file_name:
+        await update.message.reply_text(f"ما لقيت ملف اليوم {day}. أضف التشكيلات أولًا.")
         return
 
-    with open(EXCEL_FILE, "rb") as file:
+    with open(file_name, "rb") as file:
         await update.message.reply_document(
             document=file,
-            filename=EXCEL_FILE,
-            caption="تم حساب نقاط اليوم الخامس ✅"
+            filename=file_name,
+            caption=f"تم حساب نقاط اليوم {day} ✅"
         )
+
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه_اليوم5"), add_day5))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_اليوم5"), results_day5))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه"), add_day))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), results_day))
+
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
