@@ -1,77 +1,121 @@
 import os
-import arabic_reshaper
-from bidi.algorithm import get_display
-from PIL import Image, ImageDraw, ImageFont
+from openpyxl import Workbook, load_workbook
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("BOT_TOKEN")
-FONT_PATH = "NotoNaskhArabic-Bold.ttf"
-TEMPLATE_PATH = "group_template.png.png"
+EXCEL_FILE = "fantasy.xlsx"
 
-def get_font(size):
-    return ImageFont.truetype(FONT_PATH, size)
+PARTICIPANTS = [
+    "عادل عيد",
+    "فهد فارس",
+    "نواف فارس",
+    "خالد عبدالرحمن",
+    "محمد عبدالرحمن",
+    "سلطان رباح",
+    "فارس سالم",
+    "عبدالرحمن سالم",
+    "ممدوح غزاي",
+    "محمد محسن",
+    "طلال عبدالله",
+    "مشعل غزاي",
+]
 
-def ar(text):
-    return get_display(arabic_reshaper.reshape(str(text)))
+HEADERS = ["الاسم", "الحارس", "اللاعب 1", "اللاعب 2", "اللاعب 3", "الكابتن"]
+
+
+def create_or_open_excel():
+    if os.path.exists(EXCEL_FILE):
+        wb = load_workbook(EXCEL_FILE)
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "اليوم5"
+        ws.append(HEADERS)
+        for name in PARTICIPANTS:
+            ws.append([name, "", "", "", "", ""])
+        wb.save(EXCEL_FILE)
+
+    return wb
+
+
+def normalize_name(name):
+    fixes = {
+        "سيمون": "أوناي سيمون",
+        "اوناي سيمون": "أوناي سيمون",
+        "اويارزابال": "أويارزابال",
+        "اويارزبال": "أويارزابال",
+        "اوزبال": "أويارزابال",
+        "توريس": "فيران توريس",
+        "نونيز": "داروين نونيز",
+        "نوينز": "داروين نونيز",
+        "مرموش": "عمر مرموش",
+        "يامال": "لامين يامال",
+        "رايا": "دافيد رايا",
+        "دافيد": "دافيد رايا",
+        "العويس": "محمد العويس",
+        "اولمو": "داني أولمو",
+        "أولمو": "داني أولمو",
+    }
+    name = name.strip()
+    return fixes.get(name, name)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "ارسل كذا:\n"
-        "/group A\n"
-        "إسبانيا 6\n"
-        "السعودية 4\n"
-        "الأوروغواي 1\n"
-        "نيوزيلندا 0"
+        "البوت جاهز ✅\n\n"
+        "أرسل التشكيلات كذا:\n"
+        "/اضافه_اليوم5\n"
+        "لم يشارك\tلم يشارك\tلم يشارك\tلم يشارك\tلم يشارك\n"
+        "أوناي سيمون\tداني أولمو\tسالم الدوسري\tداروين نونيز\tداروين نونيز"
     )
 
-async def group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lines = update.message.text.splitlines()
-    group_name = lines[0].replace("/group", "").strip() or "A"
 
-    teams = []
-    for line in lines[1:5]:
-        parts = line.rsplit(" ", 1)
-        if len(parts) == 2:
-            teams.append((parts[0].strip(), parts[1].strip()))
+async def add_day5(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    lines = text.splitlines()[1:]
 
-    img = Image.open(TEMPLATE_PATH).convert("RGB")
-    draw = ImageDraw.Draw(img)
+    if not lines:
+        await update.message.reply_text("ارسل البيانات تحت الأمر /اضافه_اليوم5")
+        return
 
-    team_font = get_font(58)
-    num_font = get_font(62)
+    wb = create_or_open_excel()
+    ws = wb["اليوم5"]
 
-    dark = (20, 8, 45)
-    white = (255, 255, 255)
+    for i, participant in enumerate(PARTICIPANTS, start=2):
+        if i - 2 < len(lines):
+            parts = lines[i - 2].split("\t")
 
-    # ملاحظة: حرف المجموعة موجود داخل القالب نفسه، لذلك ما نكتبه بالكود
+            if len(parts) == 5:
+                values = [normalize_name(x) for x in parts]
+            else:
+                values = ["لم يشارك"] * 5
+        else:
+            values = ["لم يشارك"] * 5
 
-    rows_y = [610, 760, 910, 1060]
+        ws.cell(row=i, column=1).value = participant
+        for col, value in enumerate(values, start=2):
+            ws.cell(row=i, column=col).value = value
 
-    for i in range(4):
-        name, pts = teams[i] if i < len(teams) else ("-", "0")
-        y = rows_y[i]
+    wb.save(EXCEL_FILE)
 
-        # النقاط يسار
-        draw.text((143, y), str(pts), fill=white, font=num_font, anchor="mm")
+    await update.message.reply_document(
+        document=open(EXCEL_FILE, "rb"),
+        filename=EXCEL_FILE,
+        caption="تم تحديث اليوم الخامس ✅"
+    )
 
-        # المنتخب
-        draw.text((760, y), ar(name), fill=white, font=team_font, anchor="rm")
-
-        # المركز يمين
-        draw.text((925, y), str(i + 1), fill=dark, font=num_font, anchor="mm")
-
-    path = "group.png"
-    img.save(path)
-
-    with open(path, "rb") as photo:
-        await update.message.reply_photo(photo=photo)
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("group", group))
+
+    # لأن أوامر التليجرام العربية ما تشتغل بـ CommandHandler العادي
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه_اليوم5"), add_day5))
+
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
