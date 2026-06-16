@@ -1,5 +1,6 @@
 import os
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -21,22 +22,7 @@ PARTICIPANTS = [
     "مشعل غزاي",
 ]
 
-HEADERS = ["الاسم", "الحارس", "اللاعب 1", "اللاعب 2", "اللاعب 3", "الكابتن"]
-
-
-def create_or_open_excel():
-    if os.path.exists(EXCEL_FILE):
-        wb = load_workbook(EXCEL_FILE)
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "اليوم5"
-        ws.append(HEADERS)
-        for name in PARTICIPANTS:
-            ws.append([name, "", "", "", "", ""])
-        wb.save(EXCEL_FILE)
-
-    return wb
+HEADERS = ["المشارك", "الحارس", "اللاعب 1", "اللاعب 2", "اللاعب 3", "الكابتن"]
 
 
 def normalize_name(name):
@@ -61,57 +47,105 @@ def normalize_name(name):
     return fixes.get(name, name)
 
 
+def style_sheet(ws):
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    row_fill = PatternFill("solid", fgColor="D9EAF7")
+    white_font = Font(color="FFFFFF", bold=True, size=12)
+    normal_font = Font(size=12)
+    gray_font = Font(color="808080", size=12)
+    thin = Side(style="thin", color="5B9BD5")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = "A1:F13"
+    ws.sheet_view.rightToLeft = True
+
+    widths = {
+        "A": 18,
+        "B": 18,
+        "C": 18,
+        "D": 18,
+        "E": 18,
+        "F": 18,
+    }
+
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=6):
+        for cell in row:
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+            cell.font = normal_font
+
+            if cell.row == 1:
+                cell.fill = header_fill
+                cell.font = white_font
+            elif cell.row % 2 == 0:
+                cell.fill = row_fill
+
+            if cell.value == "لم يشارك":
+                cell.font = gray_font
+
+    ws.row_dimensions[1].height = 28
+    for r in range(2, ws.max_row + 1):
+        ws.row_dimensions[r].height = 24
+
+
+def create_excel(data):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "اليوم5"
+
+    ws.append(HEADERS)
+
+    for name in PARTICIPANTS:
+        values = data.get(name, ["لم يشارك"] * 5)
+        ws.append([name] + values)
+
+    style_sheet(ws)
+    wb.save(EXCEL_FILE)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "البوت جاهز ✅\n\n"
-        "أرسل التشكيلات كذا:\n"
-        "/اضافه_اليوم5\n"
-        "لم يشارك\tلم يشارك\tلم يشارك\tلم يشارك\tلم يشارك\n"
-        "أوناي سيمون\tداني أولمو\tسالم الدوسري\tداروين نونيز\tداروين نونيز"
+        "أرسل كذا:\n"
+        "/اضافه_اليوم5\n\n"
+        "فهد فارس|أوناي سيمون|داني أولمو|سالم الدوسري|داروين نونيز|داروين نونيز"
     )
 
 
 async def add_day5(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    lines = text.splitlines()[1:]
+    lines = update.message.text.splitlines()[1:]
+    data = {}
 
-    if not lines:
-        await update.message.reply_text("ارسل البيانات تحت الأمر /اضافه_اليوم5")
-        return
+    for line in lines:
+        line = line.strip()
+        if not line or "|" not in line:
+            continue
 
-    wb = create_or_open_excel()
-    ws = wb["اليوم5"]
+        parts = [p.strip() for p in line.split("|")]
 
-    for i, participant in enumerate(PARTICIPANTS, start=2):
-        if i - 2 < len(lines):
-            parts = lines[i - 2].split("\t")
+        if len(parts) == 6:
+            participant = parts[0]
+            values = [normalize_name(x) for x in parts[1:]]
+            data[participant] = values
 
-            if len(parts) == 5:
-                values = [normalize_name(x) for x in parts]
-            else:
-                values = ["لم يشارك"] * 5
-        else:
-            values = ["لم يشارك"] * 5
+    create_excel(data)
 
-        ws.cell(row=i, column=1).value = participant
-        for col, value in enumerate(values, start=2):
-            ws.cell(row=i, column=col).value = value
-
-    wb.save(EXCEL_FILE)
-
-    await update.message.reply_document(
-        document=open(EXCEL_FILE, "rb"),
-        filename=EXCEL_FILE,
-        caption="تم تحديث اليوم الخامس ✅"
-    )
+    with open(EXCEL_FILE, "rb") as file:
+        await update.message.reply_document(
+            document=file,
+            filename=EXCEL_FILE,
+            caption="تم إنشاء ملف اليوم الخامس منسق ✅"
+        )
 
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-
-    # لأن أوامر التليجرام العربية ما تشتغل بـ CommandHandler العادي
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه_اليوم5"), add_day5))
 
     app.run_polling()
