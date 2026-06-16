@@ -50,9 +50,7 @@ def normalize_name(name):
 def style_sheet(ws):
     header_fill = PatternFill("solid", fgColor="1F4E78")
     light_blue = PatternFill("solid", fgColor="D9EAF7")
-    total_fill = PatternFill("solid", fgColor="DDEBF7")
     green_fill = PatternFill("solid", fgColor="C6EFCE")
-    yellow_fill = PatternFill("solid", fgColor="FFF2CC")
 
     white_font = Font(color="FFFFFF", bold=True, size=12)
     normal_font = Font(size=12)
@@ -148,20 +146,22 @@ def calculate_points(day, goals, clean_sheets):
         captain = normalize_name(ws.cell(row=row, column=6).value)
 
         keeper_points = 5 if keeper in clean_sheets else 0
-        p1_points = 10 if p1 in goals else 0
-        p2_points = 10 if p2 in goals else 0
-        p3_points = 10 if p3 in goals else 0
+        p1_points = 5 if p1 in goals else 0
+        p2_points = 5 if p2 in goals else 0
+        p3_points = 5 if p3 in goals else 0
 
-        captain_base = 0
+        captain_points = 0
         if captain in goals:
-            captain_base = 10
+            captain_points = 5
         if captain == keeper and keeper in clean_sheets:
-            captain_base = 5
+            captain_points = 5
 
-        captain_points = captain_base * 2
         total = keeper_points + p1_points + p2_points + p3_points + captain_points
 
-        for col, val in zip(range(7, 13), [keeper_points, p1_points, p2_points, p3_points, captain_points, total]):
+        for col, val in zip(
+            range(7, 13),
+            [keeper_points, p1_points, p2_points, p3_points, captain_points, total]
+        ):
             ws.cell(row=row, column=col).value = val
 
     style_sheet(ws)
