@@ -1521,7 +1521,306 @@ def create_dashboard(start_day=1, end_day=31):
         ws.column_dimensions["H"].width = 36
 
     wb.save(file_name)
+    
     return file_name, stats
+
+# ============================================================
+# أوامر إضافية لفانتزي المصيف
+# أضف هذا القسم قبل: async def dashboard
+# ============================================================
+
+PENDING_IMPORTS = {}
+INVALID_SELECTIONS_GLOBAL = {"", "لم يشارك", "تم حجب المشاركة / تأخير"}
+
+# استبدل دالة is_no_participation القديمة بهذا التعريف
+# أو اترك هذا التعريف بعد القديمة عشان يغطيها.
+def is_no_participation(value):
+    value = normalize_name(value)
+    return value in INVALID_SELECTIONS_GLOBAL
+
+
+def load_workbook_safely(path, data_only=True):
+    """يفتح ملفات الإكسل حتى لو فيها مشكلة styles مثل family val > 14."""
+    import zipfile
+    import tempfile
+    import re as _re
+
+    try:
+        return load_workbook(path, data_only=data_only)
+    except Exception:
+        fixed_path = os.path.join(tempfile.gettempdir(), f"fixed_{os.path.basename(path)}")
+        with zipfile.ZipFile(path, "r") as zin, zipfile.ZipFile(fixed_path, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "xl/styles.xml":
+                    text = data.decode("utf-8", errors="ignore")
+                    text = _re.sub(r'<family val="(?:1[5-9]|[2-9][0-9]+)"\s*/>', '<family val="2"/>', text)
+                    data = text.encode("utf-8")
+                zout.writestr(item, data)
+        return load_workbook(fixed_path, data_only=data_only)
+
+
+def cell_text(value):
+    return normalize_name(value)
+
+
+def cell_int(value, default=0):
+    try:
+        if value is None or value == "":
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def parse_import_excel(path):
+    """
+    يسحب كل الأيام من ملف الإكسل مرة وحدة.
+    الصيغة المدعومة: صفحات باسم يوم 1، يوم 2... وفيها جدول المشاركين ونتائج اللاعبين.
+    """
+    wb = load_workbook_safely(path, data_only=True)
+    imported = {}
+
+    for ws in wb.worksheets:
+        m = re.search(r"يوم\s*(\d+)", ws.title)
+        if not m:
+            continue
+
+        day = int(m.group(1))
+        header_row = None
+        participant_col = None
+
+        for r in range(1, min(ws.max_row, 12) + 1):
+            for c in range(1, min(ws.max_column, 16) + 1):
+                if cell_text(ws.cell(r, c).value) == "المشارك":
+                    header_row = r
+                    participant_col = c
+                    break
+            if header_row:
+                break
+
+        if not header_row or not participant_col:
+            continue
+
+        # جدول المشاركين: المشارك، الحارس، اللاعب 1، اللاعب 2، اللاعب 3، الكابتن
+        lineups = {}
+        for r in range(header_row + 1, ws.max_row + 1):
+            participant = cell_text(ws.cell(r, participant_col).value)
+            if not participant:
+                continue
+            if participant not in PARTICIPANTS:
+                # نتجاهل أي أسماء خارج قائمة المشاركين المقفلة
+                continue
+            values = [cell_text(ws.cell(r, participant_col + offset).value) for offset in range(1, 6)]
+            # إذا الصف كله فاضي، نخليه لم يشارك
+            if all(is_no_participation(v) for v in values):
+                values = ["لم يشارك"] * 5
+            lineups[participant] = values
+
+        # نتائج اليوم موجودة عادة في الأعمدة A:B:C
+        goals_count = defaultdict(int)
+        clean_sheets = []
+        for r in range(header_row + 1, ws.max_row + 1):
+            player_or_keeper = cell_text(ws.cell(r, 1).value)
+            goals = ws.cell(r, 2).value
+            clean = cell_text(ws.cell(r, 3).value)
+
+            if player_or_keeper and not is_no_participation(player_or_keeper):
+                goal_count = cell_int(goals, 0)
+                if goal_count > 0:
+                    goals_count[player_or_keeper] += goal_count
+                if clean in ("نعم", "yes", "Yes", "YES", "صح", "✓", "✅"):
+                    if player_or_keeper not in clean_sheets:
+                        clean_sheets.append(player_or_keeper)
+
+        if lineups:
+            imported[day] = {
+                "lineups": lineups,
+                "goals_count": dict(goals_count),
+                "clean_sheets": clean_sheets,
+            }
+
+    return imported
+
+
+def import_summary_text(imported):
+    lines = ["تم قراءة الملف ✅", "", "الأيام الموجودة:"]
+    if not imported:
+        lines.append("ما لقيت أيام قابلة للاستيراد.")
+        return "\n".join(lines)
+
+    for day in sorted(imported):
+        data = imported[day]
+        participants = len(data["lineups"])
+        has_results = bool(data["goals_count"] or data["clean_sheets"])
+        status = "نتائج موجودة" if has_results else "بدون نتائج"
+        exists = " — موجود مسبقًا وسيتم استبداله" if os.path.exists(excel_file(day)) else ""
+        lines.append(f"اليوم {day}: {participants} مشارك + {status}{exists}")
+
+    lines.append("")
+    lines.append("للاعتماد اكتب:")
+    lines.append("/اعتماد_استيراد")
+    lines.append("")
+    lines.append("للإلغاء اكتب:")
+    lines.append("/إلغاء_استيراد")
+    return "\n".join(lines)
+
+
+async def import_excel_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    document = update.message.document
+    if not document:
+        await update.message.reply_text(
+            "أرسل ملف الإكسل كملف وليس صورة، واكتب معه في التعليق:\n/استيراد_ملف"
+        )
+        return
+
+    filename = document.file_name or "import.xlsx"
+    if not filename.lower().endswith((".xlsx", ".xlsm")):
+        await update.message.reply_text("الملف لازم يكون Excel بصيغة .xlsx أو .xlsm")
+        return
+
+    os.makedirs("imports", exist_ok=True)
+    local_path = os.path.join("imports", f"import_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}")
+
+    tg_file = await context.bot.get_file(document.file_id)
+    await tg_file.download_to_drive(local_path)
+
+    try:
+        imported = parse_import_excel(local_path)
+    except Exception as e:
+        await update.message.reply_text(f"صار خطأ أثناء قراءة الإكسل ❌\n{e}")
+        return
+
+    if not imported:
+        await update.message.reply_text("ما قدرت أستخرج أيام من الملف. تأكد أن الصفحات باسم: يوم 1، يوم 2 ...")
+        return
+
+    chat_id = update.effective_chat.id
+    PENDING_IMPORTS[chat_id] = {"path": local_path, "data": imported}
+    await update.message.reply_text(import_summary_text(imported))
+
+
+async def approve_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    pending = PENDING_IMPORTS.get(chat_id)
+    if not pending:
+        await update.message.reply_text("ما فيه استيراد معلق. أرسل ملف الإكسل مع /استيراد_ملف أولًا.")
+        return
+
+    imported = pending["data"]
+    files_to_backup = [excel_file(day) for day in imported.keys() if os.path.exists(excel_file(day))]
+    if os.path.exists(LOCKED_FILE):
+        files_to_backup.append(LOCKED_FILE)
+    if files_to_backup:
+        backup_files("before_import_excel", files=files_to_backup)
+
+    locked = load_locked_days()
+    saved_days = []
+    warnings = []
+
+    for day in sorted(imported):
+        data = imported[day]
+        file_name, missing = update_day_data(str(day), data["lineups"])
+        if missing:
+            warnings.extend([f"اليوم {day}: مشارك غير موجود بالقائمة: {m}" for m in missing])
+        calculate_points(str(day), data["goals_count"], data["clean_sheets"])
+        locked.add(str(day))
+        saved_days.append(day)
+
+    save_locked_days(locked)
+    PENDING_IMPORTS.pop(chat_id, None)
+
+    msg = [
+        "تم اعتماد الاستيراد ✅",
+        f"الأيام المحفوظة: {', '.join(map(str, saved_days))}",
+        "تم حساب النتائج وقفل الأيام المستوردة.",
+    ]
+    if warnings:
+        msg.append("\nتنبيهات:")
+        msg.extend(warnings[:20])
+    await update.message.reply_text("\n".join(msg))
+
+
+async def cancel_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id in PENDING_IMPORTS:
+        PENDING_IMPORTS.pop(chat_id, None)
+        await update.message.reply_text("تم إلغاء الاستيراد ✅")
+    else:
+        await update.message.reply_text("ما فيه استيراد معلق.")
+
+
+async def backup_zip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import zipfile
+
+    files = [f for f in os.listdir(".") if re.match(r"fantasy_day_\d+\.xlsx$", f)]
+    if os.path.exists(LOCKED_FILE):
+        files.append(LOCKED_FILE)
+
+    if not files:
+        await update.message.reply_text("ما فيه ملفات أيام عشان أسوي نسخة احتياطية.")
+        return
+
+    zip_name = f"fantasy_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(files):
+            z.write(f)
+
+    with open(zip_name, "rb") as f:
+        await update.message.reply_document(document=f, filename=zip_name, caption="نسخة احتياطية لأيام الفانتزي ✅")
+
+
+async def restore_backup_zip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import zipfile
+
+    document = update.message.document
+    if not document:
+        await update.message.reply_text("أرسل ملف ZIP واكتب معه في التعليق:\n/استرجاع_نسخة")
+        return
+
+    filename = document.file_name or "backup.zip"
+    if not filename.lower().endswith(".zip"):
+        await update.message.reply_text("الملف لازم يكون ZIP.")
+        return
+
+    os.makedirs("restore_uploads", exist_ok=True)
+    local_path = os.path.join("restore_uploads", f"restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}")
+    tg_file = await context.bot.get_file(document.file_id)
+    await tg_file.download_to_drive(local_path)
+
+    backup_files("before_restore_zip")
+    restored = []
+    try:
+        with zipfile.ZipFile(local_path, "r") as z:
+            for name in z.namelist():
+                base = os.path.basename(name)
+                if re.match(r"fantasy_day_\d+\.xlsx$", base) or base == LOCKED_FILE:
+                    with z.open(name) as src, open(base, "wb") as dst:
+                        dst.write(src.read())
+                    restored.append(base)
+    except Exception as e:
+        await update.message.reply_text(f"صار خطأ في استرجاع النسخة ❌\n{e}")
+        return
+
+    if not restored:
+        await update.message.reply_text("ملف ZIP ما فيه ملفات أيام صالحة.")
+        return
+
+    await update.message.reply_text("تم استرجاع النسخة ✅\n" + "\n".join(sorted(restored)))
+
+
+async def clean_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ينظف القفل من أيام ما لها ملف فعلي."""
+    locked = load_locked_days()
+    existing = {str(d) for d in get_existing_days(1, 99)}
+    cleaned = {d for d in locked if d in existing}
+    removed = sorted(locked - cleaned, key=lambda x: int(x))
+    save_locked_days(cleaned)
+    if removed:
+        await update.message.reply_text("تم تنظيف الأيام الوهمية ✅\nأزيلت من القفل: " + "، ".join(removed))
+    else:
+        await update.message.reply_text("ما فيه أيام وهمية. كل شيء تمام ✅")
+
 
 # -------------------- أوامر تيليجرام --------------------
 
