@@ -1,5 +1,5 @@
 import os
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -28,7 +28,6 @@ HEADERS = [
     "نقاط الكابتن", "مجموع اليوم"
 ]
 
-
 def normalize_name(name):
     fixes = {
         "سيمون": "أوناي سيمون",
@@ -47,14 +46,16 @@ def normalize_name(name):
         "اولمو": "داني أولمو",
         "أولمو": "داني أولمو",
     }
-    name = name.strip()
+    name = str(name).strip()
     return fixes.get(name, name)
-
 
 def style_sheet(ws):
     header_fill = PatternFill("solid", fgColor="1F4E78")
     light_blue = PatternFill("solid", fgColor="D9EAF7")
     total_fill = PatternFill("solid", fgColor="DDEBF7")
+    green_fill = PatternFill("solid", fgColor="C6EFCE")
+    yellow_fill = PatternFill("solid", fgColor="FFF2CC")
+
     white_font = Font(color="FFFFFF", bold=True, size=12)
     normal_font = Font(size=12)
     gray_font = Font(color="808080", size=12)
@@ -94,10 +95,17 @@ def style_sheet(ws):
             if cell.value == "لم يشارك":
                 cell.font = gray_font
 
+            if cell.row != 1 and cell.column in [7, 8, 9, 10] and cell.value and cell.value > 0:
+                cell.fill = green_fill
+                cell.font = bold_font
+
+            if cell.row != 1 and cell.column == 11 and cell.value and cell.value > 0:
+                cell.fill = yellow_fill
+                cell.font = bold_font
+
     ws.row_dimensions[1].height = 30
     for r in range(2, ws.max_row + 1):
         ws.row_dimensions[r].height = 24
-
 
 def create_excel(data):
     wb = Workbook()
@@ -107,27 +115,84 @@ def create_excel(data):
 
     for name in PARTICIPANTS:
         values = data.get(name, ["لم يشارك"] * 5)
-
-        if values == ["لم يشارك"] * 5:
-            points = [0, 0, 0, 0, 0]
-        else:
-            points = [0, 0, 0, 0, 0]
-
-        total = sum(points)
+        points = [0, 0, 0, 0, 0]
+        total = 0
         ws.append([name] + values + points + [total])
 
     style_sheet(ws)
     wb.save(EXCEL_FILE)
 
+def parse_results(text):
+    goals = []
+    clean_sheets = []
+    mode = None
+
+    for line in text.splitlines()[1:]:
+        line = line.strip()
+        if not line:
+            continue
+
+        if "الأهداف" in line or "اهداف" in line:
+            mode = "goals"
+            continue
+
+        if "كلين" in line or "شيت" in line or "الكلين" in line:
+            mode = "clean"
+            continue
+
+        if mode == "goals":
+            goals.append(normalize_name(line))
+        elif mode == "clean":
+            clean_sheets.append(normalize_name(line))
+
+    return goals, clean_sheets
+
+def calculate_points(goals, clean_sheets):
+    if not os.path.exists(EXCEL_FILE):
+        return False
+
+    wb = load_workbook(EXCEL_FILE)
+    ws = wb["اليوم5"]
+
+    for row in range(2, ws.max_row + 1):
+        keeper = normalize_name(ws.cell(row=row, column=2).value)
+        p1 = normalize_name(ws.cell(row=row, column=3).value)
+        p2 = normalize_name(ws.cell(row=row, column=4).value)
+        p3 = normalize_name(ws.cell(row=row, column=5).value)
+        captain = normalize_name(ws.cell(row=row, column=6).value)
+
+        keeper_points = 5 if keeper in clean_sheets else 0
+        p1_points = 10 if p1 in goals else 0
+        p2_points = 10 if p2 in goals else 0
+        p3_points = 10 if p3 in goals else 0
+
+        captain_base = 0
+        if captain in goals:
+            captain_base = 10
+        if captain == keeper and keeper in clean_sheets:
+            captain_base = 5
+
+        captain_points = captain_base * 2
+
+        total = keeper_points + p1_points + p2_points + p3_points + captain_points
+
+        ws.cell(row=row, column=7).value = keeper_points
+        ws.cell(row=row, column=8).value = p1_points
+        ws.cell(row=row, column=9).value = p2_points
+        ws.cell(row=row, column=10).value = p3_points
+        ws.cell(row=row, column=11).value = captain_points
+        ws.cell(row=row, column=12).value = total
+
+    style_sheet(ws)
+    wb.save(EXCEL_FILE)
+    return True
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "البوت جاهز ✅\n\n"
-        "أرسل كذا:\n"
-        "/اضافه_اليوم5\n\n"
-        "فهد فارس|أوناي سيمون|داني أولمو|سالم الدوسري|داروين نونيز|داروين نونيز"
+        "/اضافه_اليوم5 لإضافة التشكيلات\n"
+        "/نتائج_اليوم5 لإضافة الأهداف والكلين شيت"
     )
-
 
 async def add_day5(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = update.message.text.splitlines()[1:]
@@ -154,13 +219,27 @@ async def add_day5(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="تم إنشاء ملف اليوم الخامس مع أعمدة النقاط ✅"
         )
 
+async def results_day5(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    goals, clean_sheets = parse_results(update.message.text)
+
+    ok = calculate_points(goals, clean_sheets)
+    if not ok:
+        await update.message.reply_text("ما لقيت ملف fantasy.xlsx. أضف التشكيلات أولًا.")
+        return
+
+    with open(EXCEL_FILE, "rb") as file:
+        await update.message.reply_document(
+            document=file,
+            filename=EXCEL_FILE,
+            caption="تم حساب نقاط اليوم الخامس ✅"
+        )
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه_اليوم5"), add_day5))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_اليوم5"), results_day5))
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
