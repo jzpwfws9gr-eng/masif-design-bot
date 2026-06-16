@@ -105,8 +105,13 @@ def load_locked_days():
 
 
 def save_locked_days(days):
+    def sort_key(x):
+        try:
+            return int(x)
+        except Exception:
+            return 0
     with open(LOCKED_FILE, "w", encoding="utf-8") as f:
-        json.dump({"locked_days": sorted([str(x) for x in days], key=lambda x: int(x))}, f, ensure_ascii=False, indent=2)
+        json.dump({"locked_days": sorted([str(x) for x in days], key=sort_key)}, f, ensure_ascii=False, indent=2)
 
 
 def is_locked(day):
@@ -116,7 +121,9 @@ def is_locked(day):
 def current_data_files():
     files = []
     for filename in os.listdir("."):
-        if (filename.startswith("fantasy_day_") and filename.endswith(".xlsx")) or filename == "overall_ranking.xlsx" or filename == "fantasy_dashboard.xlsx" or filename == LOCKED_FILE:
+        if (
+            filename.startswith("fantasy_day_") and filename.endswith(".xlsx")
+        ) or filename in ("overall_ranking.xlsx", "fantasy_dashboard.xlsx", LOCKED_FILE):
             files.append(filename)
     return sorted(files)
 
@@ -153,7 +160,6 @@ def style_sheet(ws):
     header_fill = PatternFill("solid", fgColor="1F4E78")
     light_blue = PatternFill("solid", fgColor="D9EAF7")
     green_fill = PatternFill("solid", fgColor="C6EFCE")
-    yellow_fill = PatternFill("solid", fgColor="FFF2CC")
 
     white_font = Font(color="FFFFFF", bold=True, size=12)
     normal_font = Font(size=12)
@@ -227,6 +233,7 @@ def style_dashboard_sheet(ws):
                 cell.alignment = Alignment(horizontal="right", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
+
 # -------------------- ملفات الأيام --------------------
 
 def create_blank_workbook(day):
@@ -255,11 +262,9 @@ def get_or_create_day_workbook(day):
         wb = create_blank_workbook(day)
         ws = wb[sheet_name]
 
-    # تأكد من وجود العناوين
     for idx, header in enumerate(HEADERS, start=1):
         ws.cell(row=1, column=idx).value = header
 
-    # تأكد من وجود كل المشاركين
     existing = {}
     for row in range(2, ws.max_row + 1):
         name = ws.cell(row=row, column=1).value
@@ -294,7 +299,6 @@ def update_day_data(day, data):
         for col, value in zip(range(2, 7), values):
             ws.cell(row=row, column=col).value = normalize_name(value)
 
-        # عند تعديل تشكيلة مشارك، تصفر نقاطه حتى تعيد /نتائج
         for col in range(7, 13):
             ws.cell(row=row, column=col).value = 0
 
@@ -629,56 +633,6 @@ def build_ranking_text(stats, start_day=1, end_day=31):
     return "\n".join(lines)
 
 # -------------------- الداشبورد --------------------
-
-def add_bar_chart(ws, title, data_min_col, data_max_col, data_min_row, data_max_row, cats_col, cats_min_row, cats_max_row, anchor):
-    if data_max_row < data_min_row:
-        return
-    chart = BarChart()
-    chart.type = "bar"
-    chart.style = 10
-    chart.title = title
-    chart.y_axis.title = "الأسماء"
-    chart.x_axis.title = "النقاط"
-    data = Reference(ws, min_col=data_min_col, max_col=data_max_col, min_row=data_min_row, max_row=data_max_row)
-    cats = Reference(ws, min_col=cats_col, min_row=cats_min_row, max_row=cats_max_row)
-    chart.add_data(data, titles_from_data=True)
-    chart.set_categories(cats)
-    chart.height = 8
-    chart.width = 14
-    ws.add_chart(chart, anchor)
-
-
-def add_column_chart(ws, title, data_col, header_row, min_row, max_row, cats_col, anchor):
-    if max_row < min_row:
-        return
-    chart = BarChart()
-    chart.type = "col"
-    chart.style = 10
-    chart.title = title
-    data = Reference(ws, min_col=data_col, min_row=header_row, max_row=max_row)
-    cats = Reference(ws, min_col=cats_col, min_row=min_row, max_row=max_row)
-    chart.add_data(data, titles_from_data=True)
-    chart.set_categories(cats)
-    chart.height = 8
-    chart.width = 14
-    ws.add_chart(chart, anchor)
-
-
-def add_line_chart(ws, title, min_col, max_col, header_row, min_row, max_row, cats_col, anchor):
-    if max_row < min_row or max_col < min_col:
-        return
-    chart = LineChart()
-    chart.title = title
-    chart.y_axis.title = "المجموع"
-    chart.x_axis.title = "اليوم"
-    data = Reference(ws, min_col=min_col, max_col=max_col, min_row=header_row, max_row=max_row)
-    cats = Reference(ws, min_col=cats_col, min_row=min_row, max_row=max_row)
-    chart.add_data(data, titles_from_data=True)
-    chart.set_categories(cats)
-    chart.height = 10
-    chart.width = 20
-    ws.add_chart(chart, anchor)
-
 
 def create_dashboard(start_day=1, end_day=31):
     from collections import defaultdict, Counter
@@ -1521,8 +1475,8 @@ def create_dashboard(start_day=1, end_day=31):
         ws.column_dimensions["H"].width = 36
 
     wb.save(file_name)
-    
     return file_name, stats
+
 
 # ============================================================
 # أوامر إضافية لفانتزي المصيف
@@ -1575,23 +1529,30 @@ def cell_int(value, default=0):
 
 def parse_import_excel(path):
     """
-    يسحب كل الأيام من ملف الإكسل مرة وحدة.
-    الصيغة المدعومة: صفحات باسم يوم 1، يوم 2... وفيها جدول المشاركين ونتائج اللاعبين.
+    يستورد ملف الإكسل كامل مرة وحدة.
+    يدعم صفحات باسم: يوم 1، يوم 2، ...
+    ويسحب:
+    - جدول النتائج من الأعمدة A:B:C
+    - جدول المشاركين من عند عمود "المشارك"
+    ويتجاهل الأيام الفاضية بالكامل حتى لا ينشئ أيام وهمية.
     """
     wb = load_workbook_safely(path, data_only=True)
     imported = {}
 
+    TRUE_VALUES = {"نعم", "yes", "Yes", "YES", "صح", "✓", "✅", "1", "true", "True"}
+
     for ws in wb.worksheets:
-        m = re.search(r"يوم\s*(\d+)", ws.title)
+        m = re.search(r"يوم\s*(\d+)", str(ws.title))
         if not m:
             continue
 
         day = int(m.group(1))
+
+        # نبحث عن خانة "المشارك" في أول الصفوف
         header_row = None
         participant_col = None
-
-        for r in range(1, min(ws.max_row, 12) + 1):
-            for c in range(1, min(ws.max_column, 16) + 1):
+        for r in range(1, min(ws.max_row, 25) + 1):
+            for c in range(1, min(ws.max_column, 25) + 1):
                 if cell_text(ws.cell(r, c).value) == "المشارك":
                     header_row = r
                     participant_col = c
@@ -1602,36 +1563,48 @@ def parse_import_excel(path):
         if not header_row or not participant_col:
             continue
 
-        # جدول المشاركين: المشارك، الحارس، اللاعب 1، اللاعب 2، اللاعب 3، الكابتن
         lineups = {}
+        active_found = False
+
+        # المشاركون: المشارك، الحارس، اللاعب 1، اللاعب 2، اللاعب 3، الكابتن
         for r in range(header_row + 1, ws.max_row + 1):
             participant = cell_text(ws.cell(r, participant_col).value)
-            if not participant:
+            if not participant or participant not in PARTICIPANTS:
                 continue
-            if participant not in PARTICIPANTS:
-                # نتجاهل أي أسماء خارج قائمة المشاركين المقفلة
-                continue
+
             values = [cell_text(ws.cell(r, participant_col + offset).value) for offset in range(1, 6)]
-            # إذا الصف كله فاضي، نخليه لم يشارك
+
+            # لو الصف فاضي أو كله عدم مشاركة
             if all(is_no_participation(v) for v in values):
                 values = ["لم يشارك"] * 5
+            else:
+                active_found = True
+
             lineups[participant] = values
 
-        # نتائج اليوم موجودة عادة في الأعمدة A:B:C
+        # النتائج: غالبًا في A:B:C = اسم اللاعب | عدد الأهداف | كلين شيت؟
         goals_count = defaultdict(int)
         clean_sheets = []
-        for r in range(header_row + 1, ws.max_row + 1):
-            player_or_keeper = cell_text(ws.cell(r, 1).value)
-            goals = ws.cell(r, 2).value
-            clean = cell_text(ws.cell(r, 3).value)
 
-            if player_or_keeper and not is_no_participation(player_or_keeper):
-                goal_count = cell_int(goals, 0)
-                if goal_count > 0:
-                    goals_count[player_or_keeper] += goal_count
-                if clean in ("نعم", "yes", "Yes", "YES", "صح", "✓", "✅"):
-                    if player_or_keeper not in clean_sheets:
-                        clean_sheets.append(player_or_keeper)
+        for r in range(header_row + 1, ws.max_row + 1):
+            name = cell_text(ws.cell(r, 1).value)
+            goals_raw = ws.cell(r, 2).value
+            clean_raw = cell_text(ws.cell(r, 3).value)
+
+            if not name or is_no_participation(name):
+                continue
+
+            goals = cell_int(goals_raw, 0)
+            if goals > 0:
+                goals_count[name] += goals
+
+            if clean_raw in TRUE_VALUES:
+                if name not in clean_sheets:
+                    clean_sheets.append(name)
+
+        # لا نستورد الأيام الفاضية بالكامل، مثل يوم 7 وما بعده إذا ما انلعبت
+        if not active_found and not goals_count and not clean_sheets:
+            continue
 
         if lineups:
             imported[day] = {
@@ -1641,7 +1614,6 @@ def parse_import_excel(path):
             }
 
     return imported
-
 
 def import_summary_text(imported):
     lines = ["تم قراءة الملف ✅", "", "الأيام الموجودة:"]
@@ -1822,6 +1794,7 @@ async def clean_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ما فيه أيام وهمية. كل شيء تمام ✅")
 
 
+
 # -------------------- أوامر تيليجرام --------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1830,30 +1803,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "الأوامر الأساسية:\n"
         "/اضافه 5\n"
         "/نتائج 5\n"
-        "/الترتيب_العام\n"
-        "/الترتيب_العام 1 5\n"
-        "/ترتيب_نص\n"
         "/احصائيات\n"
-        "/احصائيات 1 5\n\n"
+        "/احصائيات 1 6\n"
+        "/ترتيب_نص\n\n"
         "أوامر الفحص:\n"
         "/الأيام\n"
         "/فحص 5\n"
         "/مشاركين 5\n"
         "/اسطورة 5\n"
         "/مقارنة 4 5\n\n"
+        "أوامر الاستيراد والنسخ:\n"
+        "/استيراد_ملف  — أرسلها كتعليق مع ملف الإكسل\n"
+        "/اعتماد_استيراد\n"
+        "/إلغاء_استيراد\n"
+        "/نسخة_احتياطية\n"
+        "/استرجاع_نسخة  — أرسلها كتعليق مع ملف ZIP\n"
+        "/تنظيف_الأيام\n\n"
         "أوامر الأمان:\n"
         "/مسح_نتائج 5\n"
         "/مسح_يوم 5\n"
         "/مسح_الكل تأكيد\n"
         "/استرجاع_آخر\n"
         "/قفل_يوم 5\n"
-        "/فتح_يوم 5\n\n"
-        "مثال النتائج:\n"
-        "/نتائج 5\n\n"
-        "الأهداف:\n"
-        "داروين نونيز|3\n\n"
-        "الكلين شيت:\n"
-        "أوناي سيمون"
+        "/فتح_يوم 5"
     )
 
 
@@ -1949,6 +1921,8 @@ async def overall(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nums = get_numbers(update.message.text)
     if len(nums) >= 2:
         start_day, end_day = nums[0], nums[1]
+        if start_day > end_day:
+            start_day, end_day = end_day, start_day
     elif len(nums) == 1:
         start_day, end_day = 1, nums[0]
     else:
@@ -1975,6 +1949,8 @@ async def ranking_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nums = get_numbers(update.message.text)
     if len(nums) >= 2:
         start_day, end_day = nums[0], nums[1]
+        if start_day > end_day:
+            start_day, end_day = end_day, start_day
     elif len(nums) == 1:
         start_day, end_day = 1, nums[0]
     else:
@@ -1984,7 +1960,7 @@ async def ranking_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def list_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    days = get_existing_days(1, 31)
+    days = get_existing_days(1, 99)
     if not days:
         await update.message.reply_text("ما فيه أيام محفوظة.")
         return
@@ -2151,7 +2127,6 @@ async def restore_last(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ما فيه نسخة احتياطية أسترجعها.")
         return
 
-    # نسخة احتياطية قبل الاسترجاع
     backup_files("before_restore")
 
     restored = []
@@ -2185,17 +2160,18 @@ async def unlock_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        nums = get_numbers(update.message.text)
+        nums = get_numbers(update.message.text or update.message.caption or "")
 
         if len(nums) >= 2:
             start_day, end_day = nums[0], nums[1]
+            if start_day > end_day:
+                start_day, end_day = end_day, start_day
         elif len(nums) == 1:
             start_day, end_day = 1, nums[0]
         else:
             start_day, end_day = 1, 31
 
         await update.message.reply_text("جاري إنشاء ملف الإحصائيات... ⏳")
-
         file_name, stats = create_dashboard(start_day, end_day)
 
         if not stats.get("days"):
@@ -2220,13 +2196,14 @@ async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"الأيام المحسوبة: {', '.join(map(str, stats['days']))}\n\n"
             "الصفحات:\n"
             "لوحة عامة\n"
-            "الترتيب العام\n"
             "تطور النقاط\n"
             "تحليل الأيام\n"
             "تحليل المشاركين\n"
             "تحليل الكباتن\n"
             "تحليل الحراس\n"
-            "تحليل اللاعبين"
+            "تحليل اللاعبين\n"
+            "تفصيل اختيارات اللاعبين\n"
+            "سجل الأساطير"
         )
 
         with open(file_name, "rb") as file:
@@ -2250,6 +2227,23 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/start"), start))
+
+    # استيراد ملف Excel كامل مرة واحدة
+    app.add_handler(MessageHandler(filters.Document.ALL & filters.CaptionRegex(r"^/استيراد_ملف"), import_excel_file))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استيراد_ملف"), import_excel_file))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_استيراد"), approve_import))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_استيراد"), cancel_import))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الغاء_استيراد"), cancel_import))
+
+    # النسخ الاحتياطي والاسترجاع
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نسخة_احتياطية"), backup_zip))
+    app.add_handler(MessageHandler(filters.Document.ALL & filters.CaptionRegex(r"^/استرجاع_نسخة"), restore_backup_zip))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_نسخة"), restore_backup_zip))
+
+    # تنظيف الأيام الوهمية من القفل
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الأيام"), clean_days))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الايام"), clean_days))
+
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه"), add_day))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), results_day))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), overall))
@@ -2257,9 +2251,8 @@ def main():
 
     # الإحصائيات — يدعم:
     # /احصائيات
-    # /احصائيات 1 5
-    # احصائيات
-    # احصائيات 1 5
+    # /احصائيات 1 6
+    # /احصائيات 6 1
     app.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(r"^/?(?:احصائيات|إحصائيات)(?:\s|$)"),
         dashboard
