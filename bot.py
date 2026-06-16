@@ -1240,28 +1240,62 @@ async def unlock_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    nums = get_numbers(update.message.text)
-    if len(nums) >= 2:
-        start_day, end_day = nums[0], nums[1]
-    elif len(nums) == 1:
-        start_day, end_day = 1, nums[0]
-    else:
-        start_day, end_day = 1, 31
+    try:
+        nums = get_numbers(update.message.text)
 
-    file_name, stats = create_dashboard(start_day, end_day)
-    if not stats["days"]:
-        await update.message.reply_text("ما لقيت أيام لإحصائيات الداشبورد.")
-        return
+        if len(nums) >= 2:
+            start_day, end_day = nums[0], nums[1]
+        elif len(nums) == 1:
+            start_day, end_day = 1, nums[0]
+        else:
+            start_day, end_day = 1, 31
 
-    with open(file_name, "rb") as file:
-        await update.message.reply_document(
-            document=file,
-            filename=file_name,
-            caption=(
-                "تم إنشاء ملف الإحصائيات الكامل ✅\n"
-                f"الأيام المحسوبة: {', '.join(map(str, stats['days']))}\n"
-                "الصفحات: لوحة عامة، الترتيب العام، تطور النقاط، تحليل الأيام، تحليل المشاركين، تحليل الكباتن، تحليل الحراس، تحليل اللاعبين"
+        await update.message.reply_text("جاري إنشاء ملف الإحصائيات... ⏳")
+
+        file_name, stats = create_dashboard(start_day, end_day)
+
+        if not stats.get("days"):
+            await update.message.reply_text(
+                "ما لقيت أيام لإحصائيات الداشبورد.\n"
+                "تأكد أن ملفات الأيام موجودة مثل:\n"
+                "fantasy_day_1.xlsx\n"
+                "fantasy_day_2.xlsx"
             )
+            return
+
+        if not os.path.exists(file_name):
+            await update.message.reply_text(
+                "صار خطأ: ملف الإحصائيات ما انحفظ.\n"
+                f"اسم الملف المتوقع: {file_name}"
+            )
+            return
+
+        caption = (
+            "تم إنشاء ملف الإحصائيات الكامل ✅\n"
+            f"النطاق: من اليوم {start_day} إلى اليوم {end_day}\n"
+            f"الأيام المحسوبة: {', '.join(map(str, stats['days']))}\n\n"
+            "الصفحات:\n"
+            "لوحة عامة\n"
+            "الترتيب العام\n"
+            "تطور النقاط\n"
+            "تحليل الأيام\n"
+            "تحليل المشاركين\n"
+            "تحليل الكباتن\n"
+            "تحليل الحراس\n"
+            "تحليل اللاعبين"
+        )
+
+        with open(file_name, "rb") as file:
+            await update.message.reply_document(
+                document=file,
+                filename=file_name,
+                caption=caption
+            )
+
+    except Exception as e:
+        await update.message.reply_text(
+            "صار خطأ أثناء إنشاء الإحصائيات ❌\n\n"
+            f"السبب:\n{e}"
         )
 
 
@@ -1276,7 +1310,16 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), results_day))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), overall))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_نص"), ranking_text))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/احصائيات"), dashboard))
+
+    # الإحصائيات — يدعم:
+    # /احصائيات
+    # /احصائيات 1 5
+    # احصائيات
+    # احصائيات 1 5
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r"^/?(?:احصائيات|إحصائيات)(?:\s|$)"),
+        dashboard
+    ))
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(الأيام|الايام)"), list_days))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فحص"), inspect_day))
