@@ -681,203 +681,501 @@ def add_line_chart(ws, title, min_col, max_col, header_row, min_row, max_row, ca
 
 
 def create_dashboard(start_day=1, end_day=31):
+    from collections import defaultdict, Counter
+    from openpyxl.utils import get_column_letter
+    from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+    from openpyxl.chart import BarChart, LineChart, Reference
+
     stats = collect_stats(start_day, end_day)
     days = stats["days"]
     file_name = "fantasy_dashboard.xlsx"
 
+    # ألوان ستايل فاتح حديث قريب من الداشبوردات
+    BG = "F4F7FB"
+    NAVY = "253858"
+    BLUE = "4F7DF3"
+    PURPLE = "7C3AED"
+    GOLD = "F2B705"
+    GREEN = "12B886"
+    RED = "FA5252"
+    TEXT = "1F2937"
+    MUTED = "6B7280"
+    WHITE = "FFFFFF"
+    LIGHT_BLUE = "EAF1FF"
+    LIGHT_PURPLE = "F1ECFF"
+    LIGHT_GOLD = "FFF6D6"
+    GRID = "D9E2EF"
+
     wb = Workbook()
     wb.remove(wb.active)
 
-    # 1) لوحة عامة
-    ws = wb.create_sheet("لوحة عامة")
-    ws.sheet_view.rightToLeft = True
-    ws["A1"] = "🏆 لوحة إحصائيات فانتزي المصيف 2026"
-    ws.merge_cells("A1:D1")
-    style_title_cell(ws["A1"])
+    def safe_pct(part, total):
+        return f"{round((part / total) * 100, 1)}%" if total else "0%"
 
-    leader = stats["ranking"][0] if stats["ranking"] else "-"
-    runner = stats["ranking"][1] if len(stats["ranking"]) > 1 else None
-    gap = stats["totals"][leader] - stats["totals"][runner] if runner else 0
-    most_legend = max(PARTICIPANTS, key=lambda n: stats["daily_wins"][n]) if PARTICIPANTS else "-"
+    def pct_number(part, total):
+        return round((part / total) * 100, 1) if total else 0
+
+    def top_key(counter, default="-"):
+        if not counter:
+            return default
+        key, value = counter.most_common(1)[0]
+        return key if value else default
+
+    def top_value(counter):
+        if not counter:
+            return 0
+        return counter.most_common(1)[0][1]
+
+    def sheet_base(ws, title=None):
+        ws.sheet_view.rightToLeft = True
+        ws.freeze_panes = "A2"
+        ws.sheet_properties.tabColor = BLUE
+
+        for i in range(1, 20):
+            ws.column_dimensions[get_column_letter(i)].width = 18
+
+        for row in range(1, 80):
+            ws.row_dimensions[row].height = 22
+
+        if title:
+            ws["A1"] = title
+            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+            c = ws["A1"]
+            c.font = Font(bold=True, size=18, color=WHITE)
+            c.fill = PatternFill("solid", fgColor=NAVY)
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            ws.row_dimensions[1].height = 34
+
+    def style_range_table(ws, header_row=1, min_row=1, max_row=None, min_col=1, max_col=None):
+        max_row = max_row or ws.max_row
+        max_col = max_col or ws.max_column
+        thin = Side(style="thin", color=GRID)
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        for row in ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
+            for cell in row:
+                cell.border = border
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                if isinstance(cell.value, str):
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                cell.font = Font(size=11, color=TEXT)
+
+                if cell.row == header_row:
+                    cell.fill = PatternFill("solid", fgColor=NAVY)
+                    cell.font = Font(bold=True, size=11, color=WHITE)
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                elif cell.row % 2 == 0:
+                    cell.fill = PatternFill("solid", fgColor="F8FAFC")
+                else:
+                    cell.fill = PatternFill("solid", fgColor=WHITE)
+
+        ws.row_dimensions[header_row].height = 28
+
+    def set_card(ws, cell_range, title, value, color=BLUE):
+        ws.merge_cells(cell_range)
+        c = ws[cell_range.split(":")[0]]
+        c.value = f"{title}\n{value}"
+        c.font = Font(bold=True, size=14, color=WHITE)
+        c.fill = PatternFill("solid", fgColor=color)
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        thin = Side(style="thin", color=WHITE)
+        c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def add_section_title(ws, row, col, title, width=3, color=NAVY):
+        ws.merge_cells(start_row=row, start_column=col, end_row=row, end_column=col + width - 1)
+        c = ws.cell(row=row, column=col)
+        c.value = title
+        c.font = Font(bold=True, size=13, color=WHITE)
+        c.fill = PatternFill("solid", fgColor=color)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[row].height = 28
+
+    def add_bar(ws, title, data_col, header_row, min_row, max_row, cats_col, anchor, width=13, height=7):
+        if max_row < min_row:
+            return
+        chart = BarChart()
+        chart.type = "bar"
+        chart.style = 10
+        chart.title = title
+        chart.y_axis.title = ""
+        chart.x_axis.title = ""
+        data = Reference(ws, min_col=data_col, min_row=header_row, max_row=max_row)
+        cats = Reference(ws, min_col=cats_col, min_row=min_row, max_row=max_row)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        chart.width = width
+        chart.height = height
+        ws.add_chart(chart, anchor)
+
+    def add_col(ws, title, data_col, header_row, min_row, max_row, cats_col, anchor, width=13, height=7):
+        if max_row < min_row:
+            return
+        chart = BarChart()
+        chart.type = "col"
+        chart.style = 10
+        chart.title = title
+        chart.y_axis.title = ""
+        chart.x_axis.title = ""
+        data = Reference(ws, min_col=data_col, min_row=header_row, max_row=max_row)
+        cats = Reference(ws, min_col=cats_col, min_row=min_row, max_row=max_row)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        chart.width = width
+        chart.height = height
+        ws.add_chart(chart, anchor)
+
+    def add_line(ws, title, min_col, max_col, header_row, min_row, max_row, cats_col, anchor, width=18, height=8):
+        if max_row < min_row or max_col < min_col:
+            return
+        chart = LineChart()
+        chart.title = title
+        chart.y_axis.title = "النقاط"
+        chart.x_axis.title = "اليوم"
+        data = Reference(ws, min_col=min_col, max_col=max_col, min_row=header_row, max_row=max_row)
+        cats = Reference(ws, min_col=cats_col, min_row=min_row, max_row=max_row)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        chart.width = width
+        chart.height = height
+        ws.add_chart(chart, anchor)
+
+    # حسابات إضافية للتوضيح
+    active_scores_by_participant = {name: {} for name in PARTICIPANTS}
+    player_participants = defaultdict(set)
+    player_days_by_participant = defaultdict(lambda: defaultdict(list))
+    player_captain_by_participant = defaultdict(Counter)
+    captain_participants = defaultdict(set)
+    keeper_participants = defaultdict(set)
+
+    day_summary = {}
+    for day in days:
+        rows = read_day_rows(day)
+        active_scores = []
+        total_day_points = 0
+
+        for row in rows:
+            name = row["participant"]
+            total = row["total"]
+            total_day_points += total
+
+            if row["participated"]:
+                active_scores.append(total)
+                active_scores_by_participant[name][day] = total
+
+                keeper = row["keeper"]
+                if keeper and keeper != "لم يشارك":
+                    keeper_participants[keeper].add(name)
+
+                captain = row["captain"]
+                if captain and captain != "لم يشارك":
+                    captain_participants[captain].add(name)
+
+                for p_key in ("p1", "p2", "p3"):
+                    player = row[p_key]
+                    if player and player != "لم يشارك":
+                        player_participants[player].add(name)
+                        player_days_by_participant[player][name].append(day)
+                        if captain == player:
+                            player_captain_by_participant[player][name] += 1
+
+        info = stats["per_day"].get(day, {})
+        day_summary[day] = {
+            "participants": info.get("participants", 0),
+            "max_score": info.get("max_score", 0),
+            "winners": info.get("winners", []),
+            "avg_active": round(sum(active_scores) / len(active_scores), 2) if active_scores else 0,
+            "total_points": total_day_points,
+            "min_active": min(active_scores) if active_scores else 0,
+        }
+
+    ranking = stats["ranking"]
+    leader = ranking[0] if ranking else "-"
+    runner = ranking[1] if len(ranking) > 1 else None
+    leader_points = stats["totals"].get(leader, 0)
+    gap = leader_points - stats["totals"].get(runner, 0) if runner else 0
+
+    most_legend = "-"
+    if PARTICIPANTS:
+        most_legend = max(PARTICIPANTS, key=lambda n: stats["daily_wins"][n])
+        if stats["daily_wins"][most_legend] == 0:
+            most_legend = "-"
+
     highest_daily = 0
     highest_daily_name = "-"
     highest_daily_day = "-"
-    for day, info in stats["per_day"].items():
+    for day, info in day_summary.items():
         if info["max_score"] > highest_daily:
             highest_daily = info["max_score"]
-            highest_daily_name = "، ".join(info["winners"])
+            highest_daily_name = "، ".join(info["winners"]) or "-"
             highest_daily_day = day
 
-    summary = [
-        ["إجمالي المشاركين", len(PARTICIPANTS)],
-        ["عدد الأيام المحسوبة", len(days)],
-        ["الأيام", ", ".join(map(str, days)) if days else "لا يوجد"],
-        ["المتصدر", leader],
-        ["نقاط المتصدر", stats["totals"].get(leader, 0)],
-        ["الفرق بين الأول والثاني", gap],
-        ["أكثر أسطورة يوم", f"{most_legend} ({stats['daily_wins'][most_legend]})"],
-        ["أعلى نقاط يومية", f"{highest_daily_name} - {highest_daily} نقطة - اليوم {highest_daily_day}"],
-    ]
-    ws.append([])
-    for row in summary:
-        ws.append(row)
+    best_player = max(stats["player_points"], key=lambda p: stats["player_points"][p]) if stats["player_points"] else "-"
+    best_captain = max(stats["captain_points_by_player"], key=lambda p: stats["captain_points_by_player"][p]) if stats["captain_points_by_player"] else "-"
+    best_keeper = max(stats["keeper_points_by_keeper"], key=lambda p: stats["keeper_points_by_keeper"][p]) if stats["keeper_points_by_keeper"] else "-"
+    most_selected_player = top_key(stats["player_choice_count"])
+    most_selected_captain = top_key(stats["captain_choice_count"])
 
-    start = 12
-    ws.cell(row=start, column=1).value = "أفضل 5 مشاركين"
-    ws.cell(row=start, column=4).value = "أقل 5 مشاركين"
-    for cell in (ws.cell(row=start, column=1), ws.cell(row=start, column=4)):
-        cell.font = Font(bold=True, size=14, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="1F4E78")
+    # 1) لوحة عامة
+    ws = wb.create_sheet("لوحة عامة")
+    sheet_base(ws)
+    ws.sheet_properties.tabColor = PURPLE
 
-    ws.cell(row=start + 1, column=1).value = "المشارك"
-    ws.cell(row=start + 1, column=2).value = "النقاط"
-    ws.cell(row=start + 1, column=4).value = "المشارك"
-    ws.cell(row=start + 1, column=5).value = "النقاط"
+    ws["A1"] = "لوحة فانتزي المصيف 2026"
+    ws.merge_cells("A1:L1")
+    ws["A1"].font = Font(bold=True, size=22, color=WHITE)
+    ws["A1"].fill = PatternFill("solid", fgColor=PURPLE)
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 42
 
-    top5 = stats["ranking"][:5]
-    bottom5 = list(reversed(stats["ranking"][-5:]))
-    for i in range(5):
-        if i < len(top5):
-            ws.cell(row=start + 2 + i, column=1).value = top5[i]
-            ws.cell(row=start + 2 + i, column=2).value = stats["totals"][top5[i]]
-        if i < len(bottom5):
-            ws.cell(row=start + 2 + i, column=4).value = bottom5[i]
-            ws.cell(row=start + 2 + i, column=5).value = stats["totals"][bottom5[i]]
+    set_card(ws, "A3:C5", "🏆 المتصدر", f"{leader}\n{leader_points} نقطة", PURPLE)
+    set_card(ws, "D3:F5", "👥 المشاركون", len(PARTICIPANTS), BLUE)
+    set_card(ws, "G3:I5", "📅 الأيام", len(days), GREEN)
+    set_card(ws, "J3:L5", "🔥 أعلى نتيجة يومية", f"{highest_daily_name}\n{highest_daily} - اليوم {highest_daily_day}", GOLD)
 
-    # جدول مختصر للترتيب للرسم
-    chart_start = 20
-    ws.cell(row=chart_start, column=1).value = "المشارك"
-    ws.cell(row=chart_start, column=2).value = "المجموع"
-    for i, name in enumerate(stats["ranking"], start=chart_start + 1):
+    set_card(ws, "A7:C9", "⭐ أكثر أسطورة يوم", f"{most_legend}\n{stats['daily_wins'].get(most_legend, 0)} مرات", NAVY)
+    set_card(ws, "D7:F9", "⚽ أفضل لاعب نقاط", f"{best_player}\n{stats['player_points'].get(best_player, 0)}", GREEN)
+    set_card(ws, "G7:I9", "👑 أفضل كابتن", f"{best_captain}\n{stats['captain_points_by_player'].get(best_captain, 0)}", PURPLE)
+    set_card(ws, "J7:L9", "🧤 أفضل حارس", f"{best_keeper}\n{stats['keeper_points_by_keeper'].get(best_keeper, 0)}", BLUE)
+
+    add_section_title(ws, 11, 1, "أفضل 5 في الترتيب", 3, NAVY)
+    ws.cell(row=12, column=1).value = "المشارك"
+    ws.cell(row=12, column=2).value = "النقاط"
+    ws.cell(row=12, column=3).value = "الفارق عن الأول"
+    for i, name in enumerate(ranking[:5], start=13):
         ws.cell(row=i, column=1).value = name
         ws.cell(row=i, column=2).value = stats["totals"][name]
-    add_bar_chart(ws, "الترتيب العام", 2, 2, chart_start, chart_start + len(stats["ranking"]), 1, chart_start + 1, chart_start + len(stats["ranking"]), "G3")
-    style_dashboard_sheet(ws)
+        ws.cell(row=i, column=3).value = leader_points - stats["totals"][name]
+    style_range_table(ws, header_row=12, min_row=12, max_row=17, min_col=1, max_col=3)
+
+    add_section_title(ws, 11, 5, "أفضل الاختيارات", 3, NAVY)
+    pick_rows = [
+        ["أكثر لاعب اختيارًا", most_selected_player, top_value(stats["player_choice_count"])],
+        ["أكثر كابتن اختيارًا", most_selected_captain, top_value(stats["captain_choice_count"])],
+        ["أفضل لاعب نقاط", best_player, stats["player_points"].get(best_player, 0)],
+        ["أفضل كابتن نقاط", best_captain, stats["captain_points_by_player"].get(best_captain, 0)],
+        ["أفضل حارس نقاط", best_keeper, stats["keeper_points_by_keeper"].get(best_keeper, 0)],
+    ]
+    ws.cell(row=12, column=5).value = "المؤشر"
+    ws.cell(row=12, column=6).value = "الاسم"
+    ws.cell(row=12, column=7).value = "القيمة"
+    for r, row in enumerate(pick_rows, start=13):
+        for c, value in enumerate(row, start=5):
+            ws.cell(row=r, column=c).value = value
+    style_range_table(ws, header_row=12, min_row=12, max_row=17, min_col=5, max_col=7)
+
+    # بيانات الرسوم داخل اللوحة
+    chart_row = 21
+    ws.cell(row=chart_row, column=1).value = "المشارك"
+    ws.cell(row=chart_row, column=2).value = "النقاط"
+    for idx, name in enumerate(ranking[:8], start=chart_row + 1):
+        ws.cell(row=idx, column=1).value = name
+        ws.cell(row=idx, column=2).value = stats["totals"][name]
+    add_bar(ws, "ترتيب أفضل المشاركين", 2, chart_row, chart_row + 1, chart_row + min(8, len(ranking)), 1, "A29", width=15, height=8)
+
+    day_chart_row = 21
+    ws.cell(row=day_chart_row, column=5).value = "اليوم"
+    ws.cell(row=day_chart_row, column=6).value = "مجموع النقاط"
+    ws.cell(row=day_chart_row, column=7).value = "متوسط المشاركين"
+    for idx, day in enumerate(days, start=day_chart_row + 1):
+        ws.cell(row=idx, column=5).value = day
+        ws.cell(row=idx, column=6).value = day_summary[day]["total_points"]
+        ws.cell(row=idx, column=7).value = day_summary[day]["avg_active"]
+    add_col(ws, "مجموع نقاط كل يوم", 6, day_chart_row, day_chart_row + 1, day_chart_row + len(days), 5, "E29", width=15, height=8)
+
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     # 2) الترتيب العام
     ws = wb.create_sheet("الترتيب العام")
-    ws.append(["المركز", "المشارك", "المجموع", "أسطورة اليوم", "عدد المشاركات", "متوسط النقاط"])
+    sheet_base(ws, "الترتيب العام")
+    ws.append(["المركز", "المشارك", "النقاط", "الفارق عن المتصدر", "أفضل يوم", "نقاط أفضل يوم", "مرات أسطورة اليوم", "عدد المشاركات"])
     current_rank = 0
     last_score = None
     real_index = 0
-    for name in stats["ranking"]:
+    for name in ranking:
         real_index += 1
         score = stats["totals"][name]
         if score != last_score:
             current_rank = real_index
             last_score = score
-        pc = stats["participation_count"][name]
-        avg = round(score / pc, 2) if pc else 0
-        ws.append([current_rank, name, score, stats["daily_wins"][name], pc, avg])
-    style_sheet(ws)
-    add_bar_chart(ws, "الترتيب العام بالنقاط", 3, 3, 1, ws.max_row, 2, 2, ws.max_row, "H2")
+
+        active = active_scores_by_participant[name]
+        if active:
+            best_day = max(active, key=lambda d: active[d])
+            best_score = active[best_day]
+        else:
+            best_day, best_score = "-", 0
+
+        ws.append([
+            current_rank,
+            name,
+            score,
+            leader_points - score,
+            best_day,
+            best_score,
+            stats["daily_wins"][name],
+            stats["participation_count"][name],
+        ])
+    style_range_table(ws, header_row=2, min_row=2)
+    if ws.max_row >= 3:
+        add_bar(ws, "النقاط حسب الترتيب", 3, 2, 3, ws.max_row, 2, "J3", width=15, height=8)
 
     # 3) تطور النقاط
     ws = wb.create_sheet("تطور النقاط")
-    ws.append(["اليوم"] + stats["ranking"])
+    sheet_base(ws, "تطور النقاط")
+    ws.append(["اليوم"] + ranking)
     for day in days:
-        ws.append([day] + [stats["cumulative_by_day"][name].get(day, 0) for name in stats["ranking"]])
-    style_sheet(ws)
-    if days:
-        add_line_chart(ws, "تطور مجموع النقاط يومًا بعد يوم", 2, 1 + len(stats["ranking"]), 1, 2, ws.max_row, 1, "A16")
+        ws.append([day] + [stats["cumulative_by_day"][name].get(day, 0) for name in ranking])
+    style_range_table(ws, header_row=2, min_row=2)
+    if days and ranking:
+        add_line(ws, "تطور مجموع النقاط يومًا بعد يوم", 2, 1 + len(ranking), 2, 3, ws.max_row, 1, "A16", width=22, height=10)
 
     # 4) تحليل الأيام
     ws = wb.create_sheet("تحليل الأيام")
-    ws.append(["اليوم", "أسطورة اليوم", "أعلى نقاط", "عدد المشاركين", "عدد الأصفار", "متوسط النقاط", "أقل نقاط"])
+    sheet_base(ws, "تحليل الأيام")
+    ws.append(["اليوم", "عدد المشاركين", "أعلى نقاط", "أسطورة اليوم", "متوسط نقاط المشاركين", "مجموع نقاط اليوم"])
     for day in days:
-        info = stats["per_day"].get(day, {})
+        info = day_summary[day]
         ws.append([
             day,
-            "، ".join(info.get("winners", [])) or "-",
-            info.get("max_score", 0),
-            info.get("participants", 0),
-            info.get("zeros", 0),
-            info.get("avg", 0),
-            info.get("min_score", 0),
+            info["participants"],
+            info["max_score"],
+            "، ".join(info["winners"]) or "-",
+            info["avg_active"],
+            info["total_points"],
         ])
-    style_sheet(ws)
-    add_column_chart(ws, "أعلى نقاط كل يوم", 3, 1, 2, ws.max_row, 1, "I2")
-    add_column_chart(ws, "متوسط نقاط كل يوم", 6, 1, 2, ws.max_row, 1, "I18")
+    style_range_table(ws, header_row=2, min_row=2)
+    if ws.max_row >= 3:
+        add_col(ws, "أعلى نقاط كل يوم", 3, 2, 3, ws.max_row, 1, "H3")
+        add_col(ws, "متوسط نقاط المشاركين", 5, 2, 3, ws.max_row, 1, "H20")
 
     # 5) تحليل المشاركين
     ws = wb.create_sheet("تحليل المشاركين")
-    ws.append(["المشارك", "المجموع", "عدد المشاركات", "نسبة المشاركة", "أسطورة اليوم", "أفضل يوم", "نقاط أفضل يوم", "أسوأ يوم", "نقاط أسوأ يوم", "أيام صفر"])
+    sheet_base(ws, "تحليل المشاركين")
+    ws.append(["المشارك", "المجموع", "أفضل يوم", "نقاط أفضل يوم", "أسوأ يوم", "نقاط أسوأ يوم", "متوسط نقاطه", "مرات أسطورة اليوم", "نسبة المشاركة"])
     total_days = len(days)
-    for name in stats["ranking"]:
-        day_scores = stats["scores_by_day"][name]
-        if day_scores:
-            best_day = max(day_scores, key=lambda d: day_scores[d])
-            worst_day = min(day_scores, key=lambda d: day_scores[d])
-            best_score = day_scores[best_day]
-            worst_score = day_scores[worst_day]
+    for name in ranking:
+        active = active_scores_by_participant[name]
+        if active:
+            best_day = max(active, key=lambda d: active[d])
+            worst_day = min(active, key=lambda d: active[d])
+            best_score = active[best_day]
+            worst_score = active[worst_day]
+            avg = round(sum(active.values()) / len(active), 2)
         else:
             best_day = worst_day = "-"
             best_score = worst_score = 0
+            avg = 0
+
         pc = stats["participation_count"][name]
-        pct = f"{round((pc / total_days) * 100, 1)}%" if total_days else "0%"
-        ws.append([name, stats["totals"][name], pc, pct, stats["daily_wins"][name], best_day, best_score, worst_day, worst_score, stats["zero_days"][name]])
-    style_sheet(ws)
-    add_bar_chart(ws, "مجموع نقاط المشاركين", 2, 2, 1, ws.max_row, 1, 2, ws.max_row, "L2")
+        ws.append([
+            name,
+            stats["totals"][name],
+            best_day,
+            best_score,
+            worst_day,
+            worst_score,
+            avg,
+            stats["daily_wins"][name],
+            safe_pct(pc, total_days),
+        ])
+    style_range_table(ws, header_row=2, min_row=2)
+    if ws.max_row >= 3:
+        add_bar(ws, "مجموع نقاط المشاركين", 2, 2, 3, ws.max_row, 1, "K3", width=15, height=8)
 
     # 6) تحليل الكباتن
     ws = wb.create_sheet("تحليل الكباتن")
-    ws.append(["المشارك", "نقاط الكابتن", "عدد المشاركات", "متوسط نقاط الكابتن"])
-    for name in stats["ranking"]:
-        pc = stats["participation_count"][name]
-        cap_pts = stats["captain_points_by_participant"][name]
-        ws.append([name, cap_pts, pc, round(cap_pts / pc, 2) if pc else 0])
-
-    start2 = ws.max_row + 3
-    ws.cell(row=start2, column=1).value = "اللاعب"
-    ws.cell(row=start2, column=2).value = "مرات اختياره كابتن"
-    ws.cell(row=start2, column=3).value = "نقاطه ككابتن"
-    row_i = start2 + 1
-    for player, count in stats["captain_choice_count"].most_common():
-        ws.cell(row=row_i, column=1).value = player
-        ws.cell(row=row_i, column=2).value = count
-        ws.cell(row=row_i, column=3).value = stats["captain_points_by_player"][player]
-        row_i += 1
-    style_sheet(ws)
-    add_bar_chart(ws, "أكثر مشارك استفاد من الكابتن", 2, 2, 1, 1 + len(PARTICIPANTS), 1, 2, 1 + len(PARTICIPANTS), "F2")
-    if row_i > start2 + 1:
-        add_column_chart(ws, "أكثر لاعب تم اختياره كابتن", 2, start2, start2 + 1, row_i - 1, 1, "F20")
+    sheet_base(ws, "تحليل الكباتن")
+    ws.append(["اللاعب", "مرات كابتن", "عدد المشاركين الذين اختاروه كابتن", "نقاط كابتن", "متوسط نقاط كابتن"])
+    captains = sorted(stats["captain_choice_count"].keys(), key=lambda p: (stats["captain_points_by_player"][p], stats["captain_choice_count"][p]), reverse=True)
+    for player in captains:
+        count = stats["captain_choice_count"][player]
+        points = stats["captain_points_by_player"][player]
+        ws.append([
+            player,
+            count,
+            len(captain_participants[player]),
+            points,
+            round(points / count, 2) if count else 0,
+        ])
+    style_range_table(ws, header_row=2, min_row=2)
+    if ws.max_row >= 3:
+        add_col(ws, "أكثر لاعب تم اختياره كابتن", 2, 2, 3, min(ws.max_row, 17), 1, "G3")
+        add_col(ws, "أفضل كابتن بالنقاط", 4, 2, 3, min(ws.max_row, 17), 1, "G20")
 
     # 7) تحليل الحراس
     ws = wb.create_sheet("تحليل الحراس")
-    ws.append(["المشارك", "نقاط الحراس", "نجاح الكلين شيت", "عدد المشاركات", "نسبة نجاح الحارس"])
-    for name in stats["ranking"]:
-        pc = stats["participation_count"][name]
-        success = stats["keeper_success_by_participant"][name]
-        ws.append([name, stats["keeper_points_by_participant"][name], success, pc, f"{round((success / pc) * 100, 1)}%" if pc else "0%"])
-
-    start2 = ws.max_row + 3
-    ws.cell(row=start2, column=1).value = "الحارس"
-    ws.cell(row=start2, column=2).value = "مرات اختياره"
-    ws.cell(row=start2, column=3).value = "نقاطه"
-    row_i = start2 + 1
-    for keeper, count in stats["keeper_choice_count"].most_common():
-        ws.cell(row=row_i, column=1).value = keeper
-        ws.cell(row=row_i, column=2).value = count
-        ws.cell(row=row_i, column=3).value = stats["keeper_points_by_keeper"][keeper]
-        row_i += 1
-    style_sheet(ws)
-    add_bar_chart(ws, "أكثر مشارك استفاد من الحارس", 2, 2, 1, 1 + len(PARTICIPANTS), 1, 2, 1 + len(PARTICIPANTS), "G2")
-    if row_i > start2 + 1:
-        add_column_chart(ws, "أكثر حارس تم اختياره", 2, start2, start2 + 1, row_i - 1, 1, "G20")
+    sheet_base(ws, "تحليل الحراس")
+    ws.append(["الحارس", "إجمالي الاختيارات", "عدد المشاركين الذين اختاروه", "مرات الكلين شيت", "نقاط الحارس", "نسبة نجاح الحارس"])
+    keepers = sorted(stats["keeper_choice_count"].keys(), key=lambda k: (stats["keeper_points_by_keeper"][k], stats["keeper_choice_count"][k]), reverse=True)
+    for keeper in keepers:
+        count = stats["keeper_choice_count"][keeper]
+        points = stats["keeper_points_by_keeper"][keeper]
+        clean_count = int(points / 5) if points else 0
+        ws.append([
+            keeper,
+            count,
+            len(keeper_participants[keeper]),
+            clean_count,
+            points,
+            safe_pct(clean_count, count),
+        ])
+    style_range_table(ws, header_row=2, min_row=2)
+    if ws.max_row >= 3:
+        add_col(ws, "أكثر حارس تم اختياره", 2, 2, 3, min(ws.max_row, 17), 1, "H3")
+        add_col(ws, "أفضل الحراس بالنقاط", 5, 2, 3, min(ws.max_row, 17), 1, "H20")
 
     # 8) تحليل اللاعبين
     ws = wb.create_sheet("تحليل اللاعبين")
-    ws.append(["اللاعب", "مرات الاختيار", "نقاط اللاعب", "مرات كابتن", "متوسط نقاط لكل اختيار", "مرات اختير ولم يسجل"])
-    all_players = set(stats["player_choice_count"].keys()) | set(stats["captain_selections_by_player"].keys())
-    sorted_players = sorted(all_players, key=lambda p: (stats["player_choice_count"][p], stats["player_points"][p]), reverse=True)
-    for player in sorted_players:
-        count = stats["player_choice_count"][player]
-        pts = stats["player_points"][player]
-        ws.append([player, count, pts, stats["captain_selections_by_player"][player], round(pts / count, 2) if count else 0, stats["player_zero_selections"][player]])
-    style_sheet(ws)
-    if ws.max_row >= 2:
-        add_column_chart(ws, "أكثر اللاعبين اختيارًا", 2, 1, 2, min(ws.max_row, 16), 1, "H2")
-        add_column_chart(ws, "أكثر لاعب نافع بالنقاط", 3, 1, 2, min(ws.max_row, 16), 1, "H18")
+    sheet_base(ws, "تحليل اللاعبين")
+    ws.append(["اللاعب", "إجمالي الاختيارات", "عدد المشاركين الذين اختاروه", "مرات كابتن", "نقاط كلاعب", "نقاط كابتن", "إجمالي نقاطه"])
+    players = sorted(stats["player_choice_count"].keys(), key=lambda p: (stats["player_points"][p] + stats["captain_points_by_player"][p], stats["player_choice_count"][p]), reverse=True)
+    for player in players:
+        player_points = stats["player_points"][player]
+        captain_points = stats["captain_points_by_player"][player]
+        ws.append([
+            player,
+            stats["player_choice_count"][player],
+            len(player_participants[player]),
+            stats["captain_selections_by_player"][player],
+            player_points,
+            captain_points,
+            player_points + captain_points,
+        ])
+    style_range_table(ws, header_row=2, min_row=2)
+    if ws.max_row >= 3:
+        add_col(ws, "أكثر اللاعبين اختيارًا", 2, 2, 3, min(ws.max_row, 17), 1, "I3")
+        add_col(ws, "أكثر اللاعبين نقاطًا", 7, 2, 3, min(ws.max_row, 17), 1, "I20")
+
+    # 9) تفصيل اختيارات اللاعبين
+    ws = wb.create_sheet("تفصيل اختيارات اللاعبين")
+    sheet_base(ws, "تفصيل اختيارات اللاعبين")
+    ws.append(["اللاعب", "المشارك", "الأيام المختار فيها", "عدد الاختيارات", "مرات كابتن"])
+    detail_rows = []
+    for player in sorted(player_days_by_participant.keys()):
+        for participant in sorted(player_days_by_participant[player].keys(), key=lambda n: PARTICIPANTS.index(n) if n in PARTICIPANTS else 999):
+            player_days = sorted(player_days_by_participant[player][participant])
+            detail_rows.append([
+                player,
+                participant,
+                "، ".join([str(d) for d in player_days]),
+                len(player_days),
+                player_captain_by_participant[player][participant],
+            ])
+    detail_rows.sort(key=lambda r: (r[0], r[1]))
+    for row in detail_rows:
+        ws.append(row)
+    style_range_table(ws, header_row=2, min_row=2)
+
+    # ضبط عرض الأعمدة لكل الصفحات
+    for ws in wb.worksheets:
+        ws.sheet_view.rightToLeft = True
+        for col in range(1, ws.max_column + 1):
+            letter = get_column_letter(col)
+            ws.column_dimensions[letter].width = max(ws.column_dimensions[letter].width or 12, 18)
+        for row in range(1, ws.max_row + 1):
+            ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 18, 22)
 
     wb.save(file_name)
     return file_name, stats
