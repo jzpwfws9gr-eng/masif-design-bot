@@ -720,6 +720,36 @@ def create_dashboard(start_day=1, end_day=31):
     no_side = Side(style=None)
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
+    INVALID_SELECTIONS = {"", "لم يشارك", "تم حجب المشاركة / تأخير"}
+
+    def is_real_selection(value):
+        return normalize_name(value) not in INVALID_SELECTIONS
+
+    def points_source(base_pts, cap_extra):
+        parts = []
+        try:
+            base_pts = int(base_pts or 0)
+        except Exception:
+            base_pts = 0
+        try:
+            cap_extra = int(cap_extra or 0)
+        except Exception:
+            cap_extra = 0
+
+        if base_pts > 0:
+            goals = base_pts // 5
+            if goals <= 1:
+                parts.append("هدف")
+            elif goals == 2:
+                parts.append("هدفين")
+            elif goals <= 10:
+                parts.append(f"{goals} أهداف")
+            else:
+                parts.append(f"{base_pts} نقطة")
+        if cap_extra > 0:
+            parts.append("كابتن")
+        return " + ".join(parts) if parts else "بدون نقاط"
+
     def safe_pct(part, total):
         return f"{round((part / total) * 100, 1)}%" if total else "0%"
 
@@ -886,7 +916,7 @@ def create_dashboard(start_day=1, end_day=31):
 
                 # الحراس
                 keeper = row["keeper"]
-                if keeper and keeper != "لم يشارك":
+                if is_real_selection(keeper):
                     keeper_participants[keeper].add(name)
                     keeper_rounds[keeper].add(day)
                     kd = keeper_round_detail[(day, keeper)]
@@ -897,16 +927,10 @@ def create_dashboard(start_day=1, end_day=31):
                         kd["clean"] = True
                         keeper_clean_rounds[keeper].add(day)
 
-                    cap_extra = row["captain_points"] if row["captain"] == keeper else 0
-                    selection_detail_rows.append([
-                        day, name, keeper, "حارس",
-                        "نعم" if row["captain"] == keeper else "لا",
-                        row["keeper_points"], cap_extra, row["keeper_points"] + cap_extra
-                    ])
 
                 # الكباتن - حسب المشارك
                 captain = row["captain"]
-                if captain and captain != "لم يشارك":
+                if is_real_selection(captain):
                     captain_by_participant[name]["count"] += 1
                     captain_by_participant[name]["points"] += row["captain_points"]
                     captain_player_count[captain] += 1
@@ -922,7 +946,7 @@ def create_dashboard(start_day=1, end_day=31):
                 for p_key, pts_key in (("p1", "p1_points"), ("p2", "p2_points"), ("p3", "p3_points")):
                     player = row[p_key]
                     base_pts = row[pts_key]
-                    if player and player != "لم يشارك":
+                    if is_real_selection(player):
                         player_participants[player].add(name)
                         player_choice_count[player] += 1
                         pd = player_round_detail[(day, player)]
@@ -936,9 +960,14 @@ def create_dashboard(start_day=1, end_day=31):
                             player_captain_count[player] += 1
 
                         selection_detail_rows.append([
-                            day, name, player, "لاعب",
-                            "نعم" if row["captain"] == player else "لا",
-                            base_pts, cap_extra, base_pts + cap_extra
+                            day,
+                            name,
+                            player,
+                            "نعم 👑" if row["captain"] == player else "لا",
+                            base_pts,
+                            cap_extra,
+                            base_pts + cap_extra,
+                            points_source(base_pts, cap_extra),
                         ])
 
         for (d, player), detail in list(player_round_detail.items()):
@@ -1124,40 +1153,53 @@ def create_dashboard(start_day=1, end_day=31):
         for c, name in enumerate(ranking[:5], start=data_col + 1):
             ws.cell(row=r, column=c).value = stats["cumulative_by_day"][name].get(day, 0)
 
-    add_donut_chart(ws, "نسبة المشاركة", data_col, data_col + 1, 2, 3, "A17", width=8, height=7)
-    add_donut_chart(ws, "توزيع أسطورة اليوم", data_col, data_col + 1, leg_start + 1, leg_start + len(leg_rows), "D17", width=8, height=7)
-    add_bar_chart(ws, "أفضل 5 مشاركين", data_col + 1, top_start, top_start + 1, top_start + len(ranking[:5]), data_col, "G17", width=8, height=7, chart_type="bar")
-    add_bar_chart(ws, "مجموع نقاط الجولات", data_col + 1, day_start, day_start + 1, day_start + len(days), data_col, "J17", width=8, height=7, chart_type="col")
-    add_line_chart_local(ws, "تطور نقاط أفضل 5", data_col + 1, data_col + min(5, len(ranking)), evo_start, evo_start + 1, evo_start + len(days), data_col, "A31", width=18, height=8)
-
-    for col in range(data_col, data_col + 8):
-        ws.column_dimensions[get_column_letter(col)].hidden = True
-
-    # -------------------- 2) الترتيب العام ✅ مع حركة الترتيب --------------------
-    ws = wb.create_sheet("الترتيب العام")
-    ws.append(["المركز", "المشارك", "المجموع", "حركة الترتيب", "الفارق عن المتصدر", "أسطورة اليوم", "عدد المشاركات", "متوسط النقاط"])
+    # الترتيب العام داخل لوحة عامة
+    section_title(ws, 12, 1, "الترتيب العام", 6, HEADER)
+    ranking_headers = ["المركز", "المشارك", "النقاط", "الفارق عن المتصدر", "حركة الترتيب", "أسطورة اليوم"]
+    for col, h in enumerate(ranking_headers, start=1):
+        ws.cell(row=13, column=col).value = h
 
     current_rank = 0
     last_score = None
     real_index = 0
-
+    rank_row = 14
     for name in stats["ranking"]:
         real_index += 1
         score = stats["totals"][name]
         if score != last_score:
             current_rank = real_index
             last_score = score
-        pc = stats["participation_count"][name]
-        avg = round(score / pc, 2) if pc else 0
         prev_rank = previous_rank_map.get(name) if previous_rank_map else None
         move = movement_text(name, current_rank, prev_rank)
-        ws.append([current_rank, name, score, move, leader_points - score, stats["daily_wins"][name], pc, avg])
+        values = [current_rank, name, score, leader_points - score, move, stats["daily_wins"][name]]
+        for col, val in enumerate(values, start=1):
+            ws.cell(row=rank_row, column=col).value = val
+        # تلوين حركة الترتيب فقط بدون إزعاج الجدول
+        move_cell = ws.cell(row=rank_row, column=5)
+        if isinstance(move, str) and move.startswith("↑"):
+            move_cell.font = Font(bold=True, color=GREEN)
+        elif isinstance(move, str) and move.startswith("↓"):
+            move_cell.font = Font(bold=True, color=RED)
+        elif move == "جديد":
+            move_cell.font = Font(bold=True, color=BLUE)
+        rank_row += 1
 
-    style_sheet(ws)
-    ws.column_dimensions["D"].width = 22
-    add_bar_chart(ws, "الترتيب العام بالنقاط", 3, 1, 2, ws.max_row, 2, "J2", width=14, height=8, chart_type="bar")
+    style_table(ws, 13, max(13, rank_row - 1), 1, 6, header_row=13)
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["E"].width = 20
 
-    # -------------------- 3) تطور النقاط ✅ كما هو --------------------
+    # الرسوم تحت جدول الترتيب
+    chart_top = max(31, rank_row + 3)
+    add_donut_chart(ws, "نسبة المشاركة", data_col, data_col + 1, 2, 3, f"A{chart_top}", width=8, height=7)
+    add_donut_chart(ws, "توزيع أسطورة اليوم", data_col, data_col + 1, leg_start + 1, leg_start + len(leg_rows), f"D{chart_top}", width=8, height=7)
+    add_bar_chart(ws, "أفضل 5 مشاركين", data_col + 1, top_start, top_start + 1, top_start + len(ranking[:5]), data_col, f"G{chart_top}", width=8, height=7, chart_type="bar")
+    add_bar_chart(ws, "مجموع نقاط الجولات", data_col + 1, day_start, day_start + 1, day_start + len(days), data_col, f"J{chart_top}", width=8, height=7, chart_type="col")
+    add_line_chart_local(ws, "تطور نقاط أفضل 5", data_col + 1, data_col + min(5, len(ranking)), evo_start, evo_start + 1, evo_start + len(days), data_col, f"A{chart_top + 14}", width=18, height=8)
+
+    for col in range(data_col, data_col + 8):
+        ws.column_dimensions[get_column_letter(col)].hidden = True
+
+    # -------------------- 2) تطور النقاط ✅ كما هو --------------------
     ws = wb.create_sheet("تطور النقاط")
     ws.append(["اليوم"] + stats["ranking"])
 
@@ -1169,7 +1211,7 @@ def create_dashboard(start_day=1, end_day=31):
     if days:
         add_line_chart_local(ws, "تطور مجموع النقاط يومًا بعد يوم", 2, 1 + len(stats["ranking"]), 1, 2, ws.max_row, 1, "A16", width=20, height=10)
 
-    # -------------------- 4) تحليل الأيام ✅ مع تنسيق أسطورة اليوم --------------------
+    # -------------------- 3) تحليل الأيام ✅ مع تنسيق أسطورة اليوم --------------------
     ws = wb.create_sheet("تحليل الأيام")
     sheet_setup(ws, "تحليل الأيام")
     headers = ["اليوم", "عدد المشاركين", "غير المشاركين", "مجموع نقاط اليوم", "متوسط نقاط المشاركين", "أعلى نقاط", "عدد الأساطير", "أسطورة اليوم"]
@@ -1198,10 +1240,10 @@ def create_dashboard(start_day=1, end_day=31):
     ws.column_dimensions["H"].width = 34
     style_table(ws, 2, max(2, ws.max_row), 1, 8, header_row=2)
     if ws.max_row >= 3:
-        add_bar_chart(ws, "مجموع نقاط كل يوم", 4, 2, 3, ws.max_row, 1, "J3", width=12, height=7, chart_type="col")
-        add_bar_chart(ws, "متوسط نقاط المشاركين", 5, 2, 3, ws.max_row, 1, "J19", width=12, height=7, chart_type="col")
+        add_bar_chart(ws, "مجموع نقاط كل يوم", 4, 2, 3, ws.max_row, 1, f"A{ws.max_row + 4}", width=12, height=7, chart_type="col")
+        add_bar_chart(ws, "متوسط نقاط المشاركين", 5, 2, 3, ws.max_row, 1, f"H{ws.max_row + 4}", width=12, height=7, chart_type="col")
 
-    # -------------------- 5) تحليل المشاركين ✅ كما هو --------------------
+    # -------------------- 4) تحليل المشاركين ✅ كما هو --------------------
     ws = wb.create_sheet("تحليل المشاركين")
     ws.append(["المشارك", "المجموع", "عدد المشاركات", "نسبة المشاركة", "أسطورة اليوم", "أفضل يوم", "نقاط أفضل يوم", "أسوأ يوم", "نقاط أسوأ يوم", "أيام صفر"])
 
@@ -1223,9 +1265,9 @@ def create_dashboard(start_day=1, end_day=31):
         ws.append([name, stats["totals"][name], pc, pct, stats["daily_wins"][name], best_day, best_score, worst_day, worst_score, stats["zero_days"][name]])
 
     style_sheet(ws)
-    add_bar_chart(ws, "مجموع نقاط المشاركين", 2, 1, 2, ws.max_row, 1, "L2", width=14, height=8, chart_type="bar")
+    add_bar_chart(ws, "مجموع نقاط المشاركين", 2, 1, 2, ws.max_row, 1, f"A{ws.max_row + 4}", width=14, height=8, chart_type="bar")
 
-    # -------------------- 6) تحليل الكباتن ✅ حسب المشاركين --------------------
+    # -------------------- 5) تحليل الكباتن ✅ حسب المشاركين --------------------
     ws = wb.create_sheet("تحليل الكباتن")
     sheet_setup(ws, "تحليل الكباتن")
 
@@ -1238,7 +1280,7 @@ def create_dashboard(start_day=1, end_day=31):
     card(ws, "G3:I5", "🎯 أعلى نجاح كابتن", f"{top_success}\n{safe_pct(captain_by_participant[top_success]['success'], captain_by_participant[top_success]['count']) if top_success != '-' else '0%'}", GREEN)
 
     section_title(ws, 7, 1, "أداء المشاركين في اختيارات الكابتن", 8, HEADER)
-    headers = ["المشارك", "عدد مرات اختيار كابتن", "كباتن جابوا نقاط", "نقاط الكابتن الإضافية", "أفضل كابتن اختاره", "أفضل جولة كابتن", "متوسط نقاط الكابتن", "نسبة نجاح الكابتن"]
+    headers = ["المشارك", "مرات اختيار كابتن", "كباتن جابوا نقاط", "نقاط الكابتن الإضافية", "أفضل كابتن اختاره", "نسبة نجاح الكابتن"]
     for col, h in enumerate(headers, start=1):
         ws.cell(row=8, column=col).value = h
 
@@ -1246,17 +1288,18 @@ def create_dashboard(start_day=1, end_day=31):
     for name in ranking:
         d = captain_by_participant[name]
         count = d["count"]
+        best_caption = "-"
+        if d["best_points"] > 0:
+            best_caption = f"{d['best_player']} +{d['best_points']}"
         ws.cell(row=row_i, column=1).value = name
         ws.cell(row=row_i, column=2).value = count
         ws.cell(row=row_i, column=3).value = d["success"]
         ws.cell(row=row_i, column=4).value = d["points"]
-        ws.cell(row=row_i, column=5).value = d["best_player"] if d["best_points"] > 0 else "-"
-        ws.cell(row=row_i, column=6).value = d["best_day"] if d["best_points"] > 0 else "-"
-        ws.cell(row=row_i, column=7).value = safe_avg(d["points"], count)
-        ws.cell(row=row_i, column=8).value = safe_pct(d["success"], count)
+        ws.cell(row=row_i, column=5).value = best_caption
+        ws.cell(row=row_i, column=6).value = safe_pct(d["success"], count)
         row_i += 1
 
-    style_table(ws, 8, row_i - 1, 1, 8, header_row=8)
+    style_table(ws, 8, row_i - 1, 1, 6, header_row=8)
 
     start2 = row_i + 3
     section_title(ws, start2, 1, "أكثر اللاعبين اختيارًا كابتن", 4, HEADER)
@@ -1274,11 +1317,11 @@ def create_dashboard(start_day=1, end_day=31):
 
     style_table(ws, start2 + 1, max(start2 + 1, r - 1), 1, 4, header_row=start2 + 1)
     if row_i > 9:
-        add_bar_chart(ws, "نقاط الكابتن الإضافية حسب المشارك", 4, 8, 9, row_i - 1, 1, "K7", width=13, height=8, chart_type="bar")
+        add_bar_chart(ws, "نقاط الكابتن الإضافية حسب المشارك", 4, 8, 9, row_i - 1, 1, f"A{row_i + 3}", width=13, height=8, chart_type="bar")
     if r > start2 + 2:
-        add_bar_chart(ws, "مرات اختيار اللاعب كابتن", 2, start2 + 1, start2 + 2, min(r - 1, start2 + 16), 1, "K24", width=13, height=8, chart_type="col")
+        add_bar_chart(ws, "مرات اختيار اللاعب كابتن", 2, start2 + 1, start2 + 2, min(r - 1, start2 + 16), 1, f"H{row_i + 3}", width=13, height=8, chart_type="col")
 
-    # -------------------- 7) تحليل الحراس ✅ بدون تكرار الكلين شيت --------------------
+    # -------------------- 6) تحليل الحراس ✅ بدون تكرار الكلين شيت --------------------
     ws = wb.create_sheet("تحليل الحراس")
     sheet_setup(ws, "تحليل الحراس")
 
@@ -1293,7 +1336,7 @@ def create_dashboard(start_day=1, end_day=31):
     card(ws, "G3:I5", "🎯 أعلى نسبة نجاح", f"{best_keeper_rate}\n{safe_pct(len(keeper_clean_rounds[best_keeper_rate]), len(keeper_rounds[best_keeper_rate])) if best_keeper_rate != '-' else '0%'}", GREEN)
 
     section_title(ws, 7, 1, "ملخص الحراس في البطولة", 8, HEADER)
-    headers = ["الحارس", "إجمالي الاختيارات", "عدد المشاركين الذين اختاروه", "الجولات المختار فيها", "مرات الكلين شيت", "نقاط الحارس الأساسية", "إجمالي نقاط المشاركين منه", "نسبة النجاح"]
+    headers = ["الحارس", "إجمالي الاختيارات", "عدد المشاركين الذين اختاروه", "مرات الكلين شيت", "إجمالي نقاط المشاركين منه", "نسبة النجاح"]
     for col, h in enumerate(headers, start=1):
         ws.cell(row=8, column=col).value = h
 
@@ -1305,14 +1348,12 @@ def create_dashboard(start_day=1, end_day=31):
         ws.cell(row=r, column=1).value = keeper
         ws.cell(row=r, column=2).value = stats["keeper_choice_count"][keeper]
         ws.cell(row=r, column=3).value = len(keeper_participants[keeper])
-        ws.cell(row=r, column=4).value = "، ".join(map(str, rounds))
-        ws.cell(row=r, column=5).value = clean_count
-        ws.cell(row=r, column=6).value = clean_count * 5
-        ws.cell(row=r, column=7).value = stats["keeper_points_by_keeper"][keeper]
-        ws.cell(row=r, column=8).value = safe_pct(clean_count, len(rounds))
+        ws.cell(row=r, column=4).value = clean_count
+        ws.cell(row=r, column=5).value = stats["keeper_points_by_keeper"][keeper]
+        ws.cell(row=r, column=6).value = safe_pct(clean_count, len(rounds))
         r += 1
 
-    style_table(ws, 8, max(8, r - 1), 1, 8, header_row=8)
+    style_table(ws, 8, max(8, r - 1), 1, 6, header_row=8)
 
     start2 = r + 3
     section_title(ws, start2, 1, "تفصيل الحراس حسب الجولة", 6, HEADER)
@@ -1332,9 +1373,9 @@ def create_dashboard(start_day=1, end_day=31):
 
     style_table(ws, start2 + 1, max(start2 + 1, rr - 1), 1, 6, header_row=start2 + 1)
     if r > 9:
-        add_bar_chart(ws, "إجمالي نقاط المشاركين من الحراس", 7, 8, 9, min(r - 1, 23), 1, "K7", width=13, height=8, chart_type="bar")
+        add_bar_chart(ws, "إجمالي نقاط المشاركين من الحراس", 5, 8, 9, min(r - 1, 23), 1, f"A{rr + 3}", width=13, height=8, chart_type="bar")
 
-    # -------------------- 8) تحليل اللاعبين ✅ تأثير اللاعبين --------------------
+    # -------------------- 7) تحليل اللاعبين ✅ تأثير اللاعبين --------------------
     ws = wb.create_sheet("تحليل اللاعبين")
     sheet_setup(ws, "تحليل اللاعبين")
 
@@ -1386,27 +1427,52 @@ def create_dashboard(start_day=1, end_day=31):
 
     style_table(ws, start2 + 1, max(start2 + 1, rr - 1), 1, 6, header_row=start2 + 1)
     if r > 10:
-        add_bar_chart(ws, "أعلى تأثير للاعب في جولة", 6, 9, 10, min(r - 1, 24), 2, "H9", width=14, height=8, chart_type="bar")
+        add_bar_chart(ws, "أعلى تأثير للاعب في جولة", 6, 9, 10, min(r - 1, 24), 2, f"A{rr + 4}", width=14, height=8, chart_type="bar")
     if rr > start2 + 2:
-        add_bar_chart(ws, "إجمالي تأثير اللاعبين في البطولة", 6, start2 + 1, start2 + 2, min(rr - 1, start2 + 16), 1, "H26", width=14, height=8, chart_type="bar")
+        add_bar_chart(ws, "إجمالي تأثير اللاعبين في البطولة", 6, start2 + 1, start2 + 2, min(rr - 1, start2 + 16), 1, f"H{rr + 4}", width=14, height=8, chart_type="bar")
 
-    # -------------------- 9) تفصيل اختيارات اللاعبين ✅ حسب الجولة --------------------
+    # -------------------- 8) تفصيل اختيارات اللاعبين ✅ حسب الجولة --------------------
     ws = wb.create_sheet("تفصيل اختيارات اللاعبين")
     sheet_setup(ws, "تفصيل اختيارات اللاعبين")
 
-    headers = ["الجولة", "المشارك", "اللاعب", "نوع الاختيار", "هل هو كابتن؟", "نقاط اللاعب في الجولة", "نقاط الكابتن", "إجمالي النقاط"]
+    headers = ["الجولة", "المشارك", "اللاعب", "كابتن؟", "نقاط اللاعب", "نقاط الكابتن", "الإجمالي", "مصدر النقاط"]
     for col, h in enumerate(headers, start=1):
         ws.cell(row=2, column=col).value = h
 
+    round_fills = ["EAF1FF", "E7F8F1", "EFE7FF", "FFF6D6", "E8F7FF", "FFEAF4", "FFF0E0", "F3F4F6", "E6FFFA", "F5F0FF"]
     r = 3
-    for row in sorted(selection_detail_rows, key=lambda x: (x[0], x[1], x[3], x[2])):
+    for row in sorted(selection_detail_rows, key=lambda x: (x[0], x[1], 0 if "نعم" in str(x[3]) else 1, x[2])):
+        day = int(row[0]) if str(row[0]).isdigit() else 0
+        fill = PatternFill("solid", fgColor=round_fills[(day - 1) % len(round_fills)] if day else "FFFFFF")
         for col, val in enumerate(row, start=1):
-            ws.cell(row=r, column=col).value = val
+            cell = ws.cell(row=r, column=col)
+            cell.value = val
+            cell.fill = fill
+        if "نعم" in str(row[3]):
+            ws.cell(row=r, column=4).fill = PatternFill("solid", fgColor=L_GOLD)
+            ws.cell(row=r, column=4).font = Font(bold=True, color=TEXT)
+        if row[6] and row[6] > 0:
+            ws.cell(row=r, column=7).font = Font(bold=True, color=NAVY)
         r += 1
 
     style_table(ws, 2, max(2, r - 1), 1, 8, header_row=2)
+    # نعيد تطبيق ألوان الجولات بعد تنسيق الجدول
+    for rr2 in range(3, r):
+        day = ws.cell(row=rr2, column=1).value
+        try:
+            day_int = int(day)
+            fill = PatternFill("solid", fgColor=round_fills[(day_int - 1) % len(round_fills)])
+            for c in range(1, 9):
+                ws.cell(row=rr2, column=c).fill = fill
+        except Exception:
+            pass
+        if "نعم" in str(ws.cell(row=rr2, column=4).value):
+            ws.cell(row=rr2, column=4).fill = PatternFill("solid", fgColor=L_GOLD)
+            ws.cell(row=rr2, column=4).font = Font(bold=True, color=TEXT)
+        if score_to_int(ws.cell(row=rr2, column=7).value) > 0:
+            ws.cell(row=rr2, column=7).font = Font(bold=True, color=NAVY)
 
-    # -------------------- 10) سجل الأساطير ✅ --------------------
+    # -------------------- 9) سجل الأساطير ✅ --------------------
     ws = wb.create_sheet("سجل الأساطير")
     sheet_setup(ws, "سجل الأساطير")
 
@@ -1449,6 +1515,7 @@ def create_dashboard(start_day=1, end_day=31):
         ws = wb["تفصيل اختيارات اللاعبين"]
         ws.column_dimensions["B"].width = 22
         ws.column_dimensions["C"].width = 24
+        ws.column_dimensions["H"].width = 26
     if "تحليل الأيام" in wb.sheetnames:
         ws = wb["تحليل الأيام"]
         ws.column_dimensions["H"].width = 36
