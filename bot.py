@@ -1007,13 +1007,51 @@ def create_dashboard(start_day=1, end_day=31):
     if player_captain_count:
         most_captained_player = player_captain_count.most_common(1)[0][0]
 
+    # اللاعب الذهبي: أكثر لاعب أفاد المشاركين في البطولة كاملة
+    golden_player = "-"
+    if player_total_distributed:
+        golden_player = max(player_total_distributed.keys(), key=lambda p: player_total_distributed[p])
+
+    def build_rank_map_from_scores(score_map):
+        ordered = sorted(score_map.keys(), key=lambda n: score_map.get(n, 0), reverse=True)
+        ranks = {}
+        current_rank = 0
+        last_score = None
+        real_index = 0
+        for n in ordered:
+            real_index += 1
+            s = score_map.get(n, 0)
+            if s != last_score:
+                current_rank = real_index
+                last_score = s
+            ranks[n] = current_rank
+        return ranks
+
+    def movement_text(name, current_rank, previous_rank):
+        if previous_rank is None:
+            return "جديد"
+        diff = previous_rank - current_rank
+        if diff > 0:
+            return f"↑ صعد {diff} مركز" if diff == 1 else f"↑ صعد {diff} مراكز"
+        if diff < 0:
+            drop = abs(diff)
+            return f"↓ نزل مركز" if drop == 1 else f"↓ نزل {drop} مراكز"
+        return "— ثابت"
+
+    current_rank_map = build_rank_map_from_scores(stats["totals"])
+    previous_rank_map = {}
+    if len(days) >= 2:
+        prev_day = days[-2]
+        prev_scores = {name: stats["cumulative_by_day"][name].get(prev_day, 0) for name in PARTICIPANTS}
+        previous_rank_map = build_rank_map_from_scores(prev_scores)
+
     # -------------------- 1) لوحة عامة Dashboard --------------------
     ws = wb.create_sheet("لوحة عامة")
     sheet_setup(ws)
     ws.sheet_properties.tabColor = PURPLE
 
     # خلفية/عنوان
-    for row in range(1, 42):
+    for row in range(1, 50):
         for col in range(1, 14):
             ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor=BG)
 
@@ -1086,18 +1124,18 @@ def create_dashboard(start_day=1, end_day=31):
         for c, name in enumerate(ranking[:5], start=data_col + 1):
             ws.cell(row=r, column=c).value = stats["cumulative_by_day"][name].get(day, 0)
 
-    add_donut_chart(ws, "نسبة المشاركة", data_col, data_col + 1, 2, 3, "A13", width=8, height=7)
-    add_donut_chart(ws, "توزيع أسطورة اليوم", data_col, data_col + 1, leg_start + 1, leg_start + len(leg_rows), "D13", width=8, height=7)
-    add_bar_chart(ws, "أفضل 5 مشاركين", data_col + 1, top_start, top_start + 1, top_start + len(ranking[:5]), data_col, "G13", width=8, height=7, chart_type="bar")
-    add_bar_chart(ws, "مجموع نقاط الجولات", data_col + 1, day_start, day_start + 1, day_start + len(days), data_col, "J13", width=8, height=7, chart_type="col")
-    add_line_chart_local(ws, "تطور نقاط أفضل 5", data_col + 1, data_col + min(5, len(ranking)), evo_start, evo_start + 1, evo_start + len(days), data_col, "A27", width=18, height=8)
+    add_donut_chart(ws, "نسبة المشاركة", data_col, data_col + 1, 2, 3, "A17", width=8, height=7)
+    add_donut_chart(ws, "توزيع أسطورة اليوم", data_col, data_col + 1, leg_start + 1, leg_start + len(leg_rows), "D17", width=8, height=7)
+    add_bar_chart(ws, "أفضل 5 مشاركين", data_col + 1, top_start, top_start + 1, top_start + len(ranking[:5]), data_col, "G17", width=8, height=7, chart_type="bar")
+    add_bar_chart(ws, "مجموع نقاط الجولات", data_col + 1, day_start, day_start + 1, day_start + len(days), data_col, "J17", width=8, height=7, chart_type="col")
+    add_line_chart_local(ws, "تطور نقاط أفضل 5", data_col + 1, data_col + min(5, len(ranking)), evo_start, evo_start + 1, evo_start + len(days), data_col, "A31", width=18, height=8)
 
     for col in range(data_col, data_col + 8):
         ws.column_dimensions[get_column_letter(col)].hidden = True
 
-    # -------------------- 2) الترتيب العام ✅ كما هو --------------------
+    # -------------------- 2) الترتيب العام ✅ مع حركة الترتيب --------------------
     ws = wb.create_sheet("الترتيب العام")
-    ws.append(["المركز", "المشارك", "المجموع", "أسطورة اليوم", "عدد المشاركات", "متوسط النقاط"])
+    ws.append(["المركز", "المشارك", "المجموع", "حركة الترتيب", "الفارق عن المتصدر", "أسطورة اليوم", "عدد المشاركات", "متوسط النقاط"])
 
     current_rank = 0
     last_score = None
@@ -1111,10 +1149,13 @@ def create_dashboard(start_day=1, end_day=31):
             last_score = score
         pc = stats["participation_count"][name]
         avg = round(score / pc, 2) if pc else 0
-        ws.append([current_rank, name, score, stats["daily_wins"][name], pc, avg])
+        prev_rank = previous_rank_map.get(name) if previous_rank_map else None
+        move = movement_text(name, current_rank, prev_rank)
+        ws.append([current_rank, name, score, move, leader_points - score, stats["daily_wins"][name], pc, avg])
 
     style_sheet(ws)
-    add_bar_chart(ws, "الترتيب العام بالنقاط", 3, 1, 2, ws.max_row, 2, "H2", width=14, height=8, chart_type="bar")
+    ws.column_dimensions["D"].width = 22
+    add_bar_chart(ws, "الترتيب العام بالنقاط", 3, 1, 2, ws.max_row, 2, "J2", width=14, height=8, chart_type="bar")
 
     # -------------------- 3) تطور النقاط ✅ كما هو --------------------
     ws = wb.create_sheet("تطور النقاط")
@@ -1364,6 +1405,29 @@ def create_dashboard(start_day=1, end_day=31):
         r += 1
 
     style_table(ws, 2, max(2, r - 1), 1, 8, header_row=2)
+
+    # -------------------- 10) سجل الأساطير ✅ --------------------
+    ws = wb.create_sheet("سجل الأساطير")
+    sheet_setup(ws, "سجل الأساطير")
+
+    headers = ["الجولة", "أسطورة اليوم", "عدد الأساطير", "أعلى نقاط"]
+    for col, h in enumerate(headers, start=1):
+        ws.cell(row=2, column=col).value = h
+
+    r = 3
+    for day in days:
+        info = day_summary[day]
+        winners = info["winners"]
+        ws.cell(row=r, column=1).value = f"اليوم {day}"
+        ws.cell(row=r, column=2).value = " + ".join(winners) if winners else "-"
+        ws.cell(row=r, column=3).value = info["legends_count"]
+        ws.cell(row=r, column=4).value = info["max_score"]
+        r += 1
+
+    style_table(ws, 2, max(2, r - 1), 1, 4, header_row=2)
+    ws.column_dimensions["B"].width = 42
+    if r > 3:
+        add_bar_chart(ws, "أعلى نقاط أسطورة اليوم", 4, 2, 3, r - 1, 1, "F3", width=13, height=7, chart_type="col")
 
     # تنسيق عام نهائي
     for ws in wb.worksheets:
