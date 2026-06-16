@@ -213,16 +213,20 @@ def style_title_cell(cell):
 
 
 def style_dashboard_sheet(ws):
+    from openpyxl.utils import get_column_letter
+
     ws.sheet_view.rightToLeft = True
+
     for col in range(1, ws.max_column + 1):
-        ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = 22
+        letter = get_column_letter(col)
+        ws.column_dimensions[letter].width = 22
+
     for row in ws.iter_rows():
         for cell in row:
             if isinstance(cell.value, str):
                 cell.alignment = Alignment(horizontal="right", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
-
 # -------------------- ملفات الأيام --------------------
 
 def create_blank_workbook(day):
