@@ -2432,14 +2432,28 @@ async def who_am_i(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def font_candidates():
-    return [
+    """
+    ترتيب خطوط عربي محسّن للتصاميم.
+    البوت يختار أول خط موجود من القائمة، لذلك ارفع هذه الملفات بجانب bot.py:
+    Tajawal-ExtraBold.ttf / Tajawal-Black.ttf / Cairo-Bold.ttf / NotoNaskhArabic-Bold.ttf / Amiri-Bold.ttf
+    """
+    names = [
+        "Tajawal-ExtraBold.ttf",
+        "Tajawal-Black.ttf",
+        "Tajawal-Bold.ttf",
+        "Cairo-Bold.ttf",
         "Cairo-Bold-1.ttf",
         "NotoNaskhArabic-Bold.ttf",
-        "/app/Cairo-Bold-1.ttf",
-        "/app/NotoNaskhArabic-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "NotoNaskhArabic-Regular.ttf",
+        "Amiri-Bold.ttf",
+        "DejaVuSans-Bold.ttf",
     ]
+    bases = ["", ".", "/app", "/mnt/data", "/usr/share/fonts/truetype/noto", "/usr/share/fonts/truetype/dejavu"]
+    paths = []
+    for base in bases:
+        for name in names:
+            paths.append(os.path.join(base, name) if base else name)
+    return paths
 
 
 def get_font(size):
@@ -2462,25 +2476,25 @@ def has_arabic(text):
 
 
 def draw_text(draw, xy, text, font, fill="white", anchor="mm", align="center", max_width=None, spacing=8):
-    """رسم نص عربي مضبوط داخل الصور.
-    إذا Pillow يدعم RAQM نرسم النص العربي الأصلي باتجاه RTL.
-    وإذا ما يدعم، نستخدم arabic_reshaper + bidi كحل بديل.
+    """
+    رسم نص عربي داخل الصور بشكل ثابت.
+    نستخدم arabic_reshaper + bidi دائمًا للنص العربي حتى يكون شكل الحروف مضبوطًا على Railway
+    حتى لو كان دعم RAQM متغيرًا بين البيئات.
     """
     text = "" if text is None else str(text)
     if max_width:
         lines = wrap_text(draw, text, font, max_width)
-        line_h = int((font.size if hasattr(font, "size") else 24) * 1.25)
+        line_h = int((font.size if hasattr(font, "size") else 24) * 1.28)
         total_h = line_h * len(lines)
         x, y = xy
         start_y = y - total_h / 2 if anchor == "mm" else y
         for i, line in enumerate(lines):
             draw_text(draw, (x, start_y + i * line_h), line, font, fill=fill, anchor="ma", align=align)
         return
+
+    display = ar_text(text) if has_arabic(text) else text
     try:
-        if PIL_RAQM and has_arabic(text):
-            draw.text(xy, text, font=font, fill=fill, anchor=anchor, align=align, direction="rtl", language="ar")
-        else:
-            draw.text(xy, ar_text(text), font=font, fill=fill, anchor=anchor, align=align)
+        draw.text(xy, display, font=font, fill=fill, anchor=anchor, align=align)
     except Exception:
         try:
             draw.text(xy, ar_text(text), font=font, fill=fill, anchor=anchor, align=align)
@@ -2953,8 +2967,8 @@ def create_matches_image(day_name, matches):
     draw = ImageDraw.Draw(img)
 
     # العنوان
-    draw_text(draw, (width//2, 90), "مونديال المصيف 2026", get_font(64), fill="#FFFFFF")
-    draw_text(draw, (width//2, 155), f"مباريات اليوم ({day_name})", get_font(42), fill="#FDE68A")
+    draw_text(draw, (width//2, 88), "مونديال المصيف 2026", get_font(58), fill="#FFFFFF")
+    draw_text(draw, (width//2, 154), f"مباريات اليوم {day_name}", get_font(44), fill="#FDE68A")
     draw.line((210, 205, width-210, 205), fill="#FFFFFF35", width=2)
 
     colors = ["#7C3AED", "#2563EB", "#0891B2", "#059669", "#D97706", "#DC2626", "#4F46E5"]
@@ -3522,8 +3536,8 @@ def create_matches_image(day_name, matches):
     od.rounded_rectangle((60,45,width-60,height-45), radius=48, fill="#02061770", outline="#FFFFFF18", width=2)
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(img)
-    draw_text(draw, (width//2, 90), "مونديال المصيف 2026", get_font(64), fill="#FFFFFF")
-    draw_text(draw, (width//2, 155), f"مباريات اليوم ({day_name})", get_font(42), fill="#FDE68A")
+    draw_text(draw, (width//2, 88), "مونديال المصيف 2026", get_font(58), fill="#FFFFFF")
+    draw_text(draw, (width//2, 154), f"مباريات اليوم {day_name}", get_font(44), fill="#FDE68A")
     draw.line((210,205,width-210,205), fill="#FFFFFF35", width=2)
     colors = ["#7C3AED", "#2563EB", "#0891B2", "#059669", "#D97706", "#DC2626", "#4F46E5"]
     y = header_h
