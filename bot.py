@@ -1484,6 +1484,7 @@ def create_dashboard(start_day=1, end_day=31):
 # ============================================================
 
 PENDING_IMPORTS = {}
+LAST_UPLOADED_FILES = {}
 INVALID_SELECTIONS_GLOBAL = {"", "لم يشارك", "تم حجب المشاركة / تأخير"}
 
 # استبدل دالة is_no_participation القديمة بهذا التعريف
@@ -1638,25 +1639,61 @@ def import_summary_text(imported):
     return "\n".join(lines)
 
 
-async def import_excel_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _download_document_to_folder(update: Update, context: ContextTypes.DEFAULT_TYPE, folder="uploads"):
+    """يحفظ أي ملف مرسل ويرجع المسار المحلي."""
     document = update.message.document
     if not document:
-        await update.message.reply_text(
-            "أرسل ملف الإكسل كملف وليس صورة، واكتب معه في التعليق:\n/استيراد_ملف"
-        )
-        return
+        return None, None
 
-    filename = document.file_name or "import.xlsx"
-    if not filename.lower().endswith((".xlsx", ".xlsm")):
-        await update.message.reply_text("الملف لازم يكون Excel بصيغة .xlsx أو .xlsm")
-        return
-
-    os.makedirs("imports", exist_ok=True)
-    local_path = os.path.join("imports", f"import_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}")
+    filename = document.file_name or "uploaded_file"
+    os.makedirs(folder, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9_.\-\u0600-\u06FF]+", "_", filename)
+    local_path = os.path.join(folder, f"{update.effective_chat.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_name}")
 
     tg_file = await context.bot.get_file(document.file_id)
     await tg_file.download_to_drive(local_path)
+    return local_path, filename
 
+
+async def remember_last_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يحفظ آخر ملف Excel أو ZIP أرسله المستخدم، عشان نقدر نستخدمه بعدين بدون تعليق."""
+    local_path, filename = await _download_document_to_folder(update, context, "uploads")
+    if not local_path:
+        return
+
+    chat_id = update.effective_chat.id
+    LAST_UPLOADED_FILES.setdefault(chat_id, {})
+    lower = (filename or "").lower()
+    caption = (update.message.caption or "").strip()
+
+    if lower.endswith((".xlsx", ".xlsm")):
+        LAST_UPLOADED_FILES[chat_id]["excel"] = local_path
+        if caption.startswith("/استيراد_ملف"):
+            await _run_import_from_path(update, context, local_path)
+        else:
+            await update.message.reply_text(
+                "وصل ملف الإكسل ✅\n"
+                "اكتب الآن:\n"
+                "/استيراد_ملف"
+            )
+        return
+
+    if lower.endswith(".zip"):
+        LAST_UPLOADED_FILES[chat_id]["zip"] = local_path
+        if caption.startswith("/استرجاع_نسخة"):
+            await _run_restore_from_zip_path(update, context, local_path)
+        else:
+            await update.message.reply_text(
+                "وصل ملف ZIP ✅\n"
+                "للاسترجاع اكتب الآن:\n"
+                "/استرجاع_نسخة"
+            )
+        return
+
+    await update.message.reply_text("وصل الملف، لكن أحتاج Excel أو ZIP فقط.")
+
+
+async def _run_import_from_path(update: Update, context: ContextTypes.DEFAULT_TYPE, local_path):
     try:
         imported = parse_import_excel(local_path)
     except Exception as e:
@@ -1670,6 +1707,37 @@ async def import_excel_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     PENDING_IMPORTS[chat_id] = {"path": local_path, "data": imported}
     await update.message.reply_text(import_summary_text(imported))
+
+
+async def import_excel_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    يدعم طريقتين:
+    1) إرسال ملف الإكسل بتعليق /استيراد_ملف
+    2) إرسال ملف الإكسل لحاله، ثم كتابة /استيراد_ملف
+    """
+    document = update.message.document
+    chat_id = update.effective_chat.id
+
+    if document:
+        filename = document.file_name or "import.xlsx"
+        if not filename.lower().endswith((".xlsx", ".xlsm")):
+            await update.message.reply_text("الملف لازم يكون Excel بصيغة .xlsx أو .xlsm")
+            return
+        local_path, _ = await _download_document_to_folder(update, context, "imports")
+        LAST_UPLOADED_FILES.setdefault(chat_id, {})["excel"] = local_path
+        await _run_import_from_path(update, context, local_path)
+        return
+
+    local_path = LAST_UPLOADED_FILES.get(chat_id, {}).get("excel")
+    if not local_path or not os.path.exists(local_path):
+        await update.message.reply_text(
+            "ما لقيت ملف Excel محفوظ.\n"
+            "أرسل ملف الإكسل لحاله أولًا، وبعدها اكتب:\n"
+            "/استيراد_ملف"
+        )
+        return
+
+    await _run_import_from_path(update, context, local_path)
 
 
 async def approve_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1742,23 +1810,8 @@ async def backup_zip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_document(document=f, filename=zip_name, caption="نسخة احتياطية لأيام الفانتزي ✅")
 
 
-async def restore_backup_zip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _run_restore_from_zip_path(update: Update, context: ContextTypes.DEFAULT_TYPE, local_path):
     import zipfile
-
-    document = update.message.document
-    if not document:
-        await update.message.reply_text("أرسل ملف ZIP واكتب معه في التعليق:\n/استرجاع_نسخة")
-        return
-
-    filename = document.file_name or "backup.zip"
-    if not filename.lower().endswith(".zip"):
-        await update.message.reply_text("الملف لازم يكون ZIP.")
-        return
-
-    os.makedirs("restore_uploads", exist_ok=True)
-    local_path = os.path.join("restore_uploads", f"restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}")
-    tg_file = await context.bot.get_file(document.file_id)
-    await tg_file.download_to_drive(local_path)
 
     backup_files("before_restore_zip")
     restored = []
@@ -1779,6 +1832,33 @@ async def restore_backup_zip(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     await update.message.reply_text("تم استرجاع النسخة ✅\n" + "\n".join(sorted(restored)))
+
+
+async def restore_backup_zip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يدعم إرسال ZIP لحاله ثم /استرجاع_نسخة، أو ZIP بتعليق."""
+    document = update.message.document
+    chat_id = update.effective_chat.id
+
+    if document:
+        filename = document.file_name or "backup.zip"
+        if not filename.lower().endswith(".zip"):
+            await update.message.reply_text("الملف لازم يكون ZIP.")
+            return
+        local_path, _ = await _download_document_to_folder(update, context, "restore_uploads")
+        LAST_UPLOADED_FILES.setdefault(chat_id, {})["zip"] = local_path
+        await _run_restore_from_zip_path(update, context, local_path)
+        return
+
+    local_path = LAST_UPLOADED_FILES.get(chat_id, {}).get("zip")
+    if not local_path or not os.path.exists(local_path):
+        await update.message.reply_text(
+            "ما لقيت ملف ZIP محفوظ.\n"
+            "أرسل ملف ZIP لحاله أولًا، وبعدها اكتب:\n"
+            "/استرجاع_نسخة"
+        )
+        return
+
+    await _run_restore_from_zip_path(update, context, local_path)
 
 
 async def clean_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1813,11 +1893,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/اسطورة 5\n"
         "/مقارنة 4 5\n\n"
         "أوامر الاستيراد والنسخ:\n"
-        "/استيراد_ملف  — أرسلها كتعليق مع ملف الإكسل\n"
+        "/استيراد_ملف — أرسل ملف الإكسل لحاله ثم اكتب الأمر\n"
         "/اعتماد_استيراد\n"
         "/إلغاء_استيراد\n"
         "/نسخة_احتياطية\n"
-        "/استرجاع_نسخة  — أرسلها كتعليق مع ملف ZIP\n"
+        "/استرجاع_نسخة — أرسل ملف ZIP لحاله ثم اكتب الأمر\n"
         "/تنظيف_الأيام\n\n"
         "أوامر الأمان:\n"
         "/مسح_نتائج 5\n"
@@ -2228,8 +2308,10 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/start"), start))
 
+    # أي ملف يرسله المستخدم نحفظه، عشان يقدر يكتب الأمر بعده بدون تعليق
+    app.add_handler(MessageHandler(filters.Document.ALL, remember_last_file))
+
     # استيراد ملف Excel كامل مرة واحدة
-    app.add_handler(MessageHandler(filters.Document.ALL & filters.CaptionRegex(r"^/استيراد_ملف"), import_excel_file))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استيراد_ملف"), import_excel_file))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_استيراد"), approve_import))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_استيراد"), cancel_import))
@@ -2237,7 +2319,6 @@ def main():
 
     # النسخ الاحتياطي والاسترجاع
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نسخة_احتياطية"), backup_zip))
-    app.add_handler(MessageHandler(filters.Document.ALL & filters.CaptionRegex(r"^/استرجاع_نسخة"), restore_backup_zip))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_نسخة"), restore_backup_zip))
 
     # تنظيف الأيام الوهمية من القفل
