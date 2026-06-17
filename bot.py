@@ -2300,33 +2300,926 @@ async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+
+# ============================================================
+# V8 - الصور والتصاميم والإعلانات والأعلام
+# ============================================================
+
+SETTINGS_FILE = "bot_settings.json"
+GENERATED_DIR = "generated_images"
+FLAGS_ZIP = "worldcup_2026_flags_pack.zip"
+FLAGS_JSON = "flags_map.json"
+FLAGS_DIR = os.path.join("assets", "flags")
+
+RESULT_ANNOUNCEMENT_TEMPLATE = """أساطير اليوم {day_name} لفانتزي المصيف :
+\"          🏆( {legends} ) 🏆
+
+📌 يرجى مراجعة النقاط، وفي حال وجود أي خطأ في الاحتساب أو تسجيل النقاط فإن مدة الاعتراض أو طلب المراجعة هي 24 ساعة من وقت إرسال هذه الرسالة.
+⏳ بعد انتهاء المدة تُعتمد النتائج بشكل نهائي ولا يقبل أي اعتراض أو تعديل لاحقاً.
+
+بالتوفيق للجميع ⚽️✅🧤🏆"""
+
+MATCHES_ANNOUNCEMENT_TEMPLATE = """🏆 فانتزي المصيف 2026  🏆
+ً           🔥🔥🔥 مباريات اليوم ( {day_name} )  🔥🔥🔥🔥  
+
+{matches_text}
+
+📋 نموذج المشاركة الرسمي المعتمد
+🏆 تشكيلة الفانتزي - اليوم ( {day_name} )
+🧤 الحارس:
+ اللاعب 1:
+ اللاعب 2:
+ اللاعب 3:
+👑 الكابتن :"""
+
+# نحاول دعم تشكيل العربية داخل الصور، ولو المكتبات غير موجودة نستمر بدون كراش.
+try:
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter
+except Exception:
+    Image = ImageDraw = ImageFont = ImageFilter = None
+
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+except Exception:
+    arabic_reshaper = None
+    get_display = None
+
+
+def ar_text(text):
+    text = "" if text is None else str(text)
+    if arabic_reshaper and get_display:
+        try:
+            return get_display(arabic_reshaper.reshape(text))
+        except Exception:
+            return text
+    return text
+
+
+def _safe_filename(name):
+    name = normalize_name(name)
+    name = re.sub(r"[^A-Za-z0-9_.\-\u0600-\u06FF]+", "_", name).strip("_")
+    return name or "file"
+
+
+def ensure_generated_dir():
+    os.makedirs(GENERATED_DIR, exist_ok=True)
+
+
+def load_settings():
+    default = {"auto_images": True}
+    if not os.path.exists(SETTINGS_FILE):
+        return default
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        default.update(data if isinstance(data, dict) else {})
+    except Exception:
+        pass
+    return default
+
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+
+
+def admin_id_set():
+    raw = os.getenv("ADMIN_IDS") or os.getenv("ADMINS") or ""
+    ids = set()
+    for part in raw.replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.add(int(part))
+        except Exception:
+            pass
+    return ids
+
+
+def is_admin_user(update):
+    ids = admin_id_set()
+    if not ids:
+        # إذا ما ضبطت ADMIN_IDS في Railway نخلي البوت يشتغل عشان ما ينقفل عليك.
+        return True
+    user = getattr(update, "effective_user", None)
+    return bool(user and user.id in ids)
+
+
+def admin_only(func):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not is_admin_user(update):
+            await update.message.reply_text("هذا الأمر للمشرفين فقط 🔒")
+            return
+        return await func(update, context)
+    return wrapper
+
+
+async def who_am_i(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"User ID: {user.id if user else '-'}\n"
+        f"Chat ID: {chat.id if chat else '-'}\n\n"
+        "حط User ID في Railway داخل ADMIN_IDS لو تبي تقفل أوامر الإدارة."
+    )
+
+
+def font_candidates():
+    return [
+        "Cairo-Bold-1.ttf",
+        "NotoNaskhArabic-Bold.ttf",
+        "/app/Cairo-Bold-1.ttf",
+        "/app/NotoNaskhArabic-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+
+
+def get_font(size):
+    if not ImageFont:
+        return None
+    for path in font_candidates():
+        try:
+            if os.path.exists(path):
+                return ImageFont.truetype(path, size)
+        except Exception:
+            pass
+    try:
+        return ImageFont.truetype("DejaVuSans-Bold.ttf", size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def draw_text(draw, xy, text, font, fill="white", anchor="mm", align="center", max_width=None, spacing=8):
+    if max_width:
+        lines = wrap_text(draw, text, font, max_width)
+        line_h = int((font.size if hasattr(font, "size") else 24) * 1.25)
+        total_h = line_h * len(lines)
+        x, y = xy
+        start_y = y - total_h / 2 if anchor == "mm" else y
+        for i, line in enumerate(lines):
+            draw.text((x, start_y + i * line_h), ar_text(line), font=font, fill=fill, anchor="ma", align=align)
+        return
+    draw.text(xy, ar_text(text), font=font, fill=fill, anchor=anchor, align=align)
+
+
+def text_width(draw, text, font):
+    try:
+        bbox = draw.textbbox((0, 0), ar_text(text), font=font)
+        return bbox[2] - bbox[0]
+    except Exception:
+        return len(str(text)) * 12
+
+
+def wrap_text(draw, text, font, max_width):
+    text = "" if text is None else str(text)
+    final_lines = []
+    for raw_line in text.splitlines() or [""]:
+        words = raw_line.split()
+        if not words:
+            final_lines.append("")
+            continue
+        line = ""
+        for word in words:
+            test = word if not line else line + " " + word
+            if text_width(draw, test, font) <= max_width:
+                line = test
+            else:
+                if line:
+                    final_lines.append(line)
+                line = word
+        if line:
+            final_lines.append(line)
+    return final_lines
+
+
+def rounded_rect(draw, box, radius=24, fill=None, outline=None, width=1):
+    try:
+        draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
+    except Exception:
+        draw.rectangle(box, fill=fill, outline=outline, width=width)
+
+
+def make_canvas(width, height, theme="purple"):
+    if not Image:
+        raise RuntimeError("Pillow غير مثبت. أضف Pillow في requirements.txt")
+    img = Image.new("RGB", (width, height), "#101827")
+    draw = ImageDraw.Draw(img)
+    # خلفية متدرجة بسيطة
+    for y in range(height):
+        r = int(18 + y / height * 12)
+        g = int(24 + y / height * 10)
+        b = int(45 + y / height * 35)
+        draw.line([(0, y), (width, y)], fill=(r, g, b))
+    # دوائر ديكور
+    for i, (x, y, rr, col) in enumerate([
+        (120, 80, 180, "#7C3AED"), (width-130, 120, 220, "#2563EB"),
+        (width//2, height-80, 300, "#F2B705")
+    ]):
+        overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+        od = ImageDraw.Draw(overlay)
+        od.ellipse((x-rr, y-rr, x+rr, y+rr), fill=col + "30")
+        overlay = overlay.filter(ImageFilter.GaussianBlur(40))
+        img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+        draw = ImageDraw.Draw(img)
+    return img, draw
+
+
+def ensure_flags_assets():
+    if os.path.exists(FLAGS_DIR) and os.path.exists(FLAGS_JSON):
+        return
+    if os.path.exists(FLAGS_ZIP):
+        try:
+            import zipfile
+            with zipfile.ZipFile(FLAGS_ZIP, "r") as z:
+                z.extractall(".")
+        except Exception:
+            pass
+
+
+def load_flags_map():
+    ensure_flags_assets()
+    data = {}
+    if os.path.exists(FLAGS_JSON):
+        try:
+            with open(FLAGS_JSON, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            aliases = obj.get("aliases", {}) if isinstance(obj, dict) else {}
+            for k, v in aliases.items():
+                data[normalize_name(k)] = v
+                data[normalize_name(k).lower()] = v
+        except Exception:
+            pass
+    return data
+
+
+def flag_path_for(team_name):
+    flags = load_flags_map()
+    name = normalize_name(team_name)
+    filename = flags.get(name) or flags.get(name.lower())
+    if filename:
+        path = os.path.join(FLAGS_DIR, filename)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def paste_flag(base, team_name, box):
+    if not Image:
+        return
+    path = flag_path_for(team_name)
+    x1, y1, x2, y2 = box
+    w, h = int(x2-x1), int(y2-y1)
+    if path and os.path.exists(path):
+        try:
+            flag = Image.open(path).convert("RGBA")
+            flag.thumbnail((w, h), Image.LANCZOS)
+            px = int(x1 + (w - flag.width) / 2)
+            py = int(y1 + (h - flag.height) / 2)
+            base.paste(flag, (px, py), flag)
+            return
+        except Exception:
+            pass
+    # بديل إذا العلم ناقص
+    d = ImageDraw.Draw(base)
+    rounded_rect(d, box, radius=18, fill="#FFFFFF22", outline="#FFFFFF55", width=2)
+    f = get_font(24)
+    draw_text(d, ((x1+x2)//2, (y1+y2)//2), normalize_name(team_name)[:2], f, fill="#FFFFFF")
+
+
+def build_result_announcement(day, winners):
+    day_name = ordinal_day(day)
+    legends = " + ".join(winners) if winners else "لا يوجد"
+    return RESULT_ANNOUNCEMENT_TEMPLATE.format(day_name=day_name, legends=legends)
+
+
+def build_day_summary(day):
+    rows = read_day_rows(day)
+    participants = [r for r in rows if r.get("participated")]
+    max_score = max([r["total"] for r in rows], default=0)
+    winners = [r["participant"] for r in rows if r["total"] == max_score and max_score > 0]
+    sorted_rows = sorted(rows, key=lambda r: r["total"], reverse=True)
+    top_captain = max(rows, key=lambda r: r.get("captain_points", 0), default=None)
+    top_keeper = max(rows, key=lambda r: r.get("keeper_points", 0), default=None)
+
+    player_points = Counter()
+    keeper_points = Counter()
+    for r in rows:
+        for k, pk in (("p1", "p1_points"), ("p2", "p2_points"), ("p3", "p3_points")):
+            if r.get(pk, 0) > 0 and not is_no_participation(r.get(k)):
+                player_points[r[k]] += r[pk]
+        if r.get("keeper_points", 0) > 0 and not is_no_participation(r.get("keeper")):
+            keeper_points[r["keeper"]] += r["keeper_points"]
+
+    return {
+        "rows": rows,
+        "participants": participants,
+        "max_score": max_score,
+        "winners": winners,
+        "sorted_rows": sorted_rows,
+        "top_captain": top_captain,
+        "top_keeper": top_keeper,
+        "player_points": player_points,
+        "keeper_points": keeper_points,
+    }
+
+
+def create_daily_result_image(day, goals_count=None, clean_sheets=None):
+    ensure_generated_dir()
+    data = build_day_summary(day)
+    rows = data["sorted_rows"]
+    h = max(1050, 470 + len(rows) * 58)
+    img, draw = make_canvas(1400, h)
+    title_f = get_font(58)
+    sub_f = get_font(34)
+    small_f = get_font(26)
+    row_f = get_font(28)
+
+    draw_text(draw, (700, 85), f"فانتزي المصيف 2026 — اليوم {ordinal_day(day)}", title_f, fill="#FFFFFF")
+    draw_text(draw, (700, 145), "نتائج اليوم وترتيب المشاركين", sub_f, fill="#FDE68A")
+
+    winners = data["winners"]
+    legends = " + ".join(winners) if winners else "لا يوجد"
+    rounded_rect(draw, (80, 190, 1320, 340), radius=38, fill="#7C3AEDDD", outline="#FFFFFF33", width=2)
+    draw_text(draw, (700, 235), "🏆 أسطورة اليوم 🏆", sub_f, fill="#FFFFFF")
+    draw_text(draw, (700, 295), f"{legends} — {data['max_score']} نقطة", get_font(44), fill="#FFF6D6")
+
+    # كروت جانبية
+    top_cap = data["top_captain"]
+    top_keep = data["top_keeper"]
+    cards = [
+        (80, 370, 455, 500, "👑 أفضل كابتن", f"{top_cap['participant']} +{top_cap['captain_points']}" if top_cap else "-", "#2563EB"),
+        (512, 370, 887, 500, "🧤 أفضل حارس", f"{top_keep['participant']} +{top_keep['keeper_points']}" if top_keep else "-", "#10B981"),
+        (945, 370, 1320, 500, "👥 المشاركون", f"{len(data['participants'])} مشارك", "#F59E0B"),
+    ]
+    for x1,y1,x2,y2,t,v,c in cards:
+        rounded_rect(draw, (x1,y1,x2,y2), radius=28, fill=c+"DD", outline="#FFFFFF33", width=2)
+        draw_text(draw, ((x1+x2)//2, y1+38), t, small_f, fill="#FFFFFF")
+        draw_text(draw, ((x1+x2)//2, y1+92), v, sub_f, fill="#FFFFFF")
+
+    # جدول ترتيب اليوم
+    y = 550
+    rounded_rect(draw, (80, y, 1320, y+58), radius=18, fill="#FFFFFF22", outline="#FFFFFF30", width=1)
+    headers = [(1180, "المشارك"), (850, "النقاط"), (640, "الحارس"), (410, "الكابتن"), (170, "المركز")]
+    for x, t in headers:
+        draw_text(draw, (x, y+30), t, small_f, fill="#FFFFFF")
+    y += 70
+    for idx, r in enumerate(rows, start=1):
+        fill = "#FFFFFF16" if idx % 2 else "#FFFFFF0C"
+        if idx == 1:
+            fill = "#F2B70544"
+        rounded_rect(draw, (80, y, 1320, y+48), radius=14, fill=fill, outline="#FFFFFF18", width=1)
+        draw_text(draw, (1180, y+25), r["participant"], row_f, fill="#FFFFFF")
+        draw_text(draw, (850, y+25), str(r["total"]), row_f, fill="#FDE68A")
+        draw_text(draw, (640, y+25), f"+{r['keeper_points']}", row_f, fill="#A7F3D0")
+        draw_text(draw, (410, y+25), f"+{r['captain_points']}", row_f, fill="#C4B5FD")
+        medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else str(idx)
+        draw_text(draw, (170, y+25), medal, row_f, fill="#FFFFFF")
+        y += 58
+
+    # الهدافين والكلين شيت
+    y += 25
+    box_h = 180
+    rounded_rect(draw, (80, y, 670, y+box_h), radius=26, fill="#111827CC", outline="#FFFFFF22", width=2)
+    rounded_rect(draw, (730, y, 1320, y+box_h), radius=26, fill="#111827CC", outline="#FFFFFF22", width=2)
+    goals_lines = []
+    if goals_count:
+        goals_lines = [f"{p} — {c}" for p,c in goals_count.items()]
+    else:
+        goals_lines = [f"{p} — {pts} نقطة" for p,pts in data["player_points"].most_common(5)] or ["لا يوجد"]
+    clean_lines = clean_sheets or list(data["keeper_points"].keys()) or ["لا يوجد"]
+    draw_text(draw, (375, y+35), "⚽ الهدافون", sub_f, fill="#FFFFFF")
+    draw_text(draw, (375, y+105), "\n".join(goals_lines[:4]), small_f, fill="#E5E7EB", max_width=520)
+    draw_text(draw, (1025, y+35), "🧤 الكلين شيت", sub_f, fill="#FFFFFF")
+    draw_text(draw, (1025, y+105), "\n".join(clean_lines[:4]), small_f, fill="#E5E7EB", max_width=520)
+
+    path = os.path.join(GENERATED_DIR, f"daily_result_day_{day}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def build_daily_summary_text(day):
+    data = build_day_summary(day)
+    winners = " + ".join(data["winners"]) if data["winners"] else "لا يوجد"
+    top_rows = data["sorted_rows"][:5]
+    lines = [
+        f"📊 ملخص اليوم {ordinal_day(day)}",
+        f"👥 عدد المشاركين: {len(data['participants'])}",
+        f"🏆 أسطورة اليوم: {winners}",
+        f"🔥 أعلى نقاط: {data['max_score']}",
+        "",
+        "أول 5 في اليوم:",
+    ]
+    for i, r in enumerate(top_rows, start=1):
+        lines.append(f"{i}. {r['participant']} — {r['total']} نقطة")
+    return "\n".join(lines)
+
+
+def create_overall_ranking_image(start_day=1, end_day=31):
+    ensure_generated_dir()
+    stats = collect_stats(start_day, end_day)
+    ranking = stats["ranking"]
+    h = max(900, 280 + len(ranking) * 62)
+    img, draw = make_canvas(1400, h)
+    draw_text(draw, (700, 90), "الترتيب العام لفانتزي المصيف 2026", get_font(56), fill="#FFFFFF")
+    draw_text(draw, (700, 150), f"من اليوم {start_day} إلى اليوم {end_day}", get_font(30), fill="#FDE68A")
+    leader = ranking[0] if ranking else "-"
+    leader_points = stats["totals"].get(leader, 0)
+    y = 220
+    rounded_rect(draw, (80, y, 1320, y+58), radius=18, fill="#FFFFFF22", outline="#FFFFFF30", width=1)
+    for x,t in [(1220,"المركز"),(980,"المشارك"),(720,"النقاط"),(470,"الفارق"),(210,"أسطورة")]:
+        draw_text(draw, (x, y+30), t, get_font(26), fill="#FFFFFF")
+    y += 70
+    current_rank = 0
+    last_score = None
+    real_index = 0
+    for name in ranking:
+        real_index += 1
+        score = stats["totals"][name]
+        if score != last_score:
+            current_rank = real_index
+            last_score = score
+        fill = "#F2B70544" if current_rank == 1 else "#FFFFFF14" if real_index % 2 else "#FFFFFF0A"
+        rounded_rect(draw, (80, y, 1320, y+50), radius=14, fill=fill, outline="#FFFFFF14", width=1)
+        draw_text(draw, (1220, y+26), str(current_rank), get_font(28), fill="#FFFFFF")
+        draw_text(draw, (980, y+26), name, get_font(28), fill="#FFFFFF")
+        draw_text(draw, (720, y+26), str(score), get_font(28), fill="#FDE68A")
+        draw_text(draw, (470, y+26), str(leader_points - score), get_font(28), fill="#E5E7EB")
+        draw_text(draw, (210, y+26), str(stats["daily_wins"][name]), get_font(28), fill="#C4B5FD")
+        y += 62
+    path = os.path.join(GENERATED_DIR, f"overall_{start_day}_{end_day}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def create_legends_image(start_day=1, end_day=31):
+    ensure_generated_dir()
+    stats = collect_stats(start_day, end_day)
+    days = stats["days"]
+    h = max(800, 260 + len(days) * 72)
+    img, draw = make_canvas(1400, h)
+    draw_text(draw, (700, 90), "سجل أساطير الفانتزي", get_font(60), fill="#FFFFFF")
+    draw_text(draw, (700, 150), f"من اليوم {start_day} إلى اليوم {end_day}", get_font(30), fill="#FDE68A")
+    y = 230
+    for day in days:
+        info = stats["per_day"].get(day, {})
+        winners = info.get("winners", [])
+        names = " + ".join(winners) if winners else "لا يوجد"
+        max_score = info.get("max_score", 0)
+        rounded_rect(draw, (110, y, 1290, y+56), radius=18, fill="#FFFFFF14", outline="#FFFFFF22", width=1)
+        draw_text(draw, (1130, y+29), f"اليوم {ordinal_day(day)}", get_font(30), fill="#FFFFFF")
+        draw_text(draw, (700, y+29), names, get_font(30), fill="#FDE68A")
+        draw_text(draw, (210, y+29), f"{max_score} نقطة", get_font(28), fill="#A7F3D0")
+        y += 72
+    path = os.path.join(GENERATED_DIR, f"legends_{start_day}_{end_day}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def parse_range_from_text(text):
+    nums = get_numbers(text or "")
+    if len(nums) >= 2:
+        a, b = nums[0], nums[1]
+        return (min(a, b), max(a, b))
+    if len(nums) == 1:
+        return (1, nums[0])
+    return (1, 31)
+
+
+def page_name_from_command(text, default="لوحة عامة"):
+    text = text or ""
+    # نحذف الأمر والأرقام ونبقي اسم الصفحة
+    parts = text.splitlines()[0].split()
+    if not parts:
+        return default
+    rest = []
+    for p in parts[1:]:
+        if re.fullmatch(r"\d+", p):
+            continue
+        rest.append(p)
+    name = " ".join(rest).strip()
+    return name or default
+
+
+def find_sheet_name(wb, requested):
+    requested = normalize_name(requested)
+    if requested in wb.sheetnames:
+        return requested
+    for s in wb.sheetnames:
+        if requested and requested in s:
+            return s
+    for s in wb.sheetnames:
+        if s in requested:
+            return s
+    return wb.sheetnames[0] if wb.sheetnames else None
+
+
+def render_worksheet_to_images(xlsx_path, sheet_name, max_rows_per_image=32):
+    ensure_generated_dir()
+    wb = load_workbook(xlsx_path, data_only=False)
+    sheet_name = find_sheet_name(wb, sheet_name)
+    if not sheet_name:
+        return []
+    ws = wb[sheet_name]
+
+    # نحدد حدود البيانات المفيدة بدون الأعمدة المخفية قدر الإمكان
+    max_col = min(ws.max_column, 12)
+    non_empty_rows = []
+    for r in range(1, ws.max_row + 1):
+        vals = [ws.cell(r, c).value for c in range(1, max_col + 1)]
+        if any(v not in (None, "") for v in vals):
+            non_empty_rows.append(r)
+    if not non_empty_rows:
+        non_empty_rows = [1]
+    min_row, max_row = min(non_empty_rows), max(non_empty_rows)
+
+    images = []
+    col_w = 170
+    row_h = 54
+    title_h = 95
+    page_index = 1
+    for start in range(min_row, max_row + 1, max_rows_per_image):
+        end = min(start + max_rows_per_image - 1, max_row)
+        width = max(1100, max_col * col_w + 100)
+        height = title_h + (end-start+1) * row_h + 80
+        img, draw = make_canvas(width, height)
+        draw_text(draw, (width//2, 52), f"{sheet_name}" + (f" — {page_index}" if max_row-min_row+1 > max_rows_per_image else ""), get_font(42), fill="#FFFFFF")
+        y = title_h
+        for r in range(start, end + 1):
+            x = 50
+            base_fill = "#FFFFFF14" if r % 2 else "#FFFFFF0A"
+            for c in range(1, max_col + 1):
+                cell = ws.cell(r, c)
+                val = "" if cell.value is None else str(cell.value)
+                fill = base_fill
+                try:
+                    fg = cell.fill.fgColor.rgb
+                    if fg and fg != "00000000":
+                        fill = "#" + fg[-6:] + "DD"
+                except Exception:
+                    pass
+                rounded_rect(draw, (x, y, x+col_w-6, y+row_h-6), radius=10, fill=fill, outline="#FFFFFF20", width=1)
+                font = get_font(22 if r != 1 else 24)
+                draw_text(draw, (x + (col_w-6)//2, y + (row_h-6)//2), val[:42], font, fill="#FFFFFF", max_width=col_w-20)
+                x += col_w
+            y += row_h
+        out = os.path.join(GENERATED_DIR, f"sheet_{_safe_filename(sheet_name)}_{page_index}.png")
+        img.save(out, quality=92)
+        images.append(out)
+        page_index += 1
+    return images
+
+
+def parse_matches_text(text):
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    if not lines:
+        return "اليوم", []
+    # أول سطر هو الأمر
+    if len(lines) == 1:
+        return "اليوم", []
+    day_name = lines[1]
+    matches = []
+    for line in lines[2:]:
+        # يدعم: فريق|فريق|وقت أو فريق × فريق | وقت
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 3:
+                matches.append((parts[0], parts[1], parts[2]))
+            elif len(parts) == 2 and "×" in parts[0]:
+                a, b = [p.strip() for p in parts[0].split("×", 1)]
+                matches.append((a, b, parts[1]))
+        elif "×" in line:
+            before, *after = re.split(r"[-—|]", line, maxsplit=1)
+            a, b = [p.strip() for p in before.split("×", 1)]
+            time = after[0].strip() if after else ""
+            matches.append((a, b, time))
+    return day_name, matches
+
+
+def build_matches_announcement(day_name, matches):
+    matches_text = "\n".join([f"{a} × {b} — {t}" for a,b,t in matches]) or ""
+    return MATCHES_ANNOUNCEMENT_TEMPLATE.format(day_name=day_name, matches_text=matches_text)
+
+
+def create_matches_image(day_name, matches):
+    ensure_generated_dir()
+    count = max(len(matches), 1)
+    h = max(850, 260 + count * 150)
+    img, draw = make_canvas(1400, h)
+    draw_text(draw, (700, 80), "مونديال المصيف 2026", get_font(62), fill="#FFFFFF")
+    draw_text(draw, (700, 145), f"مباريات اليوم ({day_name})", get_font(42), fill="#FDE68A")
+    y = 230
+    for i, (a, b, t) in enumerate(matches, start=1):
+        # ألوان كروت متغيرة بدون قالب ممل
+        colors = ["#7C3AED", "#2563EB", "#10B981", "#F59E0B", "#EF4444", "#0EA5E9"]
+        c = colors[(i-1) % len(colors)]
+        rounded_rect(draw, (90, y, 1310, y+120), radius=36, fill=c+"AA", outline="#FFFFFF30", width=2)
+        paste_flag(img, a, (1080, y+20, 1225, y+100))
+        paste_flag(img, b, (175, y+20, 320, y+100))
+        draw_text(draw, (920, y+60), a, get_font(38), fill="#FFFFFF", max_width=260)
+        draw_text(draw, (700, y+60), "×", get_font(56), fill="#FDE68A")
+        draw_text(draw, (480, y+60), b, get_font(38), fill="#FFFFFF", max_width=260)
+        if t:
+            rounded_rect(draw, (610, y+82, 790, y+115), radius=16, fill="#111827CC", outline="#FFFFFF25", width=1)
+            draw_text(draw, (700, y+99), t, get_font(24), fill="#FFFFFF")
+        y += 150
+    draw_text(draw, (700, h-70), "حياكم في محلكم 🏆", get_font(38), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, f"matches_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+
+async def send_photo_path(update, path, caption=None):
+    with open(path, "rb") as f:
+        await update.message.reply_photo(photo=f, caption=caption or "")
+
+
+# -------------------- أوامر الصور الجديدة --------------------
+
+async def enable_auto_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    settings = load_settings()
+    settings["auto_images"] = True
+    save_settings(settings)
+    await update.message.reply_text("تم تفعيل الصور التلقائية ✅")
+
+
+async def disable_auto_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    settings = load_settings()
+    settings["auto_images"] = False
+    save_settings(settings)
+    await update.message.reply_text("تم إيقاف الصور التلقائية ✅")
+
+
+async def daily_image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day = get_day(update.message.text)
+    if not os.path.exists(excel_file(day)):
+        await update.message.reply_text(f"ما لقيت ملف اليوم {day}.")
+        return
+    try:
+        path = create_daily_result_image(day)
+        await send_photo_path(update, path, build_result_announcement(day, build_day_summary(day)["winners"]))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر إنشاء صورة اليوم ❌\n{e}")
+
+
+async def overall_image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    start_day, end_day = parse_range_from_text(update.message.text)
+    try:
+        path = create_overall_ranking_image(start_day, end_day)
+        await send_photo_path(update, path, f"الترتيب العام من اليوم {start_day} إلى {end_day} ✅")
+    except Exception as e:
+        await update.message.reply_text(f"تعذر إنشاء صورة الترتيب ❌\n{e}")
+
+
+async def legends_image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    start_day, end_day = parse_range_from_text(update.message.text)
+    try:
+        path = create_legends_image(start_day, end_day)
+        await send_photo_path(update, path, f"سجل الأساطير من اليوم {start_day} إلى {end_day} ✅")
+    except Exception as e:
+        await update.message.reply_text(f"تعذر إنشاء صورة الأساطير ❌\n{e}")
+
+
+async def dashboard_sheet_image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    start_day, end_day = parse_range_from_text(update.message.text)
+    sheet = page_name_from_command(update.message.text, "لوحة عامة")
+    await update.message.reply_text("جاري تجهيز صورة الصفحة... ⏳")
+    try:
+        xlsx, stats = create_dashboard(start_day, end_day)
+        if not stats.get("days"):
+            await update.message.reply_text("ما فيه أيام في النطاق المطلوب.")
+            return
+        images = render_worksheet_to_images(xlsx, sheet)
+        if not images:
+            await update.message.reply_text("ما قدرت أطلع صورة للصفحة.")
+            return
+        for i, path in enumerate(images, start=1):
+            cap = f"{sheet}" if len(images) == 1 else f"{sheet} — جزء {i}"
+            await send_photo_path(update, path, cap)
+    except Exception as e:
+        await update.message.reply_text(f"تعذر إنشاء صورة الإحصائيات ❌\n{e}")
+
+
+async def all_dashboard_images_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    start_day, end_day = parse_range_from_text(update.message.text)
+    await update.message.reply_text("جاري تجهيز صور كل الصفحات... ⏳")
+    try:
+        xlsx, stats = create_dashboard(start_day, end_day)
+        if not stats.get("days"):
+            await update.message.reply_text("ما فيه أيام في النطاق المطلوب.")
+            return
+        wb = load_workbook(xlsx, read_only=True)
+        for sheet in wb.sheetnames:
+            images = render_worksheet_to_images(xlsx, sheet)
+            for i, path in enumerate(images, start=1):
+                cap = f"{sheet}" if len(images) == 1 else f"{sheet} — جزء {i}"
+                await send_photo_path(update, path, cap)
+        wb.close()
+    except Exception as e:
+        await update.message.reply_text(f"تعذر إنشاء صور الإحصائيات ❌\n{e}")
+
+
+async def announcement_day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day = get_day(update.message.text)
+    if not os.path.exists(excel_file(day)):
+        await update.message.reply_text(f"ما لقيت ملف اليوم {day}.")
+        return
+    await update.message.reply_text(build_result_announcement(day, build_day_summary(day)["winners"]))
+
+
+async def summary_day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day = get_day(update.message.text)
+    if not os.path.exists(excel_file(day)):
+        await update.message.reply_text(f"ما لقيت ملف اليوم {day}.")
+        return
+    await update.message.reply_text(build_daily_summary_text(day))
+
+
+async def matches_design_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, matches = parse_matches_text(update.message.text)
+    if not matches:
+        await update.message.reply_text(
+            "اكتبها كذا:\n"
+            "/تصميم_مباريات\n"
+            "السادس\n"
+            "فرنسا|البرازيل|10:00 م\n"
+            "الأرجنتين|ألمانيا|12:00 ص"
+        )
+        return
+    try:
+        path = create_matches_image(day_name, matches)
+        caption = build_matches_announcement(day_name, matches)
+        await send_photo_path(update, path, caption)
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم المباريات ❌\n{e}")
+
+
+async def clean_temp_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    removed = 0
+    targets = [GENERATED_DIR, "imports", "uploads", "restore_uploads"]
+    for folder in targets:
+        if not os.path.isdir(folder):
+            continue
+        for name in os.listdir(folder):
+            path = os.path.join(folder, name)
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+                    removed += 1
+            except Exception:
+                pass
+    await update.message.reply_text(f"تم تنظيف الملفات المؤقتة ✅\nعدد الملفات المحذوفة: {removed}")
+
+
+# -------------------- إعادة تعريف /start و /نتائج لإضافة الصور التلقائية --------------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "البوت جاهز ✅\n\n"
+        "الأوامر الأساسية:\n"
+        "/اضافه 5\n"
+        "/نتائج 5\n"
+        "/احصائيات\n"
+        "/احصائيات 1 6\n"
+        "/ترتيب_نص\n\n"
+        "أوامر الصور:\n"
+        "/صورة_اليوم 6\n"
+        "/صورة_الترتيب 1 6\n"
+        "/صورة_الاساطير 1 6\n"
+        "/صورة_احصائيات 1 6 لوحة عامة\n"
+        "/صور_الاحصائيات 1 6\n"
+        "/تفعيل_الصور_التلقائية\n"
+        "/إيقاف_الصور_التلقائية\n\n"
+        "أوامر المباريات:\n"
+        "/تصميم_مباريات\n\n"
+        "أوامر الفحص والنشر:\n"
+        "/الأيام\n"
+        "/فحص 5\n"
+        "/مشاركين 5\n"
+        "/اسطورة 5\n"
+        "/مقارنة 4 5\n"
+        "/اعلان_اليوم 5\n"
+        "/ملخص_اليوم 5\n\n"
+        "أوامر الاستيراد والنسخ:\n"
+        "/استيراد_ملف — أرسل ملف الإكسل لحاله ثم اكتب الأمر\n"
+        "/اعتماد_استيراد\n"
+        "/إلغاء_استيراد\n"
+        "/نسخة_احتياطية\n"
+        "/استرجاع_نسخة — أرسل ملف ZIP لحاله ثم اكتب الأمر\n"
+        "/تنظيف_الأيام\n"
+        "/تنظيف_الملفات\n\n"
+        "أوامر الأمان:\n"
+        "/مسح_نتائج 5\n"
+        "/مسح_يوم 5\n"
+        "/مسح_الكل تأكيد\n"
+        "/استرجاع_آخر\n"
+        "/قفل_يوم 5\n"
+        "/فتح_يوم 5\n"
+        "/من_انا"
+    )
+
+
+async def results_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    day = get_day(text)
+
+    if is_locked(day):
+        await update.message.reply_text(f"اليوم {day} مقفل ✅\nلفتحه اكتب: /فتح_يوم {day}")
+        return
+
+    if not os.path.exists(excel_file(day)):
+        await update.message.reply_text(f"ما لقيت ملف اليوم {day}. أضف التشكيلات أولًا.")
+        return
+
+    goals_count, clean_sheets = parse_results(text)
+    goal_missing, clean_missing = validate_results_names(day, goals_count, clean_sheets)
+
+    backup_files(f"before_results_day_{day}", files=[excel_file(day), LOCKED_FILE])
+    file_name = calculate_points(day, goals_count, clean_sheets)
+
+    goals_text = "\n".join([f"- {name}: {count} هدف = {GOAL_POINTS.get(count, count * 5)} نقطة" for name, count in goals_count.items()]) or "لا يوجد"
+    clean_text = "\n".join([f"- {name}" for name in clean_sheets]) or "لا يوجد"
+
+    rows = read_day_rows(day)
+    max_score = max([r["total"] for r in rows], default=0)
+    winners = [r["participant"] for r in rows if r["total"] == max_score and max_score > 0]
+    legends_text = "، ".join(winners) if winners else "لا يوجد"
+
+    warnings = []
+    if goal_missing:
+        warnings.append("⚠️ هدافون غير موجودين في تشكيلات اليوم:\n" + "\n".join(goal_missing))
+    if clean_missing:
+        warnings.append("⚠️ حراس كلين شيت غير موجودين في تشكيلات اليوم:\n" + "\n".join(clean_missing))
+
+    caption = (
+        f"تم حساب نقاط اليوم {day} ✅\n\n"
+        f"الأهداف:\n{goals_text}\n\n"
+        f"الكلين شيت:\n{clean_text}\n\n"
+        f"🏆 أسطورة اليوم: {legends_text} — {max_score} نقطة"
+    )
+    if warnings:
+        caption += "\n\n" + "\n\n".join(warnings)
+
+    with open(file_name, "rb") as file:
+        await update.message.reply_document(document=file, filename=file_name, caption=caption)
+
+    if load_settings().get("auto_images", True):
+        try:
+            path = create_daily_result_image(day, goals_count=goals_count, clean_sheets=clean_sheets)
+            await send_photo_path(update, path, build_result_announcement(day, winners))
+        except Exception as e:
+            await update.message.reply_text(f"تم حساب النتائج، لكن تعذر إنشاء الصورة التلقائية ❌\n{e}")
+
+
 def main():
     if not TOKEN:
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
 
+    # تجهيز الأعلام إذا كان ملف worldcup_2026_flags_pack.zip مرفوعًا مع المشروع
+    ensure_flags_assets()
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/start"), start))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/من_انا"), who_am_i))
 
     # أي ملف يرسله المستخدم نحفظه، عشان يقدر يكتب الأمر بعده بدون تعليق
     app.add_handler(MessageHandler(filters.Document.ALL, remember_last_file))
 
+    # صور وتحكم
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تفعيل_الصور_التلقائية"), admin_only(enable_auto_images)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إيقاف_الصور_التلقائية"), admin_only(disable_auto_images)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ايقاف_الصور_التلقائية"), admin_only(disable_auto_images)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_اليوم"), daily_image_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الترتيب"), overall_image_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الاساطير"), legends_image_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), dashboard_sheet_image_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), all_dashboard_images_command))
+
+    # إعلان وملخص ومباريات
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعلان_اليوم"), announcement_day_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملخص_اليوم"), summary_day_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات"), admin_only(matches_design_command)))
+
     # استيراد ملف Excel كامل مرة واحدة
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استيراد_ملف"), import_excel_file))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_استيراد"), approve_import))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_استيراد"), cancel_import))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الغاء_استيراد"), cancel_import))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استيراد_ملف"), admin_only(import_excel_file)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_استيراد"), admin_only(approve_import)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_استيراد"), admin_only(cancel_import)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الغاء_استيراد"), admin_only(cancel_import)))
 
     # النسخ الاحتياطي والاسترجاع
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نسخة_احتياطية"), backup_zip))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_نسخة"), restore_backup_zip))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نسخة_احتياطية"), admin_only(backup_zip)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_نسخة"), admin_only(restore_backup_zip)))
 
-    # تنظيف الأيام الوهمية من القفل
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الأيام"), clean_days))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الايام"), clean_days))
+    # تنظيف
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الأيام"), admin_only(clean_days)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الايام"), admin_only(clean_days)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الملفات"), admin_only(clean_temp_files)))
 
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه"), add_day))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), results_day))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه"), admin_only(add_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), admin_only(results_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), overall))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_نص"), ranking_text))
 
@@ -2345,12 +3238,12 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اسطورة"), legend_day))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مقارنة"), compare_days))
 
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_الكل"), clear_all))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_يوم"), clear_day))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_نتائج"), clear_results))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_آخر"), restore_last))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), lock_day))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), unlock_day))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_الكل"), admin_only(clear_all)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_يوم"), admin_only(clear_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_نتائج"), admin_only(clear_results)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_آخر"), admin_only(restore_last)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
 
     app.run_polling()
 
