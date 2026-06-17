@@ -5342,7 +5342,7 @@ async def design_matches_template_command(update: Update, context: ContextTypes.
         return
     try:
         path = create_matches_template_image(day_name, matches, use_template=True)
-        await send_photo_path(update, path, build_matches_announcement(day_name, matches))
+        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم المباريات بالقالب ❌\n{e}")
 
@@ -5353,7 +5353,7 @@ async def design_matches_auto_command(update: Update, context: ContextTypes.DEFA
         return
     try:
         path = create_matches_template_image(day_name, matches, use_template=False)
-        await send_photo_path(update, path, build_matches_announcement(day_name, matches))
+        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم المباريات التلقائي ❌\n{e}")
 
@@ -5469,33 +5469,57 @@ def create_matches_style2_image(day_name, matches):
     ensure_generated_dir()
     count = max(len(matches), 1)
     width = 1200
-    row_h = 170 if count <= 4 else 148
-    gap = 22 if count <= 4 else 15
-    height = max(930, 330 + count * row_h + max(0, count-1) * gap + 95)
+
+    if count == 1:
+        row_h, gap, header_h, footer_h, card_pad = 245, 0, 330, 95, 95
+    elif count == 2:
+        row_h, gap, header_h, footer_h, card_pad = 215, 28, 320, 95, 115
+    elif count <= 4:
+        row_h, gap, header_h, footer_h, card_pad = 175, 22, 310, 95, 160
+    else:
+        row_h, gap, header_h, footer_h, card_pad = 150, 15, 290, 90, 150
+
+    height = max(820, header_h + count * row_h + max(0, count-1) * gap + footer_h)
     img, draw = _style2_canvas(width, height)
 
-    draw_text(draw, (width//2, 68), "MONDIAL AL MASEEF 2026", get_font(30), fill="#FFFFFF")
-    draw_text(draw, (width//2, 135), "مباريات اليوم", get_font(78), fill="#FFFFFF")
-    rounded_rect(draw, (width//2-230, 205, width//2+230, 260), radius=18, fill="#FBBF24", outline="#00000055", width=2)
-    draw_text(draw, (width//2, 233), f"اليوم {day_name}", get_font(30), fill="#061633")
+    draw_text(draw, (width//2, 62), "MONDIAL AL MASEEF 2026", get_font(30), fill="#FFFFFF")
+    draw_text(draw, (width//2, 132), "مباريات اليوم", get_font(80 if count <= 2 else 72), fill="#FFFFFF")
+    rounded_rect(draw, (width//2-235, 202, width//2+235, 260), radius=18, fill="#FBBF24", outline="#00000055", width=2)
+    draw_text(draw, (width//2, 232), f"اليوم {day_name}", get_font(30), fill="#061633")
 
-    y = 330
+    y = header_h
+    if count == 1:
+        y = 350
+
     for a, b, t in matches:
-        x1, x2 = 170, width-170
-        rounded_rect(draw, (x1, y, x2, y+row_h), radius=28, fill="#0638A5", outline="#14B8F5", width=4)
-        draw.line((x1+8, y+row_h-3, x2-8, y+row_h-3), fill="#EF4444", width=4)
-        draw.line((x1+160, y+5, x2-160, y+5), fill="#22C55E", width=3)
-        draw.line((x1+360, y+5, x1+430, y+5), fill="#FBBF24", width=3)
+        x1, x2 = card_pad, width-card_pad
+        rounded_rect(draw, (x1, y, x2, y+row_h), radius=32, fill="#0638A5", outline="#14B8F5", width=4)
+
+        # نفس روح الأطراف الملونة
+        draw.line((x1+14, y+row_h-4, x2-14, y+row_h-4), fill="#EF4444", width=4)
+        draw.line((x1+170, y+6, x2-170, y+6), fill="#22C55E", width=3)
+        draw.line((x1+390, y+6, x1+470, y+6), fill="#FBBF24", width=3)
+        draw.arc((x1, y, x1+58, y+58), 180, 270, fill="#14B8F5", width=8)
+        draw.arc((x2-58, y+row_h-58, x2, y+row_h), 0, 90, fill="#EF4444", width=8)
+
         cy = y + row_h//2
-        flag_w = min(135, row_h-46)
-        paste_flag(img, a, (x1+35, cy-flag_w//2, x1+35+flag_w, cy+flag_w//2))
-        paste_flag(img, b, (x2-35-flag_w, cy-flag_w//2, x2-35, cy+flag_w//2))
-        draw_text(draw, (x1+102, y+row_h-34), a, get_font(26), fill="#FFFFFF", max_width=230)
-        draw_text(draw, (x2-102, y+row_h-34), b, get_font(26), fill="#FFFFFF", max_width=230)
+        flag_w = min(158 if count <= 2 else 132, row_h-48)
+
+        paste_flag(img, a, (x1+42, cy-flag_w//2, x1+42+flag_w, cy+flag_w//2))
+        paste_flag(img, b, (x2-42-flag_w, cy-flag_w//2, x2-42, cy+flag_w//2))
+
+        name_font = get_font(34 if count <= 2 else 27)
+        draw_text(draw, (x1+42+flag_w//2, y+row_h-38), a, name_font, fill="#FFFFFF", max_width=260)
+        draw_text(draw, (x2-42-flag_w//2, y+row_h-38), b, name_font, fill="#FFFFFF", max_width=260)
+
         tm, period = _ampm_from_time(t)
-        draw_text(draw, (width//2, cy-14), tm, get_font(54), fill="#FBBF24")
+        time_font = get_font(68 if count == 1 else (60 if count == 2 else 52))
+        draw_text(draw, (width//2, cy-18), tm, time_font, fill="#FBBF24")
         if period:
-            draw_text(draw, (width//2, cy+42), period, get_font(34), fill="#FBBF24")
+            draw_text(draw, (width//2, cy+46), period, get_font(36), fill="#FBBF24")
+        elif count == 1:
+            draw_text(draw, (width//2, cy+48), "بتوقيت السعودية", get_font(26), fill="#E5E7EB")
+
         y += row_h + gap
 
     draw_text(draw, (width//2, height-44), "المصيف ينقل لكم الحدث", get_font(30), fill="#FBBF24")
@@ -5507,30 +5531,44 @@ def create_match_results_style2_image(day_name, results):
     ensure_generated_dir()
     count = max(len(results), 1)
     width = 1200
-    row_h = 170 if count <= 4 else 148
-    gap = 22 if count <= 4 else 15
-    height = max(930, 330 + count * row_h + max(0, count-1) * gap + 95)
+
+    if count == 1:
+        row_h, gap, header_h, footer_h, card_pad = 245, 0, 330, 95, 95
+    elif count == 2:
+        row_h, gap, header_h, footer_h, card_pad = 215, 28, 320, 95, 115
+    elif count <= 4:
+        row_h, gap, header_h, footer_h, card_pad = 175, 22, 310, 95, 160
+    else:
+        row_h, gap, header_h, footer_h, card_pad = 150, 15, 290, 90, 150
+
+    height = max(820, header_h + count * row_h + max(0, count-1) * gap + footer_h)
     img, draw = _style2_canvas(width, height)
 
-    draw_text(draw, (width//2, 68), "MONDIAL AL MASEEF 2026", get_font(30), fill="#FFFFFF")
-    draw_text(draw, (width//2, 135), "نتائج اليوم", get_font(78), fill="#FFFFFF")
-    rounded_rect(draw, (width//2-230, 205, width//2+230, 260), radius=18, fill="#FBBF24", outline="#00000055", width=2)
-    draw_text(draw, (width//2, 233), f"اليوم {day_name}", get_font(30), fill="#061633")
+    draw_text(draw, (width//2, 62), "MONDIAL AL MASEEF 2026", get_font(30), fill="#FFFFFF")
+    draw_text(draw, (width//2, 132), "نتائج اليوم", get_font(80 if count <= 2 else 72), fill="#FFFFFF")
+    rounded_rect(draw, (width//2-235, 202, width//2+235, 260), radius=18, fill="#FBBF24", outline="#00000055", width=2)
+    draw_text(draw, (width//2, 232), f"اليوم {day_name}", get_font(30), fill="#061633")
 
-    y = 330
+    y = 350 if count == 1 else header_h
     for a, sa, sb, b in results:
-        x1, x2 = 170, width-170
-        rounded_rect(draw, (x1, y, x2, y+row_h), radius=28, fill="#0638A5", outline="#14B8F5", width=4)
-        draw.line((x1+8, y+row_h-3, x2-8, y+row_h-3), fill="#EF4444", width=4)
-        draw.line((x1+160, y+5, x2-160, y+5), fill="#22C55E", width=3)
+        x1, x2 = card_pad, width-card_pad
+        rounded_rect(draw, (x1, y, x2, y+row_h), radius=32, fill="#0638A5", outline="#14B8F5", width=4)
+        draw.line((x1+14, y+row_h-4, x2-14, y+row_h-4), fill="#EF4444", width=4)
+        draw.line((x1+170, y+6, x2-170, y+6), fill="#22C55E", width=3)
+        draw.arc((x1, y, x1+58, y+58), 180, 270, fill="#14B8F5", width=8)
+        draw.arc((x2-58, y+row_h-58, x2, y+row_h), 0, 90, fill="#EF4444", width=8)
+
         cy = y + row_h//2
-        flag_w = min(135, row_h-46)
-        paste_flag(img, a, (x1+35, cy-flag_w//2, x1+35+flag_w, cy+flag_w//2))
-        paste_flag(img, b, (x2-35-flag_w, cy-flag_w//2, x2-35, cy+flag_w//2))
-        draw_text(draw, (x1+102, y+row_h-34), a, get_font(26), fill="#FFFFFF", max_width=230)
-        draw_text(draw, (x2-102, y+row_h-34), b, get_font(26), fill="#FFFFFF", max_width=230)
-        rounded_rect(draw, (width//2-118, cy-45, width//2+118, cy+45), radius=18, fill="#FBBF24", outline="#00000088", width=2)
-        draw_text(draw, (width//2, cy), f"{sb} - {sa}", get_font(52), fill="#061633")
+        flag_w = min(158 if count <= 2 else 132, row_h-48)
+        paste_flag(img, a, (x1+42, cy-flag_w//2, x1+42+flag_w, cy+flag_w//2))
+        paste_flag(img, b, (x2-42-flag_w, cy-flag_w//2, x2-42, cy+flag_w//2))
+
+        name_font = get_font(34 if count <= 2 else 27)
+        draw_text(draw, (x1+42+flag_w//2, y+row_h-38), a, name_font, fill="#FFFFFF", max_width=260)
+        draw_text(draw, (x2-42-flag_w//2, y+row_h-38), b, name_font, fill="#FFFFFF", max_width=260)
+
+        rounded_rect(draw, (width//2-125, cy-50, width//2+125, cy+50), radius=20, fill="#FBBF24", outline="#00000088", width=2)
+        draw_text(draw, (width//2, cy), f"{sb} - {sa}", get_font(60 if count <= 2 else 52), fill="#061633")
         y += row_h + gap
 
     draw_text(draw, (width//2, height-44), "المصيف ينقل لكم الحدث", get_font(30), fill="#FBBF24")
@@ -5704,6 +5742,20 @@ def create_match_frame_style_image(day_name, items, is_results=False):
     return path
 
 
+
+def build_design_matches_caption(day_name, matches):
+    lines = [
+        "🏆 مونديال المصيف 2026 🏆",
+        f"🔥 مباريات اليوم ( {day_name} ) 🔥",
+        ""
+    ]
+    for a, b, t in matches:
+        lines.append(f"{a} × {b} — {t}")
+    lines.append("")
+    lines.append("المصيف ينقل لكم الحدث")
+    return "\n".join(lines)
+
+
 async def design_matches_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         day_name, matches = parse_matches_text(update.message.text)
@@ -5711,7 +5763,7 @@ async def design_matches_style2_command(update: Update, context: ContextTypes.DE
             await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_ستايل2\nالسابع\nالبرتغال|الكونغو الديمقراطية|8:00 م")
             return
         path = create_matches_style2_image(day_name, matches)
-        await send_photo_path(update, path, build_matches_announcement(day_name, matches))
+        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم مباريات ستايل2 ❌\n{e}")
 
@@ -5755,7 +5807,7 @@ async def design_matches_frame_command(update: Update, context: ContextTypes.DEF
             await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_اطار\nالسابع\nالبرتغال|الكونغو الديمقراطية|8:00 م")
             return
         path = create_match_frame_style_image(day_name, matches, False)
-        await send_photo_path(update, path, build_matches_announcement(day_name, matches))
+        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم مباريات الإطار ❌\n{e}")
 
