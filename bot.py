@@ -4912,7 +4912,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/تصميم_مباريات\n/تصميم_مباريات_تلقائي\n"
         "/تصميم_نتائج_مباريات\n/تصميم_نتائج_مباريات_تلقائي\n"
         "/تصميم_ترتيب_مجموعة\n/تصميم_ترتيب_مجموعة_تلقائي\n"
-        "/تصميم_هدافين\n/تصميم_هدافين_تلقائي\n\n"
+        "/تصميم_هدافين\n/تصميم_هدافين_تلقائي\n"
+        "\nالتصميم الإضافي V24:\n"
+        "/تصميم_مباريات_ستايل2\n/تصميم_نتائج_مباريات_ستايل2\n"
+        "/تصميم_هدافين_ستايل2\n/تصميم_ترتيب_مجموعة_ستايل2\n"
+        "/تصميم_مباريات_اطار\n/تصميم_نتائج_مباريات_اطار\n"
+        "/تصميم_جميع_المجموعات\n\n"
         "أوامر الفحص والنشر:\n"
         "/الأيام\n/فحص 5\n/مشاركين 5\n/اسطورة 5\n/مقارنة 4 5\n/اعلان_اليوم 5\n/ملخص_اليوم 5\n\n"
         "أوامر الاستيراد والنسخ:\n"
@@ -5698,54 +5703,83 @@ def create_match_frame_style_image(day_name, items, is_results=False):
     img.save(path, quality=95)
     return path
 
+
 async def design_matches_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    day_name, matches = parse_matches_design_text(update.message.text)
-    if not matches:
-        await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_ستايل2\nالسابع\nالبرتغال|الكونغو الديمقراطية|8:00 م")
-        return
-    await send_photo_path(update, create_matches_style2_image(day_name, matches), build_matches_caption(day_name, matches))
+    try:
+        day_name, matches = parse_matches_text(update.message.text)
+        if not matches:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_ستايل2\nالسابع\nالبرتغال|الكونغو الديمقراطية|8:00 م")
+            return
+        path = create_matches_style2_image(day_name, matches)
+        await send_photo_path(update, path, build_matches_announcement(day_name, matches))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم مباريات ستايل2 ❌\n{e}")
 
 async def design_match_results_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    day_name, results = parse_match_results_design_text(update.message.text)
-    if not results:
-        await update.message.reply_text("اكتبها كذا:\n/تصميم_نتائج_مباريات_ستايل2\nالسابع\nالبرتغال|2|1|الكونغو الديمقراطية")
-        return
-    await send_photo_path(update, create_match_results_style2_image(day_name, results), build_match_results_caption(day_name, results))
+    try:
+        day_name, results = parse_match_results_design_text(update.message.text)
+        if not results:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_نتائج_مباريات_ستايل2\nالسابع\nالبرتغال|2|1|الكونغو الديمقراطية")
+            return
+        path = create_match_results_style2_image(day_name, results)
+        await send_photo_path(update, path, build_match_results_caption(results))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم نتائج ستايل2 ❌\n{e}")
 
 async def design_scorers_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    items = parse_scorers_text(update.message.text)
-    if not items:
-        await update.message.reply_text("اكتبها كذا:\n/تصميم_هدافين_ستايل2\nراؤول خيمينيز|4|المكسيك")
-        return
-    await send_photo_path(update, create_scorers_style2_image(items), build_top_scorers_caption(items))
+    try:
+        items = parse_scorers_text(update.message.text)
+        if not items:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_هدافين_ستايل2\nراؤول خيمينيز|4|المكسيك")
+            return
+        path = create_scorers_style2_image(items)
+        await send_photo_path(update, path, build_top_scorers_caption(items))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم الهدافين ستايل2 ❌\n{e}")
 
 async def design_group_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    group_title, rows = parse_group_standing_text(update.message.text)
-    if not rows:
-        await update.message.reply_text("اكتبها كذا:\n/تصميم_ترتيب_مجموعة_ستايل2\nالمجموعة C\nالبرازيل|1|0|1")
-        return
-    await send_photo_path(update, create_group_style2_image(group_title, rows), f"ترتيب {group_title} ✅")
+    try:
+        group_title, rows = parse_group_standing_text(update.message.text)
+        if not rows:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_ترتيب_مجموعة_ستايل2\nالمجموعة C\nالبرازيل|1|0|1")
+            return
+        path = create_group_style2_image(group_title, rows)
+        await send_photo_path(update, path, build_group_standing_caption(group_title, rows))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم ترتيب المجموعة ستايل2 ❌\n{e}")
 
 async def design_matches_frame_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    day_name, matches = parse_matches_design_text(update.message.text)
-    if not matches:
-        await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_اطار\nالسابع\nالبرتغال|الكونغو الديمقراطية|8:00 م")
-        return
-    await send_photo_path(update, create_match_frame_style_image(day_name, matches, False), build_matches_caption(day_name, matches))
+    try:
+        day_name, matches = parse_matches_text(update.message.text)
+        if not matches:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_اطار\nالسابع\nالبرتغال|الكونغو الديمقراطية|8:00 م")
+            return
+        path = create_match_frame_style_image(day_name, matches, False)
+        await send_photo_path(update, path, build_matches_announcement(day_name, matches))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم مباريات الإطار ❌\n{e}")
 
 async def design_results_frame_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    day_name, results = parse_match_results_design_text(update.message.text)
-    if not results:
-        await update.message.reply_text("اكتبها كذا:\n/تصميم_نتائج_مباريات_اطار\nالسابع\nالبرتغال|2|1|الكونغو الديمقراطية")
-        return
-    await send_photo_path(update, create_match_frame_style_image(day_name, results, True), build_match_results_caption(day_name, results))
+    try:
+        day_name, results = parse_match_results_design_text(update.message.text)
+        if not results:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_نتائج_مباريات_اطار\nالسابع\nالبرتغال|2|1|الكونغو الديمقراطية")
+            return
+        path = create_match_frame_style_image(day_name, results, True)
+        await send_photo_path(update, path, build_match_results_caption(results))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم نتائج الإطار ❌\n{e}")
 
 async def design_all_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    groups = parse_all_groups_text(update.message.text)
-    if not groups:
-        await update.message.reply_text("اكتبها كذا:\n/تصميم_جميع_المجموعات\nالمجموعة A\nفريق|1|0|3\n...\nالمجموعة B\nفريق|1|0|3")
-        return
-    await send_photo_path(update, create_all_groups_image(groups), "ترتيب جميع المجموعات ✅")
+    try:
+        groups = parse_all_groups_text(update.message.text)
+        if not groups:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_جميع_المجموعات\nالمجموعة A\nفريق|1|0|3\n...\nالمجموعة B\nفريق|1|0|3")
+            return
+        path = create_all_groups_image(groups)
+        await send_photo_path(update, path, "ترتيب جميع المجموعات ✅")
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم جميع المجموعات ❌\n{e}")
 
 
 def main():
