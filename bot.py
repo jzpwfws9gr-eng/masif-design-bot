@@ -28,6 +28,7 @@ HEADERS = [
 GOAL_POINTS = {1: 5, 2: 10, 3: 15, 4: 20, 5: 25, 6: 30}
 LOCKED_FILE = "locked_days.json"
 BACKUP_PREFIX = "backup_"
+CUP_FILE = "cup_state.json"
 
 # -------------------- أدوات عامة --------------------
 
@@ -123,7 +124,7 @@ def current_data_files():
     for filename in os.listdir("."):
         if (
             filename.startswith("fantasy_day_") and filename.endswith(".xlsx")
-        ) or filename in ("overall_ranking.xlsx", "fantasy_dashboard.xlsx", LOCKED_FILE):
+        ) or filename in ("overall_ranking.xlsx", "fantasy_dashboard.xlsx", LOCKED_FILE, CUP_FILE):
             files.append(filename)
     return sorted(files)
 
@@ -1909,6 +1910,662 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+
+
+# ============================================================
+# V19 — كأس المصيف اليدوي + تصميم مواجهات الكأس
+# ============================================================
+
+CUP_ROUNDS = [
+    ("r12", "دور 12"),
+    ("qf", "ربع النهائي"),
+    ("sf", "نصف النهائي"),
+    ("final", "النهائي"),
+]
+
+def load_cup_state():
+    if not os.path.exists(CUP_FILE):
+        return {"active": False}
+    try:
+        with open(CUP_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"active": False}
+        return data
+    except Exception:
+        return {"active": False}
+
+def save_cup_state(state):
+    with open(CUP_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+def cup_round_key_by_offset(offset):
+    if 0 <= offset < len(CUP_ROUNDS):
+        return CUP_ROUNDS[offset][0]
+    return None
+
+def cup_round_name(round_key):
+    for key, name in CUP_ROUNDS:
+        if key == round_key:
+            return name
+    return str(round_key or "")
+
+def cup_next_round(round_key):
+    keys = [x[0] for x in CUP_ROUNDS]
+    if round_key not in keys:
+        return None
+    idx = keys.index(round_key)
+    return keys[idx + 1] if idx + 1 < len(keys) else None
+
+def cup_previous_ranking_before(start_day):
+    try:
+        prev_end = max(0, int(start_day) - 1)
+    except Exception:
+        prev_end = 0
+
+    if prev_end >= 1:
+        stats = collect_stats(1, prev_end)
+        ranking = [n for n in stats.get("ranking", []) if n in PARTICIPANTS]
+        missing = [n for n in PARTICIPANTS if n not in ranking]
+        return ranking + missing
+    return PARTICIPANTS[:]
+
+def cup_seed_number(state, participant):
+    try:
+        return int(state.get("seed_by", {}).get(participant, 99))
+    except Exception:
+        return 99
+
+def cup_make_match(a, b, match_id=None):
+    return {
+        "id": match_id or "",
+        "a": a,
+        "b": b,
+        "score_a": None,
+        "score_b": None,
+        "active_a": None,
+        "active_b": None,
+        "winner": None,
+        "note": "",
+    }
+
+def cup_initial_state(start_day):
+    seeds = cup_previous_ranking_before(start_day)[:12]
+    while len(seeds) < 12:
+        seeds.append(f"مشارك {len(seeds)+1}")
+
+    seed_by = {name: i + 1 for i, name in enumerate(seeds)}
+
+    # دور 12: أول 4 عندهم راحة، والباقي يلعبون
+    r12_matches = [
+        cup_make_match(seeds[4], seeds[11], "R12-1"),  # 5 vs 12
+        cup_make_match(seeds[7], seeds[8], "R12-2"),   # 8 vs 9
+        cup_make_match(seeds[5], seeds[10], "R12-3"),  # 6 vs 11
+        cup_make_match(seeds[6], seeds[9], "R12-4"),   # 7 vs 10
+    ]
+
+    return {
+        "active": True,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "start_day": int(start_day),
+        "end_day": int(start_day) + 3,
+        "seeds": seeds,
+        "seed_by": seed_by,
+        "champion": None,
+        "rounds": {
+            "r12": {"day": int(start_day), "name": "دور 12", "matches": r12_matches, "completed": False},
+            "qf": {"day": int(start_day) + 1, "name": "ربع النهائي", "matches": [], "completed": False},
+            "sf": {"day": int(start_day) + 2, "name": "نصف النهائي", "matches": [], "completed": False},
+            "final": {"day": int(start_day) + 3, "name": "النهائي", "matches": [], "completed": False},
+        },
+    }
+
+def cup_scores_for_day(day):
+    rows = read_day_rows(day)
+    scores = {}
+    active = {}
+    for row in rows:
+        name = row.get("participant")
+        if not name:
+            continue
+        scores[name] = int(row.get("total", 0) or 0)
+        active[name] = bool(row.get("participated"))
+    for name in PARTICIPANTS:
+        scores.setdefault(name, 0)
+        active.setdefault(name, False)
+    return scores, active
+
+def cup_decide_winner(state, match, scores, active):
+    a = match.get("a", "")
+    b = match.get("b", "")
+    sa = int(scores.get(a, 0) or 0)
+    sb = int(scores.get(b, 0) or 0)
+    aa = bool(active.get(a, False))
+    ab = bool(active.get(b, False))
+
+    # القواعد المعتمدة:
+    # إذا واحد شارك والثاني لا: المشارك يتأهل حتى لو صفر
+    # إذا الاثنين شاركوا: الأعلى نقاط يتأهل
+    # إذا الاثنين لم يشاركوا: الأعلى بالتصنيف/البذر يتأهل
+    if aa and not ab:
+        winner = a
+        note = "تأهل لأنه شارك"
+    elif ab and not aa:
+        winner = b
+        note = "تأهل لأنه شارك"
+    elif aa and ab:
+        if sa > sb:
+            winner = a
+            note = "فاز بالنقاط"
+        elif sb > sa:
+            winner = b
+            note = "فاز بالنقاط"
+        else:
+            # عند التعادل: الأعلى بذرًا يتأهل
+            seed_a = cup_seed_number(state, a)
+            seed_b = cup_seed_number(state, b)
+            winner = a if seed_a <= seed_b else b
+            note = "تعادل — تأهل الأعلى تصنيفًا"
+    else:
+        seed_a = cup_seed_number(state, a)
+        seed_b = cup_seed_number(state, b)
+        winner = a if seed_a <= seed_b else b
+        note = "لم يشارك الطرفان — تأهل الأعلى تصنيفًا"
+
+    match["score_a"] = sa
+    match["score_b"] = sb
+    match["active_a"] = aa
+    match["active_b"] = ab
+    match["winner"] = winner
+    match["note"] = note
+    return winner
+
+def cup_build_next_round_matches(state, completed_round_key):
+    seeds = state.get("seeds", [])
+    rounds = state.get("rounds", {})
+
+    if completed_round_key == "r12":
+        r12 = rounds.get("r12", {}).get("matches", [])
+        if len(r12) < 4 or len(seeds) < 12:
+            return []
+        # ترتيب ربع النهائي
+        # Seed 1 vs Winner 8/9
+        # Seed 4 vs Winner 5/12
+        # Seed 2 vs Winner 7/10
+        # Seed 3 vs Winner 6/11
+        return [
+            cup_make_match(seeds[0], r12[1].get("winner"), "QF-1"),
+            cup_make_match(seeds[3], r12[0].get("winner"), "QF-2"),
+            cup_make_match(seeds[1], r12[3].get("winner"), "QF-3"),
+            cup_make_match(seeds[2], r12[2].get("winner"), "QF-4"),
+        ]
+
+    if completed_round_key == "qf":
+        qf = rounds.get("qf", {}).get("matches", [])
+        if len(qf) < 4:
+            return []
+        return [
+            cup_make_match(qf[0].get("winner"), qf[1].get("winner"), "SF-1"),
+            cup_make_match(qf[2].get("winner"), qf[3].get("winner"), "SF-2"),
+        ]
+
+    if completed_round_key == "sf":
+        sf = rounds.get("sf", {}).get("matches", [])
+        if len(sf) < 2:
+            return []
+        return [
+            cup_make_match(sf[0].get("winner"), sf[1].get("winner"), "FINAL"),
+        ]
+
+    return []
+
+def cup_process_day(day):
+    state = load_cup_state()
+    if not state.get("active"):
+        return state, None, "لا يوجد كأس مفعّلة."
+
+    try:
+        day_i = int(day)
+        start_day = int(state.get("start_day"))
+    except Exception:
+        return state, None, "رقم اليوم غير صحيح."
+
+    if day_i < start_day or day_i > int(state.get("end_day", start_day + 3)):
+        return state, None, "اليوم خارج فترة الكأس الحالية."
+
+    round_key = cup_round_key_by_offset(day_i - start_day)
+    if not round_key:
+        return state, None, "اليوم خارج مراحل الكأس."
+
+    round_data = state.get("rounds", {}).get(round_key, {})
+    matches = round_data.get("matches", [])
+    if not matches:
+        return state, None, f"لا توجد مواجهات في {cup_round_name(round_key)}."
+
+    if round_data.get("completed"):
+        return state, round_key, "هذه المرحلة محسوبة مسبقًا."
+
+    scores, active = cup_scores_for_day(day_i)
+    for match in matches:
+        cup_decide_winner(state, match, scores, active)
+
+    round_data["completed"] = True
+    state["rounds"][round_key] = round_data
+
+    next_key = cup_next_round(round_key)
+    if next_key:
+        next_matches = cup_build_next_round_matches(state, round_key)
+        state["rounds"][next_key]["matches"] = next_matches
+    else:
+        # النهائي انتهى
+        winner = matches[0].get("winner") if matches else None
+        state["champion"] = winner
+        state["active"] = False
+
+    save_cup_state(state)
+    return state, round_key, "تم حساب مرحلة الكأس ✅"
+
+def cup_pending_round_key(state):
+    if not state.get("rounds"):
+        return None
+    for key, _name in CUP_ROUNDS:
+        rd = state["rounds"].get(key, {})
+        if rd.get("matches") and not rd.get("completed"):
+            return key
+    if state.get("champion"):
+        return "champion"
+    return None
+
+def cup_results_text(state):
+    if not state or not state.get("rounds"):
+        return "لا توجد كأس محفوظة."
+    lines = [
+        "🏆 كأس المصيف",
+        f"الفترة: اليوم {state.get('start_day')} إلى اليوم {state.get('end_day')}",
+        "",
+    ]
+
+    for key, name in CUP_ROUNDS:
+        rd = state.get("rounds", {}).get(key, {})
+        matches = rd.get("matches", [])
+        if not matches:
+            continue
+        lines.append(f"📌 {name} — اليوم {rd.get('day')}")
+        for m in matches:
+            a, b = m.get("a", ""), m.get("b", "")
+            if m.get("winner"):
+                lines.append(f"- {a} {m.get('score_a', 0)} × {m.get('score_b', 0)} {b} | المتأهل: {m.get('winner')}")
+            else:
+                lines.append(f"- {a} × {b}")
+        lines.append("")
+
+    if state.get("champion"):
+        lines.append(f"🏆 بطل كأس المصيف: {state.get('champion')}")
+    else:
+        pending = cup_pending_round_key(state)
+        if pending and pending != "champion":
+            lines.append(f"القادم: {cup_round_name(pending)}")
+    return "\n".join(lines).strip()
+
+def create_cup_matches_image(state, round_key=None, title_suffix=None):
+    ensure_generated_dir()
+    if round_key is None:
+        round_key = cup_pending_round_key(state)
+    if not round_key:
+        return None
+
+    width = 1200
+    if round_key == "champion":
+        height = 850
+        img, draw = design_canvas(None, width, height, "gold")
+        draw_design_header(draw, width, "كأس المصيف 2026", "البطل", img)
+        draw_broadcast_inner_frame(draw, width, height, top=235, bottom_pad=112, accent="#F59E0B")
+        champion = state.get("champion", "غير محدد")
+        draw_text(draw, (width//2, 430), "🏆", get_font(82), fill="#FDE68A")
+        draw_text(draw, (width//2, 535), champion, get_font(58), fill="#FFFFFF", max_width=850)
+        draw_text(draw, (width//2, 625), "بطل كأس المصيف", get_font(36), fill="#FDE68A")
+        footer_event(draw, width, height)
+        path = os.path.join(GENERATED_DIR, "cup_champion.png")
+        img.save(path, quality=95)
+        return path
+
+    rd = state.get("rounds", {}).get(round_key, {})
+    matches = rd.get("matches", [])
+    count = max(len(matches), 1)
+    row_h, gap, name_size = v16_fit_row_metrics(count, "match")
+    if count <= 2:
+        row_h += 10
+        name_size += 2
+
+    content_h = count * row_h + max(0, count - 1) * gap
+    height = max(780, 245 + content_h + 200)
+    img, draw = design_canvas(None, width, height, "gold")
+    subtitle = title_suffix or f"{cup_round_name(round_key)} — اليوم {rd.get('day', '')}"
+    draw_design_header(draw, width, "كأس المصيف 2026", subtitle, img)
+    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=235, bottom_pad=112, accent="#F59E0B")
+
+    available_h = (fy2 - fy1) - 70
+    y = fy1 + 38 + max(0, (available_h - content_h) // 2)
+    for i, m in enumerate(matches, start=1):
+        a = m.get("a") or "—"
+        b = m.get("b") or "—"
+        accent = "#F59E0B" if m.get("winner") else v16_accent(i)
+        rounded_rect(draw, (92, y, width-92, y+row_h), radius=28, fill="#0B1020", outline=accent, width=2)
+        cy = y + row_h//2
+
+        # بذر/تصنيف اللاعب
+        seed_a = cup_seed_number(state, a)
+        seed_b = cup_seed_number(state, b)
+        rounded_rect(draw, (width-190, cy-34, width-132, cy+34), radius=16, fill="#05070D", outline="#FDE68A80", width=1)
+        rounded_rect(draw, (132, cy-34, 190, cy+34), radius=16, fill="#05070D", outline="#FDE68A80", width=1)
+        draw_text(draw, (width-161, cy), str(seed_a if seed_a != 99 else "-"), get_font(28), fill="#FDE68A")
+        draw_text(draw, (161, cy), str(seed_b if seed_b != 99 else "-"), get_font(28), fill="#FDE68A")
+
+        a_fill = "#FDE68A" if m.get("winner") == a else "#FFFFFF"
+        b_fill = "#FDE68A" if m.get("winner") == b else "#FFFFFF"
+        draw_text(draw, (width-390, cy), a, get_font(name_size), fill=a_fill, max_width=330)
+        draw_text(draw, (390, cy), b, get_font(name_size), fill=b_fill, max_width=330)
+
+        if m.get("winner"):
+            score = f"{m.get('score_a', 0)} - {m.get('score_b', 0)}"
+            rounded_rect(draw, (width//2-110, cy-34, width//2+110, cy+34), radius=20, fill="#05070D", outline="#FDE68A", width=2)
+            draw_text(draw, (width//2, cy), score, get_font(max(30, name_size+4)), fill="#FDE68A")
+        else:
+            draw_text(draw, (width//2, cy), "×", get_font(max(42, name_size+18)), fill="#FDE68A")
+
+        y += row_h + gap
+
+    footer_event(draw, width, height)
+    path = os.path.join(GENERATED_DIR, f"cup_{round_key}.png")
+    img.save(path, quality=95)
+    return path
+
+def cup_started_caption(state):
+    seeds = state.get("seeds", [])
+    bye = "، ".join(seeds[:4]) if len(seeds) >= 4 else "لا يوجد"
+    return (
+        f"تم بدء كأس المصيف 🏆\n"
+        f"الفترة: اليوم {state.get('start_day')} إلى اليوم {state.get('end_day')}\n\n"
+        f"اليوم {state.get('start_day')}: دور 12\n"
+        f"اليوم {int(state.get('start_day'))+1}: ربع النهائي\n"
+        f"اليوم {int(state.get('start_day'))+2}: نصف النهائي\n"
+        f"اليوم {int(state.get('start_day'))+3}: النهائي\n\n"
+        f"راحة دور 12: {bye}"
+    )
+
+async def start_cup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nums = get_numbers(update.message.text)
+    if not nums:
+        await update.message.reply_text("اكتبها كذا:\n/بدء_الكاس 5")
+        return
+    start_day = int(nums[0])
+    if start_day < 1:
+        await update.message.reply_text("رقم اليوم غير صحيح.")
+        return
+
+    old = load_cup_state()
+    if old.get("active"):
+        await update.message.reply_text(
+            "فيه كأس مفعّلة حاليًا.\n"
+            "إذا تبي تلغيها اكتب: /الغاء_الكاس"
+        )
+        return
+
+    backup_files(f"before_start_cup_{start_day}", files=[CUP_FILE] if os.path.exists(CUP_FILE) else [])
+    state = cup_initial_state(start_day)
+    save_cup_state(state)
+
+    path = create_cup_matches_image(state, "r12", "دور 12")
+    if path:
+        await send_photo_path(update, path, cup_started_caption(state))
+    else:
+        await update.message.reply_text(cup_started_caption(state))
+
+async def cup_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = load_cup_state()
+    if not state.get("rounds"):
+        await update.message.reply_text("لا توجد كأس محفوظة حاليًا.\nلبدء كأس جديد: /بدء_الكاس 5")
+        return
+    pending = cup_pending_round_key(state)
+    status = "مفعّلة ✅" if state.get("active") else "منتهية ✅"
+    msg = (
+        f"🏆 حالة كأس المصيف\n"
+        f"الحالة: {status}\n"
+        f"الفترة: اليوم {state.get('start_day')} إلى اليوم {state.get('end_day')}\n"
+    )
+    if state.get("champion"):
+        msg += f"البطل: {state.get('champion')}"
+    elif pending:
+        msg += f"المرحلة الحالية: {cup_round_name(pending)}"
+    await update.message.reply_text(msg)
+
+async def cup_results_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = load_cup_state()
+    await update.message.reply_text(cup_results_text(state))
+
+async def cancel_cup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = load_cup_state()
+    if not state.get("rounds"):
+        await update.message.reply_text("ما فيه كأس محفوظة أصلًا.")
+        return
+    backup_files("before_cancel_cup", files=[CUP_FILE] if os.path.exists(CUP_FILE) else [])
+    state["active"] = False
+    state["cancelled_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    save_cup_state(state)
+    await update.message.reply_text("تم إلغاء كأس المصيف الحالية ✅")
+
+async def cup_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = load_cup_state()
+    if not state.get("rounds"):
+        await update.message.reply_text("لا توجد كأس محفوظة حاليًا.\nلبدء كأس جديد: /بدء_الكاس 5")
+        return
+
+    pending = cup_pending_round_key(state)
+    if not pending:
+        await update.message.reply_text(cup_results_text(state))
+        return
+
+    path = create_cup_matches_image(state, pending)
+    if path:
+        caption = cup_results_text(state) if pending == "champion" else f"🏆 مواجهات كأس المصيف — {cup_round_name(pending)}"
+        await send_photo_path(update, path, caption)
+    else:
+        await update.message.reply_text(cup_results_text(state))
+
+async def cup_after_fantasy_results(update: Update, day):
+    state = load_cup_state()
+    if not state.get("active"):
+        return
+    try:
+        day_i = int(day)
+        if day_i < int(state.get("start_day")) or day_i > int(state.get("end_day")):
+            return
+    except Exception:
+        return
+
+    state, round_key, msg = cup_process_day(day_i)
+    if not round_key:
+        return
+
+    # أرسل نتائج المرحلة النصية
+    await update.message.reply_text(f"🏆 كأس المصيف\n{msg}\n\n{cup_results_text(state)}")
+
+    # بعد حساب اليوم: أرسل تصميم المرحلة القادمة، أو البطل إذا انتهى النهائي
+    next_key = cup_pending_round_key(state)
+    if next_key:
+        path = create_cup_matches_image(state, next_key)
+        if path:
+            if next_key == "champion":
+                caption = f"🏆 بطل كأس المصيف: {state.get('champion')}"
+            else:
+                caption = f"🏆 مواجهات {cup_round_name(next_key)} في كأس المصيف"
+            await send_photo_path(update, path, caption)
+
+# -------------------- V18: قراءة النموذج الرسمي الطويل في /اضافه --------------------
+
+def clean_pick_value(value):
+    """
+    تنظيف بسيط للاسم بدون Alias:
+    - يشيل الإيموجي والزخارف
+    - يحافظ على النص كما كتبه المستخدم قدر الإمكان
+    """
+    value = normalize_name(value)
+    value = value.replace("：", ":")
+    # إزالة رموز شائعة تظهر بعد أسماء اللاعبين
+    value = re.sub(r"[👑🐐🔥⚽️✅🧤🏆⭐🌟🥇🥈🥉📋\-–—]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+def extract_after_colon(line):
+    line = str(line or "").strip().replace("：", ":")
+    if ":" in line:
+        return clean_pick_value(line.split(":", 1)[1])
+    # احتياط لو كتب بدون نقطتين: "الحارس نايلاند"
+    for key in ["الحارس", "حارس", "الكابتن", "كابتن", "اللاعب", "لاعب"]:
+        if key in line:
+            return clean_pick_value(line.split(key, 1)[1])
+    return ""
+
+def participant_line_name(line):
+    line = normalize_name(line)
+    if not line:
+        return ""
+    cleaned = re.sub(r"[^\u0600-\u06FFa-zA-Z\s]", " ", line)
+    cleaned = normalize_name(cleaned)
+    for p in PARTICIPANTS:
+        if cleaned == p:
+            return p
+    return ""
+
+def parse_pipe_lineup_lines(lines):
+    data = {}
+    bad_lines = []
+    for line in lines:
+        raw = line.strip()
+        if not raw:
+            continue
+        if "|" not in raw:
+            continue
+        parts = [clean_pick_value(p) for p in raw.split("|")]
+        if len(parts) != 6:
+            bad_lines.append(raw)
+            continue
+        participant = normalize_name(parts[0])
+        data[participant] = [normalize_name(x) for x in parts[1:]]
+    return data, bad_lines
+
+def parse_official_lineup_blocks(lines):
+    """
+    يقرأ النموذج الرسمي مثل:
+    فهد فارس
+    🧤 الحارس: أوناي سيمون
+    اللاعب 1: أولمو
+    اللاعب 2: سالم الدوسري
+    اللاعب 3: داروين نونيز
+    👑 الكابتن : نونيز
+
+    ويدعم:
+    لاعب: ميسي
+    لاعب ٢: هالاند
+    لاعب ٣: ...
+    """
+    data = {}
+    bad_blocks = []
+    current = None
+    values = None
+
+    def finish_current():
+        nonlocal current, values
+        if not current:
+            return
+        keeper = values.get("keeper", "")
+        p1 = values.get("p1", "")
+        p2 = values.get("p2", "")
+        p3 = values.get("p3", "")
+        captain = values.get("captain", "")
+        if any([keeper, p1, p2, p3, captain]):
+            # إذا ناقص شيء نخليه فارغ بدل ما نرفض كامل المشاركة
+            data[current] = [keeper, p1, p2, p3, captain]
+        current = None
+        values = None
+
+    def put_player(value, preferred=None):
+        if not value:
+            return
+        if preferred and not values.get(preferred):
+            values[preferred] = value
+            return
+        for key in ["p1", "p2", "p3"]:
+            if not values.get(key):
+                values[key] = value
+                return
+
+    for raw in lines:
+        line = normalize_name(raw)
+        if not line:
+            continue
+
+        # إذا لقى اسم مشارك جديد، يقفل السابق
+        p_name = participant_line_name(line)
+        if p_name:
+            finish_current()
+            current = p_name
+            values = {"keeper": "", "p1": "", "p2": "", "p3": "", "captain": ""}
+            continue
+
+        if not current:
+            continue
+
+        line_no_space = line.replace(" ", "")
+        value = extract_after_colon(line)
+
+        if "الحارس" in line or line.startswith("حارس") or "🧤" in raw:
+            if value:
+                values["keeper"] = value
+            continue
+
+        if "الكابتن" in line or "كابتن" in line or "👑" in raw:
+            if value:
+                values["captain"] = value
+            continue
+
+        if "لاعب" in line:
+            if not value:
+                continue
+            preferred = None
+            if re.search(r"(3|٣|الثالث|ثالث)", line_no_space):
+                preferred = "p3"
+            elif re.search(r"(2|٢|الثاني|ثاني)", line_no_space):
+                preferred = "p2"
+            elif re.search(r"(1|١|الأول|اول|الأول|الاول)", line_no_space):
+                preferred = "p1"
+            put_player(value, preferred)
+            continue
+
+    finish_current()
+    return data, bad_blocks
+
+def parse_add_day_text(message_text):
+    """
+    يقبل الصيغتين:
+    1) فهد|حارس|لاعب1|لاعب2|لاعب3|كابتن
+    2) النموذج الرسمي الطويل لكل مشارك
+    """
+    lines = (message_text or "").splitlines()[1:]
+
+    pipe_data, pipe_bad = parse_pipe_lineup_lines(lines)
+    official_data, official_bad = parse_official_lineup_blocks(lines)
+
+    # لو نفس المشارك موجود بالصيغتين، آخر قراءة من النموذج الرسمي تغطي
+    data = {}
+    data.update(pipe_data)
+    data.update(official_data)
+
+    # الأسطر السيئة فقط للبايب؛ لا نحاسب النموذج الطويل على الزخارف والعناوين
+    bad_lines = pipe_bad[:]
+
+    return data, bad_lines
+
 async def add_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     day = get_day(text)
@@ -1917,40 +2574,37 @@ async def add_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"اليوم {day} مقفل ✅\nلفتحه اكتب: /فتح_يوم {day}")
         return
 
-    lines = text.splitlines()[1:]
-    data = {}
-    bad_lines = []
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if "|" not in line:
-            bad_lines.append(line)
-            continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) != 6:
-            bad_lines.append(line)
-            continue
-        participant = normalize_name(parts[0])
-        data[participant] = [normalize_name(x) for x in parts[1:]]
+    data, bad_lines = parse_add_day_text(text)
 
     if not data:
-        await update.message.reply_text("ما لقيت مشاركين بصيغة صحيحة.\nالصيغة:\n/اضافه 5\nفهد فارس|الحارس|لاعب1|لاعب2|لاعب3|الكابتن")
+        await update.message.reply_text(
+            "ما لقيت مشاركين بصيغة صحيحة.\n\n"
+            "الصيغة المختصرة:\n"
+            "/اضافه 5\n"
+            "فهد فارس|الحارس|لاعب1|لاعب2|لاعب3|الكابتن\n\n"
+            "أو النموذج الرسمي:\n"
+            "فهد فارس\n"
+            "🧤 الحارس: أوناي سيمون\n"
+            "اللاعب 1: أولمو\n"
+            "اللاعب 2: سالم الدوسري\n"
+            "اللاعب 3: داروين نونيز\n"
+            "👑 الكابتن : نونيز"
+        )
         return
 
     backup_files(f"before_add_day_{day}", files=[excel_file(day), LOCKED_FILE])
     file_name, unknown = update_day_data(day, data)
 
     caption = f"تم إنشاء/تحديث ملف اليوم {day} ✅\nعدد المشاركين المرسلين: {len(data)}"
+    caption += "\n\n✅ تم قبول الصيغتين: السطر الواحد + النموذج الرسمي"
+
     if unknown:
         caption += "\n\n⚠️ أسماء مشاركين غير موجودة بالقائمة:\n" + "\n".join(unknown)
     if bad_lines:
-        caption += "\n\n⚠️ أسطر لم أفهمها:\n" + "\n".join(bad_lines[:5])
+        caption += "\n\n⚠️ أسطر مختصرة لم أفهمها:\n" + "\n".join(bad_lines[:5])
 
     with open(file_name, "rb") as file:
         await update.message.reply_document(document=file, filename=file_name, caption=caption)
-
 
 async def results_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -1967,7 +2621,7 @@ async def results_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     goals_count, clean_sheets = parse_results(text)
     goal_missing, clean_missing = validate_results_names(day, goals_count, clean_sheets)
 
-    backup_files(f"before_results_day_{day}", files=[excel_file(day), LOCKED_FILE])
+    backup_files(f"before_results_day_{day}", files=[excel_file(day), LOCKED_FILE, CUP_FILE])
     file_name = calculate_points(day, goals_count, clean_sheets)
 
     goals_text = "\n".join([f"- {name}: {count} هدف = {GOAL_POINTS.get(count, count * 5)} نقطة" for name, count in goals_count.items()]) or "لا يوجد"
@@ -1996,6 +2650,11 @@ async def results_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(file_name, "rb") as file:
         await update.message.reply_document(document=file, filename=file_name, caption=caption)
 
+    # V19: إذا الكأس مفعّلة واليوم داخل الفترة، يحسب مرحلة الكأس ويرسل التصميم التالي
+    try:
+        await cup_after_fantasy_results(update, day)
+    except Exception as e:
+        await update.message.reply_text(f"تم حساب الفانتزي، لكن تعذر تحديث الكأس ❌\n{e}")
 
 async def overall(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nums = get_numbers(update.message.text)
@@ -4611,6 +5270,13 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الأيام"), admin_only(clean_days)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الايام"), admin_only(clean_days)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الملفات"), admin_only(clean_temp_files)))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بدء_الكاس(?:\s|$)"), admin_only(start_cup_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/حالة_الكاس(?:\s|$)"), admin_only(cup_status_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_الكاس(?:\s|$)"), admin_only(cup_results_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مواجهات_الكاس(?:\s|$)"), admin_only(cup_matches_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الغاء_الكاس(?:\s|$)"), admin_only(cancel_cup_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_الكاس(?:\s|$)"), admin_only(cancel_cup_command)))
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه"), admin_only(add_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), admin_only(results_day)))
