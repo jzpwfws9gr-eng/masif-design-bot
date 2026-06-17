@@ -2334,9 +2334,14 @@ MATCHES_ANNOUNCEMENT_TEMPLATE = """🏆 فانتزي المصيف 2026  🏆
 
 # نحاول دعم تشكيل العربية داخل الصور، ولو المكتبات غير موجودة نستمر بدون كراش.
 try:
-    from PIL import Image, ImageDraw, ImageFont, ImageFilter
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter, features as PIL_FEATURES
 except Exception:
-    Image = ImageDraw = ImageFont = ImageFilter = None
+    Image = ImageDraw = ImageFont = ImageFilter = PIL_FEATURES = None
+
+try:
+    PIL_RAQM = bool(PIL_FEATURES and PIL_FEATURES.check("raqm"))
+except Exception:
+    PIL_RAQM = False
 
 try:
     import arabic_reshaper
@@ -2452,7 +2457,16 @@ def get_font(size):
         return ImageFont.load_default()
 
 
+def has_arabic(text):
+    return bool(re.search(r"[\u0600-\u06FF]", str(text or "")))
+
+
 def draw_text(draw, xy, text, font, fill="white", anchor="mm", align="center", max_width=None, spacing=8):
+    """رسم نص عربي مضبوط داخل الصور.
+    إذا Pillow يدعم RAQM نرسم النص العربي الأصلي باتجاه RTL.
+    وإذا ما يدعم، نستخدم arabic_reshaper + bidi كحل بديل.
+    """
+    text = "" if text is None else str(text)
     if max_width:
         lines = wrap_text(draw, text, font, max_width)
         line_h = int((font.size if hasattr(font, "size") else 24) * 1.25)
@@ -2460,18 +2474,30 @@ def draw_text(draw, xy, text, font, fill="white", anchor="mm", align="center", m
         x, y = xy
         start_y = y - total_h / 2 if anchor == "mm" else y
         for i, line in enumerate(lines):
-            draw.text((x, start_y + i * line_h), ar_text(line), font=font, fill=fill, anchor="ma", align=align)
+            draw_text(draw, (x, start_y + i * line_h), line, font, fill=fill, anchor="ma", align=align)
         return
-    draw.text(xy, ar_text(text), font=font, fill=fill, anchor=anchor, align=align)
+    try:
+        if PIL_RAQM and has_arabic(text):
+            draw.text(xy, text, font=font, fill=fill, anchor=anchor, align=align, direction="rtl", language="ar")
+        else:
+            draw.text(xy, ar_text(text), font=font, fill=fill, anchor=anchor, align=align)
+    except Exception:
+        try:
+            draw.text(xy, ar_text(text), font=font, fill=fill, anchor=anchor, align=align)
+        except Exception:
+            draw.text(xy, text, font=font, fill=fill, anchor=anchor)
 
 
 def text_width(draw, text, font):
+    text = "" if text is None else str(text)
     try:
-        bbox = draw.textbbox((0, 0), ar_text(text), font=font)
+        if PIL_RAQM and has_arabic(text):
+            bbox = draw.textbbox((0, 0), text, font=font, direction="rtl", language="ar")
+        else:
+            bbox = draw.textbbox((0, 0), ar_text(text), font=font)
         return bbox[2] - bbox[0]
     except Exception:
         return len(str(text)) * 12
-
 
 def wrap_text(draw, text, font, max_width):
     text = "" if text is None else str(text)
@@ -2904,28 +2930,67 @@ def build_matches_announcement(day_name, matches):
 
 
 def create_matches_image(day_name, matches):
+    """تصميم مباريات للقروب: صورة أفقية واضحة بالأعلام، بدون قالب جامد.
+    يضبط حجم الصفوف حسب عدد المباريات ويقلل الفراغ.
+    """
     ensure_generated_dir()
     count = max(len(matches), 1)
-    h = max(850, 260 + count * 150)
-    img, draw = make_canvas(1400, h)
-    draw_text(draw, (700, 80), "مونديال المصيف 2026", get_font(62), fill="#FFFFFF")
-    draw_text(draw, (700, 145), f"مباريات اليوم ({day_name})", get_font(42), fill="#FDE68A")
-    y = 230
+    width = 1600
+    # ارتفاع مناسب للقروب، ويزيد إذا المباريات كثيرة
+    row_h = 170 if count <= 3 else 140
+    gap = 22 if count <= 3 else 16
+    header_h = 230
+    footer_h = 125
+    height = max(900, header_h + count * row_h + max(0, count-1) * gap + footer_h + 40)
+
+    img, draw = make_canvas(width, height)
+
+    # طبقة تظليل في المنتصف عشان النص يبان
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    od.rounded_rectangle((60, 45, width-60, height-45), radius=48, fill="#02061770", outline="#FFFFFF18", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    # العنوان
+    draw_text(draw, (width//2, 90), "مونديال المصيف 2026", get_font(64), fill="#FFFFFF")
+    draw_text(draw, (width//2, 155), f"مباريات اليوم ({day_name})", get_font(42), fill="#FDE68A")
+    draw.line((210, 205, width-210, 205), fill="#FFFFFF35", width=2)
+
+    colors = ["#7C3AED", "#2563EB", "#0891B2", "#059669", "#D97706", "#DC2626", "#4F46E5"]
+    y = header_h
     for i, (a, b, t) in enumerate(matches, start=1):
-        # ألوان كروت متغيرة بدون قالب ممل
-        colors = ["#7C3AED", "#2563EB", "#10B981", "#F59E0B", "#EF4444", "#0EA5E9"]
         c = colors[(i-1) % len(colors)]
-        rounded_rect(draw, (90, y, 1310, y+120), radius=36, fill=c+"AA", outline="#FFFFFF30", width=2)
-        paste_flag(img, a, (1080, y+20, 1225, y+100))
-        paste_flag(img, b, (175, y+20, 320, y+100))
-        draw_text(draw, (920, y+60), a, get_font(38), fill="#FFFFFF", max_width=260)
-        draw_text(draw, (700, y+60), "×", get_font(56), fill="#FDE68A")
-        draw_text(draw, (480, y+60), b, get_font(38), fill="#FFFFFF", max_width=260)
+        # كرت المباراة
+        rounded_rect(draw, (90, y, width-90, y+row_h), radius=36, fill=c+"D5", outline="#FFFFFF30", width=2)
+
+        # مناطق الأعلام
+        flag_w = 180 if count <= 3 else 145
+        flag_h = 110 if count <= 3 else 90
+        cy = y + row_h//2
+        # يمين الفريق الأول
+        paste_flag(img, a, (width-285, cy-flag_h//2, width-105, cy+flag_h//2))
+        # يسار الفريق الثاني
+        paste_flag(img, b, (105, cy-flag_h//2, 285, cy+flag_h//2))
+
+        # أسماء المنتخبات
+        name_font = get_font(46 if count <= 3 else 38)
+        draw_text(draw, (width-470, cy), a, name_font, fill="#FFFFFF", max_width=360)
+        draw_text(draw, (470, cy), b, name_font, fill="#FFFFFF", max_width=360)
+
+        # علامة × والوقت
+        draw_text(draw, (width//2, cy-20), "×", get_font(58 if count <= 3 else 48), fill="#FDE68A")
         if t:
-            rounded_rect(draw, (610, y+82, 790, y+115), radius=16, fill="#111827CC", outline="#FFFFFF25", width=1)
-            draw_text(draw, (700, y+99), t, get_font(24), fill="#FFFFFF")
-        y += 150
-    draw_text(draw, (700, h-70), "حياكم في محلكم 🏆", get_font(38), fill="#FFFFFF")
+            badge_w = 210 if count <= 3 else 180
+            badge_h = 44 if count <= 3 else 38
+            rounded_rect(draw, (width//2-badge_w//2, cy+32, width//2+badge_w//2, cy+32+badge_h), radius=18, fill="#020617E6", outline="#FFFFFF40", width=1)
+            draw_text(draw, (width//2, cy+32+badge_h//2), t, get_font(26 if count <= 3 else 22), fill="#FFFFFF")
+        y += row_h + gap
+
+    # عبارة الختام
+    footer_y = min(height-86, y+55)
+    draw_text(draw, (width//2, footer_y), "حياكم في محلكم 🏆", get_font(42), fill="#FFFFFF")
+
     path = os.path.join(GENERATED_DIR, f"matches_{_safe_filename(day_name)}.png")
     img.save(path, quality=95)
     return path
