@@ -3238,22 +3238,778 @@ async def results_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"تم حساب النتائج، لكن تعذر إنشاء الصورة التلقائية ❌\n{e}")
 
 
+
+# ============================================================
+# V10 - إضافات نهائية: مواجهات بعد النتائج، كأس الفانتزي، بطاقات، تقارير، هدافين، نتائج مباريات
+# ============================================================
+import random
+
+MATCHUPS_FILE = "matchups_history.json"
+CUP_FILE = "fantasy_cup_history.json"
+
+
+def font_candidates():
+    """خطوط عربية مرتبة بالأولوية: عنوان ثم نص، يختار أول الموجود."""
+    return [
+        "Tajawal-Black.ttf",
+        "Tajawal-ExtraBold.ttf",
+        "Cairo-Bold.ttf",
+        "Cairo-Bold-1.ttf",
+        "NotoNaskhArabic-Bold.ttf",
+        "Amiri-Bold.ttf",
+        "NotoNaskhArabic-Regular.ttf",
+        "/app/Tajawal-Black.ttf",
+        "/app/Tajawal-ExtraBold.ttf",
+        "/app/Cairo-Bold.ttf",
+        "/app/Cairo-Bold-1.ttf",
+        "/app/NotoNaskhArabic-Bold.ttf",
+        "/app/Amiri-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+
+
+def load_json_file(path, default):
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if data is not None else default
+    except Exception:
+        return default
+
+
+def save_json_file(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def active_participants_for_day(day):
+    return [r for r in read_day_rows(day) if r.get("participated")]
+
+
+def daily_score_map(day):
+    rows = read_day_rows(day)
+    return {r["participant"]: r["total"] for r in rows}
+
+
+def previous_ranking_before_day(day):
+    try:
+        d = int(day)
+    except Exception:
+        d = 1
+    if d <= 1:
+        return {name: i for i, name in enumerate(PARTICIPANTS, start=1)}
+    stats = collect_stats(1, d - 1)
+    if not stats["days"]:
+        return {name: i for i, name in enumerate(PARTICIPANTS, start=1)}
+    return {name: i for i, name in enumerate(stats["ranking"], start=1)}
+
+
+def generate_matchups_for_day(day, force=False):
+    """مواجهات اليوم تظهر بعد النتائج فقط. يدخل فقط المشاركون فعليًا في ذلك اليوم."""
+    day_key = str(day)
+    history = load_json_file(MATCHUPS_FILE, {})
+    if (not force) and day_key in history:
+        return history[day_key]
+
+    active = [r["participant"] for r in active_participants_for_day(day)]
+    if not active:
+        result = {"day": day_key, "pairs": [], "bye": None, "note": "لا يوجد مشاركون"}
+        history[day_key] = result
+        save_json_file(MATCHUPS_FILE, history)
+        return result
+
+    # قرعة ثابتة حسب اليوم، غير مرتبطة بالنقاط.
+    names = sorted(active)
+    rnd = random.Random(int(day) * 2026 + 77)
+    rnd.shuffle(names)
+
+    bye = None
+    if len(names) % 2 == 1:
+        bye = names.pop()
+
+    pairs = []
+    scores = daily_score_map(day)
+    for i in range(0, len(names), 2):
+        a, b = names[i], names[i + 1]
+        pa, pb = scores.get(a, 0), scores.get(b, 0)
+        if pa > pb:
+            winner, status = a, "فوز"
+        elif pb > pa:
+            winner, status = b, "فوز"
+        else:
+            # في التعادل يفوز الأعلى ترتيبًا قبل الجولة
+            ranks = previous_ranking_before_day(day)
+            winner = a if ranks.get(a, 999) <= ranks.get(b, 999) else b
+            status = "تعادل — حُسم بالأفضلية"
+        pairs.append({"a": a, "a_points": pa, "b": b, "b_points": pb, "winner": winner, "status": status})
+
+    result = {"day": day_key, "pairs": pairs, "bye": bye, "note": ""}
+    history[day_key] = result
+    save_json_file(MATCHUPS_FILE, history)
+    return result
+
+
+def matchup_lines(day):
+    data = generate_matchups_for_day(day)
+    if not data.get("pairs") and not data.get("bye"):
+        return ["⚔️ مواجهات اليوم:", "لا توجد مواجهات — لا يوجد مشاركون في هذا اليوم."]
+    lines = [f"⚔️ مواجهات اليوم {ordinal_day(day)}"]
+    for p in data.get("pairs", []):
+        mark = "🤝" if "تعادل" in p.get("status", "") else "✅"
+        lines.append(f"{p['a']} {p['a_points']} - {p['b_points']} {p['b']} {mark} الفائز: {p['winner']}")
+    if data.get("bye"):
+        lines.append(f"🟡 راحة الجولة: {data['bye']}")
+    return lines
+
+
+def matchup_wins_map(start_day=1, end_day=31):
+    wins = Counter()
+    for day in get_existing_days(start_day, end_day):
+        data = generate_matchups_for_day(day)
+        for p in data.get("pairs", []):
+            if p.get("winner"):
+                wins[p["winner"]] += 1
+        if data.get("bye"):
+            # الراحة لا تحتسب فوزًا.
+            pass
+    return wins
+
+
+def add_matchups_sheet_to_dashboard(xlsx_path, start_day=1, end_day=31):
+    wb = load_workbook(xlsx_path)
+    if "سجل المواجهات" in wb.sheetnames:
+        del wb["سجل المواجهات"]
+    ws = wb.create_sheet("سجل المواجهات")
+    ws.sheet_view.rightToLeft = True
+    ws.append(["اليوم", "المشارك 1", "نقاطه", "المشارك 2", "نقاطه", "النتيجة", "الفائز"])
+    for day in get_existing_days(start_day, end_day):
+        data = generate_matchups_for_day(day)
+        if not data.get("pairs") and not data.get("bye"):
+            ws.append([day, "لا توجد مواجهات", "", "لا يوجد مشاركون", "", "-", "-"])
+            continue
+        for p in data.get("pairs", []):
+            ws.append([day, p["a"], p["a_points"], p["b"], p["b_points"], p.get("status", ""), p.get("winner", "")])
+        if data.get("bye"):
+            ws.append([day, data["bye"], "راحة", "-", "-", "راحة الجولة", data["bye"]])
+    style_sheet(ws)
+    wb.save(xlsx_path)
+
+
+def build_daily_summary_text(day):
+    data = build_day_summary(day)
+    winners = " + ".join(data["winners"]) if data["winners"] else "لا يوجد"
+    top_rows = data["sorted_rows"][:5]
+    lines = [
+        f"📊 ملخص اليوم {ordinal_day(day)}",
+        f"👥 عدد المشاركين: {len(data['participants'])}",
+        f"🏆 أسطورة اليوم: {winners} — {data['max_score']} نقطة",
+        "",
+        "🔥 أفضل 5:",
+    ]
+    for idx, r in enumerate(top_rows, start=1):
+        lines.append(f"{idx}. {r['participant']} — {r['total']} نقطة")
+    top_cap = data.get("top_captain")
+    top_keep = data.get("top_keeper")
+    if top_cap:
+        lines.append(f"\n👑 أفضل كابتن: {top_cap['participant']} — +{top_cap['captain_points']}")
+    if top_keep:
+        lines.append(f"🧤 أفضل حارس: {top_keep['participant']} — +{top_keep['keeper_points']}")
+    lines.append("")
+    lines.extend(matchup_lines(day))
+    return "\n".join(lines)
+
+
+def create_daily_result_image(day, goals_count=None, clean_sheets=None):
+    ensure_generated_dir()
+    data = build_day_summary(day)
+    rows = data["sorted_rows"]
+    matchups = generate_matchups_for_day(day)
+    extra_match_rows = len(matchups.get("pairs", [])) + (1 if matchups.get("bye") else 0)
+    h = max(1180, 520 + len(rows) * 54 + extra_match_rows * 44 + 260)
+    img, draw = make_canvas(1400, h)
+    title_f = get_font(58)
+    sub_f = get_font(34)
+    small_f = get_font(25)
+    row_f = get_font(27)
+
+    draw_text(draw, (700, 85), f"فانتزي المصيف 2026 — اليوم {ordinal_day(day)}", title_f, fill="#FFFFFF")
+    draw_text(draw, (700, 145), "نتائج اليوم وترتيب المشاركين", sub_f, fill="#FDE68A")
+
+    winners = data["winners"]
+    legends = " + ".join(winners) if winners else "لا يوجد"
+    rounded_rect(draw, (80, 190, 1320, 340), radius=38, fill="#7C3AEDDD", outline="#FFFFFF33", width=2)
+    draw_text(draw, (700, 235), "🏆 أسطورة اليوم 🏆", sub_f, fill="#FFFFFF")
+    draw_text(draw, (700, 295), f"{legends} — {data['max_score']} نقطة", get_font(44), fill="#FFF6D6")
+
+    top_cap = data["top_captain"]
+    top_keep = data["top_keeper"]
+    cards = [
+        (80, 370, 455, 500, "👑 أفضل كابتن", f"{top_cap['participant']} +{top_cap['captain_points']}" if top_cap else "-", "#2563EB"),
+        (512, 370, 887, 500, "🧤 أفضل حارس", f"{top_keep['participant']} +{top_keep['keeper_points']}" if top_keep else "-", "#10B981"),
+        (945, 370, 1320, 500, "👥 المشاركون", f"{len(data['participants'])} مشارك", "#F59E0B"),
+    ]
+    for x1,y1,x2,y2,t,v,c in cards:
+        rounded_rect(draw, (x1,y1,x2,y2), radius=28, fill=c+"DD", outline="#FFFFFF33", width=2)
+        draw_text(draw, ((x1+x2)//2, y1+38), t, small_f, fill="#FFFFFF")
+        draw_text(draw, ((x1+x2)//2, y1+92), v, sub_f, fill="#FFFFFF", max_width=x2-x1-20)
+
+    y = 545
+    rounded_rect(draw, (80, y, 1320, y+58), radius=18, fill="#FFFFFF22", outline="#FFFFFF30", width=1)
+    headers = [(1180, "المشارك"), (850, "النقاط"), (640, "الحارس"), (410, "الكابتن"), (170, "المركز")]
+    for x, t in headers:
+        draw_text(draw, (x, y+30), t, small_f, fill="#FFFFFF")
+    y += 70
+    for idx, r in enumerate(rows, start=1):
+        fill = "#FFFFFF16" if idx % 2 else "#FFFFFF0C"
+        if idx == 1:
+            fill = "#F2B70544"
+        rounded_rect(draw, (80, y, 1320, y+48), radius=14, fill=fill, outline="#FFFFFF18", width=1)
+        draw_text(draw, (1180, y+25), r["participant"], row_f, fill="#FFFFFF")
+        draw_text(draw, (850, y+25), str(r["total"]), row_f, fill="#FDE68A")
+        draw_text(draw, (640, y+25), f"+{r['keeper_points']}", row_f, fill="#A7F3D0")
+        draw_text(draw, (410, y+25), f"+{r['captain_points']}", row_f, fill="#C4B5FD")
+        medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else str(idx)
+        draw_text(draw, (170, y+25), medal, row_f, fill="#FFFFFF")
+        y += 54
+
+    y += 22
+    rounded_rect(draw, (80, y, 1320, y+max(145, 58 + extra_match_rows*42)), radius=26, fill="#111827CC", outline="#FFFFFF22", width=2)
+    draw_text(draw, (700, y+35), "⚔️ مواجهات اليوم", sub_f, fill="#FDE68A")
+    yy = y + 82
+    if not matchups.get("pairs") and not matchups.get("bye"):
+        draw_text(draw, (700, yy), "لا توجد مواجهات — لا يوجد مشاركون", small_f, fill="#FFFFFF")
+        yy += 42
+    else:
+        for p in matchups.get("pairs", []):
+            line = f"{p['a']} {p['a_points']} - {p['b_points']} {p['b']}  |  الفائز: {p['winner']}"
+            draw_text(draw, (700, yy), line, small_f, fill="#FFFFFF")
+            yy += 42
+        if matchups.get("bye"):
+            draw_text(draw, (700, yy), f"🟡 راحة الجولة: {matchups['bye']}", small_f, fill="#FDE68A")
+            yy += 42
+    y = yy + 25
+
+    box_h = 170
+    rounded_rect(draw, (80, y, 670, y+box_h), radius=26, fill="#111827CC", outline="#FFFFFF22", width=2)
+    rounded_rect(draw, (730, y, 1320, y+box_h), radius=26, fill="#111827CC", outline="#FFFFFF22", width=2)
+    goals_lines = [f"{p} — {c}" for p,c in (goals_count or {}).items()] if goals_count else [f"{p} — {pts} نقطة" for p,pts in data["player_points"].most_common(5)] or ["لا يوجد"]
+    clean_lines = clean_sheets or list(data["keeper_points"].keys()) or ["لا يوجد"]
+    draw_text(draw, (375, y+35), "⚽ الهدافون", sub_f, fill="#FFFFFF")
+    draw_text(draw, (375, y+105), "\n".join(goals_lines[:4]), small_f, fill="#E5E7EB", max_width=520)
+    draw_text(draw, (1025, y+35), "🧤 الكلين شيت", sub_f, fill="#FFFFFF")
+    draw_text(draw, (1025, y+105), "\n".join(clean_lines[:4]), small_f, fill="#E5E7EB", max_width=520)
+
+    path = os.path.join(GENERATED_DIR, f"daily_result_day_{day}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def create_matches_image(day_name, matches):
+    ensure_generated_dir()
+    count = max(len(matches), 1)
+    width = 1600
+    row_h = 170 if count <= 3 else 140
+    gap = 22 if count <= 3 else 16
+    header_h = 230
+    footer_h = 125
+    height = max(900, header_h + count * row_h + max(0, count-1) * gap + footer_h + 40)
+    img, draw = make_canvas(width, height)
+    overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
+    od.rounded_rectangle((60,45,width-60,height-45), radius=48, fill="#02061770", outline="#FFFFFF18", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    draw_text(draw, (width//2, 90), "مونديال المصيف 2026", get_font(64), fill="#FFFFFF")
+    draw_text(draw, (width//2, 155), f"مباريات اليوم ({day_name})", get_font(42), fill="#FDE68A")
+    draw.line((210,205,width-210,205), fill="#FFFFFF35", width=2)
+    colors = ["#7C3AED", "#2563EB", "#0891B2", "#059669", "#D97706", "#DC2626", "#4F46E5"]
+    y = header_h
+    for i, (a,b,t) in enumerate(matches, start=1):
+        c = colors[(i-1)%len(colors)]
+        rounded_rect(draw, (90,y,width-90,y+row_h), radius=36, fill=c+"D5", outline="#FFFFFF30", width=2)
+        flag_w = 180 if count <= 3 else 145
+        flag_h = 110 if count <= 3 else 90
+        cy = y + row_h//2
+        paste_flag(img, a, (width-285, cy-flag_h//2, width-105, cy+flag_h//2))
+        paste_flag(img, b, (105, cy-flag_h//2, 285, cy+flag_h//2))
+        name_font = get_font(46 if count <= 3 else 38)
+        draw_text(draw, (width-470, cy), a, name_font, fill="#FFFFFF", max_width=360)
+        draw_text(draw, (470, cy), b, name_font, fill="#FFFFFF", max_width=360)
+        draw_text(draw, (width//2, cy-20), "×", get_font(58 if count <= 3 else 48), fill="#FDE68A")
+        if t:
+            badge_w = 210 if count <= 3 else 180
+            badge_h = 44 if count <= 3 else 38
+            rounded_rect(draw, (width//2-badge_w//2, cy+32, width//2+badge_w//2, cy+32+badge_h), radius=18, fill="#020617E6", outline="#FFFFFF40", width=1)
+            draw_text(draw, (width//2, cy+32+badge_h//2), t, get_font(26 if count <= 3 else 22), fill="#FFFFFF")
+        y += row_h + gap
+    footer_y = min(height-86, y+55)
+    draw_text(draw, (width//2, footer_y), "المصيف ينقل لكم الحدث", get_font(42), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, f"matches_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def parse_match_results_text(text):
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    results = []
+    for line in lines[1:]:
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 4:
+                try:
+                    results.append((parts[0], int(parts[1]), int(parts[2]), parts[3]))
+                    continue
+                except Exception:
+                    pass
+            if len(parts) == 2:
+                m1 = re.match(r"(.+?)(\d+)\s*$", parts[0])
+                m2 = re.match(r"^(\d+)\s*(.+)$", parts[1])
+                if m1 and m2:
+                    results.append((normalize_name(m1.group(1)), int(m1.group(2)), int(m2.group(1)), normalize_name(m2.group(2))))
+        m = re.match(r"(.+?)\s+(\d+)\s*[-–:]\s*(\d+)\s+(.+)$", line)
+        if m:
+            results.append((normalize_name(m.group(1)), int(m.group(2)), int(m.group(3)), normalize_name(m.group(4))))
+    return results
+
+
+def create_match_results_image(results):
+    ensure_generated_dir()
+    width = 1600
+    row_h = 165 if len(results) <= 3 else 135
+    height = max(820, 230 + len(results)*row_h + 180)
+    img, draw = make_canvas(width, height)
+    draw_text(draw, (width//2, 92), "مونديال المصيف 2026", get_font(64), fill="#FFFFFF")
+    draw_text(draw, (width//2, 160), "نتائج مباريات اليوم", get_font(46), fill="#FDE68A")
+    y = 240
+    colors = ["#7C3AED", "#2563EB", "#0891B2", "#059669", "#D97706"]
+    for i,(a,sa,sb,b) in enumerate(results, start=1):
+        c = colors[(i-1)%len(colors)]
+        rounded_rect(draw, (90,y,width-90,y+row_h), radius=36, fill=c+"D5", outline="#FFFFFF30", width=2)
+        cy = y + row_h//2
+        paste_flag(img, a, (width-280, cy-55, width-105, cy+55))
+        paste_flag(img, b, (105, cy-55, 280, cy+55))
+        draw_text(draw, (width-480, cy), a, get_font(44), fill="#FFFFFF", max_width=340)
+        draw_text(draw, (480, cy), b, get_font(44), fill="#FFFFFF", max_width=340)
+        rounded_rect(draw, (width//2-125, cy-44, width//2+125, cy+44), radius=26, fill="#020617E6", outline="#FDE68A", width=2)
+        draw_text(draw, (width//2, cy), f"{sa} - {sb}", get_font(54), fill="#FDE68A")
+        y += row_h + 24
+    draw_text(draw, (width//2, height-70), "المصيف ينقل لكم الحدث", get_font(42), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, "match_results_today.png")
+    img.save(path, quality=95)
+    return path
+
+
+def build_match_results_caption(results):
+    lines = ["🏆 نتائج مباريات اليوم 🏆", ""]
+    for a,sa,sb,b in results:
+        lines.append(f"{a} {sa} - {sb} {b}")
+    lines.append("\nالمصيف ينقل لكم الحدث")
+    return "\n".join(lines)
+
+
+async def match_results_today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    results = parse_match_results_text(update.message.text)
+    if not results:
+        await update.message.reply_text("اكتبها كذا:\n/نتائج_مباريات_اليوم\nالسعودية|2|1|إسبانيا\nفرنسا|3|0|البرازيل")
+        return
+    try:
+        path = create_match_results_image(results)
+        await send_photo_path(update, path, build_match_results_caption(results))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم نتائج المباريات ❌\n{e}")
+
+
+def parse_scorers_text(text):
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    items = []
+    for line in lines[1:]:
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 2:
+            name = parts[0]
+            goals = score_to_int(parts[1])
+            team = parts[2] if len(parts) >= 3 else ""
+            if name and goals > 0:
+                items.append((name, goals, team))
+    return sorted(items, key=lambda x: (-x[1], x[0]))
+
+
+def create_top_scorers_image(items):
+    ensure_generated_dir()
+    width = 1400
+    row_h = 110
+    height = max(850, 230 + len(items[:10])*row_h + 150)
+    img, draw = make_canvas(width, height)
+    draw_text(draw, (width//2, 85), "مونديال المصيف 2026", get_font(60), fill="#FFFFFF")
+    draw_text(draw, (width//2, 150), "هدافين البطولة حتى الآن", get_font(44), fill="#FDE68A")
+    y = 235
+    for i,(name,goals,team) in enumerate(items[:10], start=1):
+        fill = "#F2B70555" if i == 1 else "#FFFFFF16"
+        rounded_rect(draw, (90,y,width-90,y+88), radius=28, fill=fill, outline="#FFFFFF25", width=2)
+        draw_text(draw, (1220, y+44), str(i), get_font(46), fill="#FDE68A" if i == 1 else "#FFFFFF")
+        if team:
+            paste_flag(img, team, (1040, y+12, 1130, y+76))
+        draw_text(draw, (790, y+44), name, get_font(42), fill="#FFFFFF", max_width=430)
+        draw_text(draw, (250, y+44), f"{goals} {'هدف' if goals == 1 else 'أهداف'}", get_font(38), fill="#FDE68A")
+        y += row_h
+    draw_text(draw, (width//2, height-70), "المصيف ينقل لكم الحدث", get_font(38), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, "top_scorers.png")
+    img.save(path, quality=95)
+    return path
+
+
+def build_top_scorers_caption(items):
+    lines = ["⚽ هدافين البطولة حتى الآن", ""]
+    for i,(name,goals,team) in enumerate(items, start=1):
+        team_txt = f" — {team}" if team else ""
+        lines.append(f"{i}. {name}{team_txt} — {goals} {'هدف' if goals == 1 else 'أهداف'}")
+    lines.append("\nالمصيف ينقل لكم الحدث")
+    return "\n".join(lines)
+
+
+async def top_scorers_design_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    items = parse_scorers_text(update.message.text)
+    if not items:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_هدافين\nراؤول خيمينيز|4|المكسيك\nفلوريان فيرتز|3|ألمانيا")
+        return
+    try:
+        path = create_top_scorers_image(items)
+        await send_photo_path(update, path, build_top_scorers_caption(items))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم الهدافين ❌\n{e}")
+
+
+def find_participant_name(query):
+    q = normalize_name(query)
+    if not q:
+        return None
+    for name in PARTICIPANTS:
+        if normalize_name(name) == q:
+            return name
+    for name in PARTICIPANTS:
+        if q in normalize_name(name) or normalize_name(name) in q:
+            return name
+    return None
+
+
+def participant_best_captain(name, start_day=1, end_day=31):
+    best = ("-", 0, "-")
+    for day in get_existing_days(start_day, end_day):
+        for r in read_day_rows(day):
+            if r["participant"] == name and r.get("captain_points", 0) > best[1]:
+                best = (r.get("captain", "-"), r.get("captain_points", 0), day)
+    return best
+
+
+def create_participant_card_image(name, start_day=1, end_day=31):
+    ensure_generated_dir()
+    stats = collect_stats(start_day, end_day)
+    if name not in PARTICIPANTS:
+        raise ValueError("اسم المشارك غير موجود")
+    rank = stats["ranking"].index(name) + 1 if name in stats["ranking"] else "-"
+    total = stats["totals"].get(name, 0)
+    day_scores = stats["scores_by_day"].get(name, {})
+    best_day = max(day_scores, key=lambda d: day_scores[d]) if day_scores else "-"
+    worst_day = min(day_scores, key=lambda d: day_scores[d]) if day_scores else "-"
+    best_score = day_scores.get(best_day, 0) if best_day != "-" else 0
+    worst_score = day_scores.get(worst_day, 0) if worst_day != "-" else 0
+    best_cap, best_cap_pts, best_cap_day = participant_best_captain(name, start_day, end_day)
+    wins = matchup_wins_map(start_day, end_day).get(name, 0)
+    pc = stats["participation_count"].get(name, 0)
+    days_count = len(stats["days"])
+    pct = f"{round(pc / days_count * 100, 1)}%" if days_count else "0%"
+
+    img, draw = make_canvas(1200, 900)
+    draw_text(draw, (600, 85), "بطاقة مشارك فانتزي المصيف", get_font(52), fill="#FFFFFF")
+    rounded_rect(draw, (90,145,1110,270), radius=38, fill="#7C3AEDDD", outline="#FFFFFF33", width=2)
+    draw_text(draw, (600, 205), name, get_font(64), fill="#FDE68A")
+    cards = [
+        (90,310,360,430,"المركز", f"#{rank}"),
+        (465,310,735,430,"النقاط", str(total)),
+        (840,310,1110,430,"أسطورة اليوم", str(stats["daily_wins"].get(name,0))),
+        (90,470,360,590,"أفضل يوم", f"{best_day} — {best_score}"),
+        (465,470,735,590,"أسوأ يوم", f"{worst_day} — {worst_score}"),
+        (840,470,1110,590,"نسبة المشاركة", pct),
+        (90,630,545,750,"أفضل كابتن", f"{best_cap} +{best_cap_pts}"),
+        (655,630,1110,750,"فوز المواجهات", str(wins)),
+    ]
+    for x1,y1,x2,y2,t,v in cards:
+        rounded_rect(draw,(x1,y1,x2,y2), radius=28, fill="#111827CC", outline="#FFFFFF25", width=2)
+        draw_text(draw, ((x1+x2)//2, y1+34), t, get_font(26), fill="#E5E7EB")
+        draw_text(draw, ((x1+x2)//2, y1+82), v, get_font(36), fill="#FFFFFF", max_width=x2-x1-24)
+    draw_text(draw, (600, 820), "فانتزي المصيف 2026", get_font(34), fill="#FDE68A")
+    path = os.path.join(GENERATED_DIR, f"participant_card_{_safe_filename(name)}.png")
+    img.save(path, quality=95)
+    return path
+
+
+async def participant_card_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text or ""
+    query = re.sub(r"^/بطاقة\s*", "", text).strip()
+    name = find_participant_name(query)
+    if not name:
+        await update.message.reply_text("اكتب اسم المشارك بعد الأمر، مثال:\n/بطاقة فارس سالم")
+        return
+    try:
+        path = create_participant_card_image(name)
+        await send_photo_path(update, path, f"بطاقة {name} ✅")
+    except Exception as e:
+        await update.message.reply_text(f"تعذر إنشاء البطاقة ❌\n{e}")
+
+
+def period_stats(start_day, end_day):
+    days = get_existing_days(start_day, end_day)
+    totals = Counter()
+    cap_points = Counter()
+    keeper_points = Counter()
+    player_impact = Counter()
+    player_zero_popularity = Counter()
+    active_counts = Counter()
+    for day in days:
+        for r in read_day_rows(day):
+            if r.get("participated"):
+                totals[r["participant"]] += r["total"]
+                active_counts[r["participant"]] += 1
+                cap_points[r["participant"]] += r.get("captain_points", 0)
+                if not is_no_participation(r.get("keeper")):
+                    keeper_points[r["keeper"]] += r.get("keeper_points", 0)
+                for pk, ptsk in (("p1","p1_points"),("p2","p2_points"),("p3","p3_points")):
+                    p = r.get(pk)
+                    if not is_no_participation(p):
+                        pts = r.get(ptsk,0)
+                        extra = r.get("captain_points",0) if r.get("captain") == p else 0
+                        player_impact[p] += pts + extra
+                        if pts == 0:
+                            player_zero_popularity[p] += 1
+    return days, totals, cap_points, keeper_points, player_impact, player_zero_popularity, active_counts
+
+
+def resolve_cup_match(a, b, day, ranks_before):
+    rows = {r["participant"]: r for r in read_day_rows(day)}
+    ra, rb = rows.get(a), rows.get(b)
+    a_play = bool(ra and ra.get("participated"))
+    b_play = bool(rb and rb.get("participated"))
+    pa = ra.get("total", 0) if ra else 0
+    pb = rb.get("total", 0) if rb else 0
+    if a_play and not b_play:
+        return a, pa, pb, "انسحاب الخصم"
+    if b_play and not a_play:
+        return b, pa, pb, "انسحاب الخصم"
+    if not a_play and not b_play:
+        winner = a if ranks_before.get(a, 999) <= ranks_before.get(b, 999) else b
+        return winner, pa, pb, "الاثنان لم يشاركا — حُسمت بالأفضلية"
+    if pa > pb:
+        return a, pa, pb, "فوز بالنقاط"
+    if pb > pa:
+        return b, pa, pb, "فوز بالنقاط"
+    winner = a if ranks_before.get(a, 999) <= ranks_before.get(b, 999) else b
+    return winner, pa, pb, "تعادل — حُسمت بالأفضلية"
+
+
+def compute_fantasy_cup(start_day, end_day):
+    """كأس كل 4 أيام: دور تمهيدي ثم ربع ثم نصف ثم نهائي. مناسب لـ12 مشارك."""
+    ranks = previous_ranking_before_day(start_day)
+    seeds = sorted(PARTICIPANTS, key=lambda n: ranks.get(n, 999))
+    days = list(range(int(start_day), int(end_day)+1))
+    if len(days) < 4:
+        return {"champion": "-", "rounds": [], "note": "الفترة أقل من 4 أيام"}
+    d1,d2,d3,d4 = days[:4]
+    rounds = []
+    # دور 12: أول 4 راحة، 5-12 يلعبون
+    bye4 = seeds[:4]
+    prelim_pairs = [(seeds[4], seeds[11]), (seeds[5], seeds[10]), (seeds[6], seeds[9]), (seeds[7], seeds[8])] if len(seeds) >= 12 else []
+    prelim_winners = []
+    for a,b in prelim_pairs:
+        w,pa,pb,st = resolve_cup_match(a,b,d1,ranks)
+        prelim_winners.append(w)
+        rounds.append({"round":"دور 12", "day":d1, "a":a, "b":b, "pa":pa, "pb":pb, "winner":w, "status":st})
+    q_players = [bye4[0], prelim_winners[0], bye4[3], prelim_winners[3], bye4[1], prelim_winners[1], bye4[2], prelim_winners[2]] if len(prelim_winners)==4 else seeds[:8]
+    q_pairs = [(q_players[0],q_players[1]), (q_players[2],q_players[3]), (q_players[4],q_players[5]), (q_players[6],q_players[7])]
+    q_winners = []
+    for a,b in q_pairs:
+        w,pa,pb,st = resolve_cup_match(a,b,d2,ranks)
+        q_winners.append(w)
+        rounds.append({"round":"ربع النهائي", "day":d2, "a":a, "b":b, "pa":pa, "pb":pb, "winner":w, "status":st})
+    s_pairs = [(q_winners[0], q_winners[1]), (q_winners[2], q_winners[3])]
+    s_winners = []
+    for a,b in s_pairs:
+        w,pa,pb,st = resolve_cup_match(a,b,d3,ranks)
+        s_winners.append(w)
+        rounds.append({"round":"نصف النهائي", "day":d3, "a":a, "b":b, "pa":pa, "pb":pb, "winner":w, "status":st})
+    a,b = s_winners[0], s_winners[1]
+    w,pa,pb,st = resolve_cup_match(a,b,d4,ranks)
+    rounds.append({"round":"النهائي", "day":d4, "a":a, "b":b, "pa":pa, "pb":pb, "winner":w, "status":st})
+    return {"champion": w, "rounds": rounds, "note": ""}
+
+
+def create_period_report_image(start_day, end_day):
+    ensure_generated_dir()
+    days, totals, cap_points, keeper_points, player_impact, player_zero, active_counts = period_stats(start_day, end_day)
+    if not days:
+        raise ValueError("ما فيه أيام في الفترة")
+    champion = totals.most_common(1)[0][0] if totals else "-"
+    best_participant = champion
+    best_cap = cap_points.most_common(1)[0] if cap_points else ("-",0)
+    best_keeper = keeper_points.most_common(1)[0] if keeper_points else ("-",0)
+    best_player = player_impact.most_common(1)[0] if player_impact else ("-",0)
+    disappointment = player_zero.most_common(1)[0] if player_zero else ("-",0)
+    mw = matchup_wins_map(start_day, end_day).most_common(1)
+    king_matchups = mw[0] if mw else ("-",0)
+    cup = compute_fantasy_cup(start_day, end_day)
+    cup_champ = cup.get("champion", "-")
+
+    img, draw = make_canvas(1400, 1050)
+    draw_text(draw, (700,80), f"تقرير الفترة من اليوم {start_day} إلى {end_day}", get_font(54), fill="#FFFFFF")
+    draw_text(draw, (700,140), "فانتزي المصيف 2026", get_font(38), fill="#FDE68A")
+    cards = [
+        (80,200,430,330,"🏆 بطل الفترة", f"{champion}\n{totals.get(champion,0)} نقطة"),
+        (525,200,875,330,"👑 أفضل كابتن", f"{best_cap[0]}\n+{best_cap[1]}"),
+        (970,200,1320,330,"🧤 أفضل حارس", f"{best_keeper[0]}\n{best_keeper[1]} نقطة"),
+        (80,380,430,510,"🔥 أكثر لاعب أفاد", f"{best_player[0]}\n{best_player[1]} نقطة"),
+        (525,380,875,510,"😅 خيبة الفترة", f"{disappointment[0]}\n{disappointment[1]} اختيارات صفر"),
+        (970,380,1320,510,"⚔️ ملك المواجهات", f"{king_matchups[0]}\n{king_matchups[1]} فوز"),
+        (80,560,1320,690,"🏆 بطل كأس الفانتزي", cup_champ),
+    ]
+    for x1,y1,x2,y2,t,v in cards:
+        rounded_rect(draw,(x1,y1,x2,y2), radius=30, fill="#111827CC", outline="#FFFFFF25", width=2)
+        draw_text(draw, ((x1+x2)//2, y1+38), t, get_font(27), fill="#E5E7EB")
+        draw_text(draw, ((x1+x2)//2, y1+88), v, get_font(38), fill="#FFFFFF", max_width=x2-x1-30)
+
+    y = 740
+    draw_text(draw, (700,y), "أفضل 5 في الفترة", get_font(36), fill="#FDE68A")
+    y += 55
+    for i,(name,pts) in enumerate(totals.most_common(5), start=1):
+        rounded_rect(draw,(170,y,1230,y+55), radius=18, fill="#FFFFFF16", outline="#FFFFFF20", width=1)
+        draw_text(draw,(1110,y+28), f"{i}. {name}", get_font(30), fill="#FFFFFF")
+        draw_text(draw,(300,y+28), f"{pts} نقطة", get_font(30), fill="#FDE68A")
+        y += 65
+    path = os.path.join(GENERATED_DIR, f"period_report_{start_day}_{end_day}.png")
+    img.save(path, quality=95)
+    return path
+
+
+async def period_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nums = get_numbers(update.message.text)
+    if len(nums) >= 2:
+        start_day, end_day = nums[0], nums[1]
+    else:
+        await update.message.reply_text("اكتب الفترة، مثال:\n/تقرير_الفترة 1 4")
+        return
+    if start_day > end_day:
+        start_day, end_day = end_day, start_day
+    try:
+        path = create_period_report_image(start_day, end_day)
+        await send_photo_path(update, path, f"تقرير الفترة {start_day} - {end_day} ✅")
+    except Exception as e:
+        await update.message.reply_text(f"تعذر إنشاء تقرير الفترة ❌\n{e}")
+
+
+async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        nums = get_numbers(update.message.text)
+        if len(nums) >= 2:
+            start_day, end_day = nums[0], nums[1]
+            if start_day > end_day:
+                start_day, end_day = end_day, start_day
+        elif len(nums) == 1:
+            start_day, end_day = 1, nums[0]
+        else:
+            start_day, end_day = 1, 31
+        await update.message.reply_text("جاري إنشاء ملف الإحصائيات... ⏳")
+        file_name, stats = create_dashboard(start_day, end_day)
+        if not stats.get("days"):
+            await update.message.reply_text("ما لقيت أيام لإحصائيات الداشبورد.")
+            return
+        add_matchups_sheet_to_dashboard(file_name, start_day, end_day)
+        caption = (
+            "تم إنشاء ملف الإحصائيات الكامل ✅\n"
+            f"النطاق: من اليوم {start_day} إلى اليوم {end_day}\n"
+            f"الأيام المحسوبة: {', '.join(map(str, stats['days']))}\n\n"
+            "الصفحات تشمل سجل المواجهات ✅"
+        )
+        with open(file_name, "rb") as file:
+            await update.message.reply_document(document=file, filename=file_name, caption=caption)
+    except Exception as e:
+        await update.message.reply_text(f"صار خطأ أثناء إنشاء الإحصائيات ❌\n\nالسبب:\n{e}")
+
+
+async def results_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    day = get_day(text)
+    if is_locked(day):
+        await update.message.reply_text(f"اليوم {day} مقفل ✅\nلفتحه اكتب: /فتح_يوم {day}")
+        return
+    if not os.path.exists(excel_file(day)):
+        await update.message.reply_text(f"ما لقيت ملف اليوم {day}. أضف التشكيلات أولًا.")
+        return
+    goals_count, clean_sheets = parse_results(text)
+    goal_missing, clean_missing = validate_results_names(day, goals_count, clean_sheets)
+    backup_files(f"before_results_day_{day}", files=[excel_file(day), LOCKED_FILE, MATCHUPS_FILE])
+    file_name = calculate_points(day, goals_count, clean_sheets)
+    # المواجهات بعد النتائج فقط
+    generate_matchups_for_day(day, force=True)
+    goals_text = "\n".join([f"- {name}: {count} هدف = {GOAL_POINTS.get(count, count * 5)} نقطة" for name, count in goals_count.items()]) or "لا يوجد"
+    clean_text = "\n".join([f"- {name}" for name in clean_sheets]) or "لا يوجد"
+    rows = read_day_rows(day)
+    max_score = max([r["total"] for r in rows], default=0)
+    winners = [r["participant"] for r in rows if r["total"] == max_score and max_score > 0]
+    legends_text = "، ".join(winners) if winners else "لا يوجد"
+    warnings = []
+    if goal_missing:
+        warnings.append("⚠️ هدافون غير موجودين في تشكيلات اليوم:\n" + "\n".join(goal_missing))
+    if clean_missing:
+        warnings.append("⚠️ حراس كلين شيت غير موجودين في تشكيلات اليوم:\n" + "\n".join(clean_missing))
+    caption = (
+        f"تم حساب نقاط اليوم {day} ✅\n\n"
+        f"الأهداف:\n{goals_text}\n\n"
+        f"الكلين شيت:\n{clean_text}\n\n"
+        f"🏆 أسطورة اليوم: {legends_text} — {max_score} نقطة\n\n"
+        + "\n".join(matchup_lines(day))
+    )
+    if warnings:
+        caption += "\n\n" + "\n\n".join(warnings)
+    with open(file_name, "rb") as file:
+        await update.message.reply_document(document=file, filename=file_name, caption=caption)
+    await update.message.reply_text(build_result_announcement(day, winners))
+    if load_settings().get("auto_images", True):
+        try:
+            path = create_daily_result_image(day, goals_count=goals_count, clean_sheets=clean_sheets)
+            await send_photo_path(update, path, build_result_announcement(day, winners))
+        except Exception as e:
+            await update.message.reply_text(f"تم حساب النتائج، لكن تعذر إنشاء الصورة التلقائية ❌\n{e}")
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "البوت جاهز ✅\n\n"
+        "الأوامر الأساسية:\n"
+        "/اضافه 5\n/نتائج 5\n/احصائيات\n/احصائيات 1 6\n/ترتيب_نص\n\n"
+        "أوامر الصور والتقارير:\n"
+        "/صورة_اليوم 6\n/صورة_الترتيب 1 6\n/صورة_الاساطير 1 6\n/صورة_احصائيات 1 6 لوحة عامة\n/صور_الاحصائيات 1 6\n"
+        "/بطاقة فارس سالم\n/تقرير_الفترة 1 4\n/تفعيل_الصور_التلقائية\n/إيقاف_الصور_التلقائية\n\n"
+        "أوامر التصاميم:\n"
+        "/تصميم_مباريات\n/نتائج_مباريات_اليوم\n/تصميم_هدافين\n\n"
+        "أوامر الفحص والنشر:\n"
+        "/الأيام\n/فحص 5\n/مشاركين 5\n/اسطورة 5\n/مقارنة 4 5\n/اعلان_اليوم 5\n/ملخص_اليوم 5\n\n"
+        "أوامر الاستيراد والنسخ:\n"
+        "/استيراد_ملف — أرسل ملف الإكسل لحاله ثم اكتب الأمر\n/اعتماد_استيراد\n/إلغاء_استيراد\n/نسخة_احتياطية\n/استرجاع_نسخة — أرسل ملف ZIP لحاله ثم اكتب الأمر\n/تنظيف_الأيام\n/تنظيف_الملفات\n\n"
+        "أوامر الأمان:\n"
+        "/مسح_نتائج 5\n/مسح_يوم 5\n/مسح_الكل تأكيد\n/استرجاع_آخر\n/قفل_يوم 5\n/فتح_يوم 5\n/معرفي"
+    )
+
+
 def main():
     if not TOKEN:
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
-
-    # تجهيز الأعلام إذا كان ملف worldcup_2026_flags_pack.zip مرفوعًا مع المشروع
     ensure_flags_assets()
-
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/start"), start))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/من_انا"), who_am_i))
-
-    # أي ملف يرسله المستخدم نحفظه، عشان يقدر يكتب الأمر بعده بدون تعليق
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:من_انا|معرفي)"), who_am_i))
     app.add_handler(MessageHandler(filters.Document.ALL, remember_last_file))
 
-    # صور وتحكم
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تفعيل_الصور_التلقائية"), admin_only(enable_auto_images)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إيقاف_الصور_التلقائية"), admin_only(disable_auto_images)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ايقاف_الصور_التلقائية"), admin_only(disable_auto_images)))
@@ -3262,23 +4018,21 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الاساطير"), legends_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), dashboard_sheet_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), all_dashboard_images_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بطاقة"), participant_card_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تقرير_الفترة"), period_report_command))
 
-    # إعلان وملخص ومباريات
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعلان_اليوم"), announcement_day_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملخص_اليوم"), summary_day_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات"), admin_only(matches_design_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_مباريات_اليوم"), admin_only(match_results_today_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين"), admin_only(top_scorers_design_command)))
 
-    # استيراد ملف Excel كامل مرة واحدة
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استيراد_ملف"), admin_only(import_excel_file)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_استيراد"), admin_only(approve_import)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_استيراد"), admin_only(cancel_import)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الغاء_استيراد"), admin_only(cancel_import)))
-
-    # النسخ الاحتياطي والاسترجاع
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نسخة_احتياطية"), admin_only(backup_zip)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_نسخة"), admin_only(restore_backup_zip)))
-
-    # تنظيف
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الأيام"), admin_only(clean_days)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الايام"), admin_only(clean_days)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الملفات"), admin_only(clean_temp_files)))
@@ -3287,29 +4041,18 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), admin_only(results_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), overall))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_نص"), ranking_text))
-
-    # الإحصائيات — يدعم:
-    # /احصائيات
-    # /احصائيات 1 6
-    # /احصائيات 6 1
-    app.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r"^/?(?:احصائيات|إحصائيات)(?:\s|$)"),
-        dashboard
-    ))
-
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/?(?:احصائيات|إحصائيات)(?:\s|$)"), dashboard))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(الأيام|الايام)"), list_days))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فحص"), inspect_day))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مشاركين"), participants_day))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اسطورة"), legend_day))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مقارنة"), compare_days))
-
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_الكل"), admin_only(clear_all)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_يوم"), admin_only(clear_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_نتائج"), admin_only(clear_results)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_آخر"), admin_only(restore_last)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
-
     app.run_polling()
 
 
