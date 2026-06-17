@@ -2471,20 +2471,60 @@ def get_font(size):
         return ImageFont.load_default()
 
 
+def font_size(font, default=24):
+    try:
+        return int(getattr(font, "size", default) or default)
+    except Exception:
+        return default
+
+
+def get_font_from_names(size, names):
+    if not ImageFont:
+        return None
+    bases = ["", ".", "/app", "/mnt/data", "/usr/share/fonts/truetype/noto", "/usr/share/fonts/truetype/dejavu"]
+    for base in bases:
+        for name in names:
+            path = os.path.join(base, name) if base else name
+            try:
+                if os.path.exists(path):
+                    return ImageFont.truetype(path, size)
+            except Exception:
+                pass
+    return get_font(size)
+
+
+def get_arabic_fallback_font(size):
+    """
+    يستخدم فقط إذا ما كان RAQM متوفرًا.
+    Noto Naskh يدعم العربية مع reshaper/bidi أفضل من بعض خطوط العناوين.
+    """
+    return get_font_from_names(size, [
+        "NotoNaskhArabic-Bold.ttf",
+        "NotoNaskhArabic-Regular.ttf",
+        "Cairo-Bold.ttf",
+        "Cairo-Bold-1.ttf",
+        "Amiri-Bold.ttf",
+        "Tajawal-Bold.ttf",
+        "DejaVuSans-Bold.ttf",
+    ])
+
 def has_arabic(text):
     return bool(re.search(r"[\u0600-\u06FF]", str(text or "")))
 
 
 def draw_text(draw, xy, text, font, fill="white", anchor="mm", align="center", max_width=None, spacing=8):
     """
-    رسم نص عربي داخل الصور بشكل ثابت.
-    نستخدم arabic_reshaper + bidi دائمًا للنص العربي حتى يكون شكل الحروف مضبوطًا على Railway
-    حتى لو كان دعم RAQM متغيرًا بين البيئات.
+    V12: رسم عربي آمن داخل الصور.
+    - إذا RAQM متوفر: نرسم النص الأصلي direction=rtl حتى لا تظهر مربعات/فواصل داخل الكلمات.
+    - إذا RAQM غير متوفر: نستخدم arabic_reshaper + bidi مع خط NotoNaskh كبديل.
     """
     text = "" if text is None else str(text)
+    if font is None:
+        font = get_font(24)
+
     if max_width:
         lines = wrap_text(draw, text, font, max_width)
-        line_h = int((font.size if hasattr(font, "size") else 24) * 1.28)
+        line_h = int(font_size(font, 24) * 1.30)
         total_h = line_h * len(lines)
         x, y = xy
         start_y = y - total_h / 2 if anchor == "mm" else y
@@ -2492,23 +2532,32 @@ def draw_text(draw, xy, text, font, fill="white", anchor="mm", align="center", m
             draw_text(draw, (x, start_y + i * line_h), line, font, fill=fill, anchor="ma", align=align)
         return
 
-    display = ar_text(text) if has_arabic(text) else text
     try:
-        draw.text(xy, display, font=font, fill=fill, anchor=anchor, align=align)
+        if has_arabic(text) and PIL_RAQM:
+            draw.text(xy, text, font=font, fill=fill, anchor=anchor, align=align, direction="rtl", language="ar")
+        elif has_arabic(text):
+            f = get_arabic_fallback_font(font_size(font, 24))
+            draw.text(xy, ar_text(text), font=f, fill=fill, anchor=anchor, align=align)
+        else:
+            draw.text(xy, text, font=font, fill=fill, anchor=anchor, align=align)
     except Exception:
         try:
-            draw.text(xy, ar_text(text), font=font, fill=fill, anchor=anchor, align=align)
+            f = get_arabic_fallback_font(font_size(font, 24)) if has_arabic(text) else font
+            display = ar_text(text) if has_arabic(text) else text
+            draw.text(xy, display, font=f, fill=fill, anchor=anchor, align=align)
         except Exception:
             draw.text(xy, text, font=font, fill=fill, anchor=anchor)
-
 
 def text_width(draw, text, font):
     text = "" if text is None else str(text)
     try:
-        if PIL_RAQM and has_arabic(text):
+        if has_arabic(text) and PIL_RAQM:
             bbox = draw.textbbox((0, 0), text, font=font, direction="rtl", language="ar")
+        elif has_arabic(text):
+            f = get_arabic_fallback_font(font_size(font, 24))
+            bbox = draw.textbbox((0, 0), ar_text(text), font=f)
         else:
-            bbox = draw.textbbox((0, 0), ar_text(text), font=font)
+            bbox = draw.textbbox((0, 0), text, font=font)
         return bbox[2] - bbox[0]
     except Exception:
         return len(str(text)) * 12
