@@ -2344,15 +2344,24 @@ async def cup_results_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(cup_results_text(state))
 
 async def cancel_cup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if "تأكيد" not in (update.message.text or ""):
+        await update.message.reply_text(
+            "لإلغاء كأس المصيف الحالية اكتب:\n"
+            "/الغاء_الكاس تأكيد\n\n"
+            "تنبيه: هذا يلغي البطولة الحالية فقط، ولا يغير نقاط الفانتزي."
+        )
+        return
+
     state = load_cup_state()
     if not state.get("rounds"):
         await update.message.reply_text("ما فيه كأس محفوظة أصلًا.")
         return
+
     backup_files("before_cancel_cup", files=[CUP_FILE] if os.path.exists(CUP_FILE) else [])
     state["active"] = False
     state["cancelled_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     save_cup_state(state)
-    await update.message.reply_text("تم إلغاء كأس المصيف الحالية ✅")
+    await update.message.reply_text("تم إلغاء كأس المصيف الحالية ✅\nتقدر تبدأ كأس جديد بأمر:\n/بدء_الكاس 7")
 
 async def cup_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = load_cup_state()
@@ -2400,6 +2409,149 @@ async def cup_after_fantasy_results(update: Update, day):
             else:
                 caption = f"🏆 مواجهات {cup_round_name(next_key)} في كأس المصيف"
             await send_photo_path(update, path, caption)
+
+
+# ============================================================
+# V20 — اعتماد النتائج النهائي + إعادة الكأس من يوم
+# ============================================================
+
+def day_has_result_lines(message_text):
+    lines = [l.strip() for l in (message_text or "").splitlines()[1:] if l.strip()]
+    return bool(lines)
+
+def clear_cup_match_result(match):
+    match["score_a"] = None
+    match["score_b"] = None
+    match["active_a"] = None
+    match["active_b"] = None
+    match["winner"] = None
+    match["note"] = ""
+    return match
+
+def reset_cup_from_day(state, from_day):
+    if not state.get("rounds"):
+        return state, "لا توجد بطولة كأس محفوظة."
+
+    start_day = int(state.get("start_day", 0))
+    end_day = int(state.get("end_day", start_day + 3))
+    from_day = int(from_day)
+
+    if from_day < start_day or from_day > end_day:
+        return state, f"اليوم {from_day} خارج فترة الكأس الحالية."
+
+    offset = from_day - start_day
+    keys = [x[0] for x in CUP_ROUNDS]
+    reset_key = keys[offset]
+
+    # إذا نعيد من ربع/نصف/نهائي، نحتاج نضمن أن المرحلة مبنية من نتائج المرحلة السابقة.
+    if reset_key == "qf":
+        state["rounds"]["qf"]["matches"] = cup_build_next_round_matches(state, "r12")
+    elif reset_key == "sf":
+        state["rounds"]["sf"]["matches"] = cup_build_next_round_matches(state, "qf")
+    elif reset_key == "final":
+        state["rounds"]["final"]["matches"] = cup_build_next_round_matches(state, "sf")
+
+    # امسح نتائج المرحلة المطلوبة وما بعدها، وامسح مواجهات المراحل التي بعدها
+    for idx, key in enumerate(keys):
+        rd = state["rounds"].get(key, {})
+        if idx < offset:
+            continue
+
+        if idx == offset:
+            rd["matches"] = [clear_cup_match_result(m) for m in rd.get("matches", [])]
+            rd["completed"] = False
+        else:
+            rd["matches"] = []
+            rd["completed"] = False
+
+        state["rounds"][key] = rd
+
+    state["champion"] = None
+    state["active"] = True
+    state["reset_from_day"] = from_day
+    state["reset_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return state, f"تمت إعادة الكأس من اليوم {from_day} ✅"
+
+async def approve_results_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    day = get_day(text)
+
+    if is_locked(day):
+        await update.message.reply_text(f"اليوم {day} مقفل ✅\nإذا تبي تعيد اعتماده اكتب أولًا:\n/فتح_يوم {day}")
+        return
+
+    if not os.path.exists(excel_file(day)):
+        await update.message.reply_text(f"ما لقيت ملف اليوم {day}. أضف التشكيلات أولًا.")
+        return
+
+    # لو أرسل نتائج داخل أمر الاعتماد، نعيد الحساب قبل الاعتماد.
+    if day_has_result_lines(text):
+        goals_count, clean_sheets = parse_results(text)
+        goal_missing, clean_missing = validate_results_names(day, goals_count, clean_sheets)
+        backup_files(f"before_approve_results_day_{day}", files=[excel_file(day), LOCKED_FILE, CUP_FILE])
+        file_name = calculate_points(day, goals_count, clean_sheets)
+    else:
+        goal_missing, clean_missing = [], []
+        file_name = excel_file(day)
+
+    rows = read_day_rows(day)
+    max_score = max([r["total"] for r in rows], default=0)
+    winners = [r["participant"] for r in rows if r["total"] == max_score and max_score > 0]
+    legends_text = "، ".join(winners) if winners else "لا يوجد"
+
+    warnings = []
+    if goal_missing:
+        warnings.append("⚠️ هدافون غير موجودين في تشكيلات اليوم:\n" + "\n".join(goal_missing))
+    if clean_missing:
+        warnings.append("⚠️ حراس كلين شيت غير موجودين في تشكيلات اليوم:\n" + "\n".join(clean_missing))
+
+    caption = (
+        f"تم اعتماد نتائج اليوم {day} رسميًا ✅\n"
+        f"تم قفل اليوم {day} 🔒\n\n"
+        f"🏆 أسطورة اليوم: {legends_text} — {max_score} نقطة"
+    )
+    if warnings:
+        caption += "\n\n" + "\n\n".join(warnings)
+
+    # أرسل ملف اليوم المعتمد
+    with open(file_name, "rb") as file:
+        await update.message.reply_document(document=file, filename=file_name, caption=caption)
+
+    # احسب الكأس فقط هنا، وليس في /نتائج
+    try:
+        await cup_after_fantasy_results(update, day)
+    except Exception as e:
+        await update.message.reply_text(f"تم اعتماد اليوم، لكن تعذر تحديث الكأس ❌\n{e}")
+
+    # اقفل اليوم بعد الاعتماد
+    days = load_locked_days()
+    days.add(str(day))
+    save_locked_days(days)
+
+async def reset_cup_from_day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nums = get_numbers(update.message.text)
+    if not nums:
+        await update.message.reply_text("اكتبها كذا:\n/إعادة_الكاس_من 7")
+        return
+
+    from_day = int(nums[0])
+    state = load_cup_state()
+    if not state.get("rounds"):
+        await update.message.reply_text("لا توجد كأس محفوظة حاليًا.\nلبدء كأس جديد: /بدء_الكاس 7")
+        return
+
+    backup_files(f"before_reset_cup_from_{from_day}", files=[CUP_FILE] if os.path.exists(CUP_FILE) else [])
+    state, msg = reset_cup_from_day(state, from_day)
+    save_cup_state(state)
+
+    pending = cup_pending_round_key(state)
+    if pending:
+        path = create_cup_matches_image(state, pending)
+        if path:
+            await send_photo_path(update, path, msg + f"\n\nالمرحلة الحالية: {cup_round_name(pending)}")
+            return
+
+    await update.message.reply_text(msg)
 
 # -------------------- V18: قراءة النموذج الرسمي الطويل في /اضافه --------------------
 
@@ -2621,7 +2773,7 @@ async def results_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     goals_count, clean_sheets = parse_results(text)
     goal_missing, clean_missing = validate_results_names(day, goals_count, clean_sheets)
 
-    backup_files(f"before_results_day_{day}", files=[excel_file(day), LOCKED_FILE, CUP_FILE])
+    backup_files(f"before_temp_results_day_{day}", files=[excel_file(day), LOCKED_FILE, CUP_FILE])
     file_name = calculate_points(day, goals_count, clean_sheets)
 
     goals_text = "\n".join([f"- {name}: {count} هدف = {GOAL_POINTS.get(count, count * 5)} نقطة" for name, count in goals_count.items()]) or "لا يوجد"
@@ -2639,22 +2791,18 @@ async def results_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
         warnings.append("⚠️ حراس كلين شيت غير موجودين في تشكيلات اليوم:\n" + "\n".join(clean_missing))
 
     caption = (
-        f"تم حساب نقاط اليوم {day} ✅\n\n"
+        f"تم تحديث نقاط اليوم {day} مؤقتًا ✅\n"
+        f"لن يتم حساب الكأس أو اعتماد اليوم إلا بعد الأمر:\n"
+        f"/اعتماد_نتائج {day}\n\n"
         f"الأهداف:\n{goals_text}\n\n"
         f"الكلين شيت:\n{clean_text}\n\n"
-        f"🏆 أسطورة اليوم: {legends_text} — {max_score} نقطة"
+        f"🏆 المتصدر/أسطورة اليوم حاليًا: {legends_text} — {max_score} نقطة"
     )
     if warnings:
         caption += "\n\n" + "\n\n".join(warnings)
 
     with open(file_name, "rb") as file:
         await update.message.reply_document(document=file, filename=file_name, caption=caption)
-
-    # V19: إذا الكأس مفعّلة واليوم داخل الفترة، يحسب مرحلة الكأس ويرسل التصميم التالي
-    try:
-        await cup_after_fantasy_results(update, day)
-    except Exception as e:
-        await update.message.reply_text(f"تم حساب الفانتزي، لكن تعذر تحديث الكأس ❌\n{e}")
 
 async def overall(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nums = get_numbers(update.message.text)
@@ -5275,10 +5423,13 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/حالة_الكاس(?:\s|$)"), admin_only(cup_status_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_الكاس(?:\s|$)"), admin_only(cup_results_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مواجهات_الكاس(?:\s|$)"), admin_only(cup_matches_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إعادة_الكاس_من(?:\s|$)"), admin_only(reset_cup_from_day_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعادة_الكاس_من(?:\s|$)"), admin_only(reset_cup_from_day_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الغاء_الكاس(?:\s|$)"), admin_only(cancel_cup_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_الكاس(?:\s|$)"), admin_only(cancel_cup_command)))
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه"), admin_only(add_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_نتائج(?:\s|$)"), admin_only(approve_results_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), admin_only(results_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), overall))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_نص"), ranking_text))
