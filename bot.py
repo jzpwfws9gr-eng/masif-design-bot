@@ -4081,7 +4081,9 @@ DESIGN_ZIP = "design_assets.zip"
 TEMPLATE_DIR = os.path.join("assets", "templates")
 
 def ensure_design_assets():
-    if os.path.exists(TEMPLATE_DIR):
+    logo_ok = os.path.exists(os.path.join("assets", "logos", "masif_logo_mark.png"))
+    templates_ok = os.path.exists(TEMPLATE_DIR)
+    if templates_ok and logo_ok:
         return
     if os.path.exists(DESIGN_ZIP):
         try:
@@ -4140,10 +4142,66 @@ def design_canvas(template_name=None, width=1200, height=1500, theme="purple"):
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
     return img, ImageDraw.Draw(img)
 
-def draw_design_header(draw, width, title, subtitle):
-    # العنوان داخل مساحة علوية ثابتة، بدون زحمة
-    draw_text(draw, (width//2, 100), title, get_font(54), fill="#FFFFFF")
-    draw_text(draw, (width//2, 163), subtitle, get_font(34), fill="#FDE68A")
+
+def event_logo_path():
+    ensure_design_assets()
+    for p in [
+        os.path.join("assets", "logos", "masif_logo_mark.png"),
+        os.path.join("assets", "logos", "masif_logo_full.png"),
+    ]:
+        if os.path.exists(p):
+            return p
+    return None
+
+def paste_event_logo(img, width, y=48):
+    """
+    شعار استراحة المصيف بجانب العنوان.
+    يستخدم نسخة mark لأنها أوضح بحجم صغير.
+    """
+    p = event_logo_path()
+    if not p:
+        return
+    try:
+        logo = Image.open(p).convert("RGBA")
+        logo.thumbnail((130, 100), Image.LANCZOS)
+        badge_w = max(108, logo.width + 24)
+        badge_h = max(88, logo.height + 18)
+        x = width - badge_w - 64
+
+        # Badge خلف الشعار عشان يبان فوق الخلفية الداكنة
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
+        od.rounded_rectangle((x, y, x + badge_w, y + badge_h), radius=24, fill=(5, 7, 13, 135), outline=(253, 230, 138, 90), width=1)
+        img_rgba = img.convert("RGBA")
+        img_rgba = Image.alpha_composite(img_rgba, overlay)
+        img.paste(img_rgba.convert("RGB"))
+
+        lx = x + (badge_w - logo.width) // 2
+        ly = y + (badge_h - logo.height) // 2
+        img.paste(logo, (lx, ly), logo)
+    except Exception:
+        pass
+
+def clean_group_title_for_design(title):
+    title = str(title or "").strip()
+    # منع ظهور مربع بدل حرف المجموعة في بعض الخطوط/الأجهزة
+    mapping = {
+        "A": "أ", "B": "ب", "C": "ج", "D": "د", "E": "هـ", "F": "و",
+        "G": "ز", "H": "ح", "I": "ط", "J": "ي", "K": "ك", "L": "ل",
+    }
+    def repl(m):
+        letter = m.group(1).upper()
+        return "المجموعة " + mapping.get(letter, letter)
+    title = re.sub(r"المجموعة\s+([A-Za-z])\b", repl, title)
+    title = re.sub(r"Group\s+([A-Za-z])\b", repl, title, flags=re.I)
+    return title
+
+def draw_design_header(draw, width, title, subtitle, img=None):
+    # العنوان داخل مساحة علوية ثابتة + شعار استراحة المصيف
+    if img is not None:
+        paste_event_logo(img, width, y=48)
+    draw_text(draw, (width//2, 96), title, get_font(54), fill="#FFFFFF")
+    draw_text(draw, (width//2, 160), subtitle, get_font(34), fill="#FDE68A")
     draw.line((210, 213, width-210, 213), fill="#FFFFFF45", width=1)
 
 def footer_event(draw, width, height):
@@ -4246,12 +4304,15 @@ def create_matches_template_image(day_name, matches, use_template=True):
     count = max(len(matches), 1)
     width = 1200
     row_h, gap, name_size = v16_fit_row_metrics(count, "match")
+    # تكبير بسيط للصفوف إذا العدد قليل
+    if count <= 2:
+        row_h += 12
+        name_size += 2
     frame_top = 245
-    footer_pad = 120
     content_h = count * row_h + max(0, count - 1) * gap
     height = max(760, frame_top + content_h + 195)
     img, draw = design_canvas("matches_template.png" if use_template else None, width, height, "purple")
-    draw_design_header(draw, width, "مونديال المصيف 2026", f"مباريات اليوم {day_name}")
+    draw_design_header(draw, width, "مونديال المصيف 2026", f"مباريات اليوم {day_name}", img)
     fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=235, bottom_pad=112, accent="#22C55E")
 
     available_h = (fy2 - fy1) - 70
@@ -4261,19 +4322,20 @@ def create_matches_template_image(day_name, matches, use_template=True):
         rounded_rect(draw, (92, y, width-92, y+row_h), radius=28, fill="#0B1020", outline=accent, width=2)
         cy = y + row_h//2
 
-        flag_w = min(116, max(78, row_h - 36))
-        paste_flag(img, a, (width-210, cy-flag_w//2, width-210+flag_w, cy+flag_w//2))
-        paste_flag(img, b, (210-flag_w, cy-flag_w//2, 210, cy+flag_w//2))
+        # V17: تكبير الأعلام
+        flag_w = min(150, max(94, row_h - 18))
+        paste_flag(img, a, (width-238, cy-flag_w//2, width-238+flag_w, cy+flag_w//2))
+        paste_flag(img, b, (238-flag_w, cy-flag_w//2, 238, cy+flag_w//2))
 
-        draw_text(draw, (width-365, cy-4), a, get_font(name_size), fill="#FFFFFF", max_width=285)
-        draw_text(draw, (365, cy-4), b, get_font(name_size), fill="#FFFFFF", max_width=285)
+        draw_text(draw, (width-400, cy-4), a, get_font(name_size), fill="#FFFFFF", max_width=285)
+        draw_text(draw, (400, cy-4), b, get_font(name_size), fill="#FFFFFF", max_width=285)
 
-        draw_text(draw, (width//2, cy-20), "×", get_font(max(38, name_size+16)), fill="#FDE68A")
+        draw_text(draw, (width//2, cy-20), "×", get_font(max(40, name_size+18)), fill="#FDE68A")
         if t:
-            badge_w = 210 if row_h >= 104 else 175
-            badge_h = 44 if row_h >= 104 else 34
-            rounded_rect(draw, (width//2-badge_w//2, cy+22, width//2+badge_w//2, cy+22+badge_h), radius=16, fill="#05070D", outline="#FFFFFF99", width=1)
-            draw_text(draw, (width//2, cy+22+badge_h//2), t, get_font(max(20, name_size-12)), fill="#FFFFFF")
+            badge_w = 214 if row_h >= 104 else 178
+            badge_h = 46 if row_h >= 104 else 36
+            rounded_rect(draw, (width//2-badge_w//2, cy+24, width//2+badge_w//2, cy+24+badge_h), radius=16, fill="#05070D", outline="#FFFFFF99", width=1)
+            draw_text(draw, (width//2, cy+24+badge_h//2), t, get_font(max(20, name_size-12)), fill="#FFFFFF")
 
         y += row_h + gap
 
@@ -4288,11 +4350,14 @@ def create_match_results_template_image(day_name, results, use_template=True):
     count = max(len(results), 1)
     width = 1200
     row_h, gap, name_size = v16_fit_row_metrics(count, "match")
+    if count <= 2:
+        row_h += 10
+        name_size += 2
     frame_top = 245
     content_h = count * row_h + max(0, count - 1) * gap
     height = max(760, frame_top + content_h + 195)
     img, draw = design_canvas("match_results_template.png" if use_template else None, width, height, "blue")
-    draw_design_header(draw, width, "مونديال المصيف 2026", f"نتائج مباريات اليوم {day_name}")
+    draw_design_header(draw, width, "مونديال المصيف 2026", f"نتائج مباريات اليوم {day_name}", img)
     fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=235, bottom_pad=112, accent="#06B6D4")
 
     available_h = (fy2 - fy1) - 70
@@ -4302,12 +4367,12 @@ def create_match_results_template_image(day_name, results, use_template=True):
         rounded_rect(draw, (92, y, width-92, y+row_h), radius=28, fill="#0B1020", outline=accent, width=2)
         cy = y + row_h//2
 
-        flag_w = min(110, max(76, row_h - 36))
-        paste_flag(img, a, (width-205, cy-flag_w//2, width-205+flag_w, cy+flag_w//2))
-        paste_flag(img, b, (205-flag_w, cy-flag_w//2, 205, cy+flag_w//2))
+        flag_w = min(146, max(92, row_h - 18))
+        paste_flag(img, a, (width-232, cy-flag_w//2, width-232+flag_w, cy+flag_w//2))
+        paste_flag(img, b, (232-flag_w, cy-flag_w//2, 232, cy+flag_w//2))
 
-        draw_text(draw, (width-360, cy), a, get_font(name_size), fill="#FFFFFF", max_width=280)
-        draw_text(draw, (360, cy), b, get_font(name_size), fill="#FFFFFF", max_width=280)
+        draw_text(draw, (width-395, cy), a, get_font(name_size), fill="#FFFFFF", max_width=280)
+        draw_text(draw, (395, cy), b, get_font(name_size), fill="#FFFFFF", max_width=280)
 
         badge_w = 230 if row_h >= 104 else 190
         badge_h = 70 if row_h >= 104 else 56
@@ -4330,12 +4395,12 @@ def create_group_standing_image(group_title, rows, use_template=True):
     content_h = header_h + 26 + count * row_h + max(0, count - 1) * gap
     height = max(880, 245 + content_h + 180)
     img, draw = design_canvas("group_standing_template.png" if use_template else None, width, height, "purple")
-    draw_design_header(draw, width, "مونديال المصيف 2026", group_title)
+    draw_design_header(draw, width, "مونديال المصيف 2026", clean_group_title_for_design(group_title), img)
     fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=235, bottom_pad=112, accent="#22C55E")
 
     y = fy1 + 36
     rounded_rect(draw, (92, y, width-92, y+header_h), radius=22, fill="#05070D", outline="#FFFFFF66", width=1)
-    draw_text(draw, (980, y+header_h//2), "المنتخب", get_font(26), fill="#FFFFFF")
+    draw_text(draw, (960, y+header_h//2), "المنتخب", get_font(26), fill="#FFFFFF")
     draw_text(draw, (500, y+header_h//2), "لعب", get_font(24), fill="#FDE68A")
     draw_text(draw, (370, y+header_h//2), "+/-", get_font(24), fill="#FDE68A")
     draw_text(draw, (225, y+header_h//2), "نقاط", get_font(24), fill="#FDE68A")
@@ -4345,10 +4410,15 @@ def create_group_standing_image(group_title, rows, use_template=True):
         accent = v16_accent(i-1)
         rounded_rect(draw, (92, y, width-92, y+row_h), radius=26, fill="#0B1020", outline=accent, width=2)
         cy = y + row_h//2
-        draw_text(draw, (1100, cy), str(i), get_font(max(28, name_size)), fill="#FDE68A" if i == 1 else "#FFFFFF")
-        flag_w = min(92, max(64, row_h-32))
-        paste_flag(img, team, (960, cy-flag_w//2, 960+flag_w, cy+flag_w//2))
-        draw_text(draw, (760, cy), team, get_font(name_size), fill="#FFFFFF", max_width=330)
+
+        # V17: الرقم داخل أكثر من الحافة
+        draw_text(draw, (1062, cy), str(i), get_font(max(28, name_size)), fill="#FDE68A" if i == 1 else "#FFFFFF")
+
+        # V17: تكبير أعلام الترتيب
+        flag_w = min(120, max(76, row_h-18))
+        paste_flag(img, team, (900, cy-flag_w//2, 900+flag_w, cy+flag_w//2))
+
+        draw_text(draw, (710, cy), team, get_font(name_size), fill="#FFFFFF", max_width=330)
         draw_text(draw, (500, cy), str(played), get_font(max(26, name_size-2)), fill="#FFFFFF")
         draw_text(draw, (370, cy), f"{diff:+d}", get_font(max(26, name_size-2)), fill="#FFFFFF")
         draw_text(draw, (225, cy), str(pts), get_font(max(30, name_size+3)), fill="#FDE68A")
@@ -4369,7 +4439,7 @@ def create_top_scorers_template_image(items, use_template=True):
     content_h = count * row_h + max(0, count - 1) * gap
     height = max(830, 245 + content_h + 180)
     img, draw = design_canvas("scorers_template.png" if use_template else None, width, height, "gold")
-    draw_design_header(draw, width, "مونديال المصيف 2026", "هدافين البطولة حتى الآن")
+    draw_design_header(draw, width, "مونديال المصيف 2026", "هدافين البطولة حتى الآن", img)
     fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=235, bottom_pad=112, accent="#F59E0B")
 
     available_h = (fy2 - fy1) - 70
@@ -4379,11 +4449,17 @@ def create_top_scorers_template_image(items, use_template=True):
         fill = "#1A1407" if i == 1 else "#0B1020"
         rounded_rect(draw, (92, y, width-92, y+row_h), radius=26, fill=fill, outline=accent, width=2)
         cy = y + row_h//2
-        draw_text(draw, (1090, cy), str(i), get_font(max(30, name_size+4)), fill="#FDE68A")
+
+        # V17: الرقم داخل أكثر من الحافة
+        draw_text(draw, (1062, cy), str(i), get_font(max(30, name_size+4)), fill="#FDE68A")
+
+        # V17: تكبير العلم
         if team:
-            flag_w = min(86, max(58, row_h-32))
-            paste_flag(img, team, (930, cy-flag_w//2, 930+flag_w, cy+flag_w//2))
-        draw_text(draw, (685, cy), name, get_font(name_size), fill="#FFFFFF", max_width=430)
+            flag_w = min(110, max(68, row_h-18))
+            paste_flag(img, team, (885, cy-flag_w//2, 885+flag_w, cy+flag_w//2))
+
+        # مساحة أكبر للاسم
+        draw_text(draw, (655, cy), name, get_font(name_size), fill="#FFFFFF", max_width=460)
         draw_text(draw, (245, cy), f"{goals} {'هدف' if goals == 1 else 'أهداف'}", get_font(max(24, name_size-2)), fill="#FDE68A")
         y += row_h + gap
 
