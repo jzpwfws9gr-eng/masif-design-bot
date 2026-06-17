@@ -4168,30 +4168,31 @@ def create_matches_template_image(day_name, matches, use_template=True):
     ensure_generated_dir()
     count = max(len(matches), 1)
     width = 1200
-    row_h = 170 if count <= 4 else 140
-    gap = 28 if count <= 4 else 18
-    height = max(1250, 280 + count*row_h + max(0, count-1)*gap + 180)
+    row_h = 178 if count <= 3 else 146
+    gap = 28 if count <= 3 else 18
+    content_h = count * row_h + max(0, count - 1) * gap
+    height = max(920, 285 + content_h + 170)
     img, draw = design_canvas("matches_template.png" if use_template else None, width, height, "purple")
     draw_design_header(draw, width, "مونديال المصيف 2026", f"مباريات اليوم {day_name}")
 
     colors = ["#7C3AED", "#2563EB", "#0EA5E9", "#059669", "#D97706", "#DC2626", "#4F46E5"]
-    y = 290
+    y = 275
     for i, (a, b, t) in enumerate(matches, start=1):
         c = colors[(i-1) % len(colors)]
-        rounded_rect(draw, (72, y, width-72, y+row_h), radius=38, fill=c+"E6", outline="#FFFFFF38", width=2)
+        rounded_rect(draw, (74, y, width-74, y+row_h), radius=42, fill=c, outline="#FFFFFF", width=2)
         cy = y + row_h//2
 
-        paste_flag(img, a, (width-245, cy-58, width-105, cy+58))
-        paste_flag(img, b, (105, cy-58, 245, cy+58))
+        paste_flag(img, a, (width-252, cy-58, width-112, cy+58))
+        paste_flag(img, b, (112, cy-58, 252, cy+58))
 
-        name_font = get_font(42 if count <= 4 else 34)
-        draw_text(draw, (width-390, cy-5), a, name_font, fill="#FFFFFF", max_width=260)
-        draw_text(draw, (390, cy-5), b, name_font, fill="#FFFFFF", max_width=260)
+        name_font = get_font(44 if count <= 3 else 36)
+        draw_text(draw, (width-405, cy-5), a, name_font, fill="#FFFFFF", max_width=280)
+        draw_text(draw, (405, cy-5), b, name_font, fill="#FFFFFF", max_width=280)
 
-        draw_text(draw, (width//2, cy-25), "×", get_font(58), fill="#FDE68A")
+        draw_text(draw, (width//2, cy-26), "×", get_font(62), fill="#FDE68A")
         if t:
-            rounded_rect(draw, (width//2-110, cy+30, width//2+110, cy+78), radius=18, fill="#020617E8", outline="#FDE68A80", width=2)
-            draw_text(draw, (width//2, cy+54), t, get_font(26), fill="#FFFFFF")
+            rounded_rect(draw, (width//2-122, cy+34, width//2+122, cy+84), radius=18, fill="#020617", outline="#FDE68A", width=2)
+            draw_text(draw, (width//2, cy+59), t, get_font(28), fill="#FFFFFF")
 
         y += row_h + gap
 
@@ -4205,27 +4206,28 @@ def create_match_results_template_image(day_name, results, use_template=True):
     ensure_generated_dir()
     count = max(len(results), 1)
     width = 1200
-    row_h = 160 if count <= 4 else 132
-    gap = 26 if count <= 4 else 18
-    height = max(1250, 285 + count*row_h + max(0, count-1)*gap + 180)
+    row_h = 168 if count <= 3 else 138
+    gap = 26 if count <= 3 else 18
+    content_h = count * row_h + max(0, count - 1) * gap
+    height = max(920, 285 + content_h + 170)
     img, draw = design_canvas("match_results_template.png" if use_template else None, width, height, "blue")
     draw_design_header(draw, width, "مونديال المصيف 2026", f"نتائج مباريات اليوم {day_name}")
 
     colors = ["#2563EB", "#059669", "#7C3AED", "#D97706", "#0EA5E9", "#DC2626"]
-    y = 295
+    y = 285
     for i, (a, sa, sb, b) in enumerate(results, start=1):
         c = colors[(i-1) % len(colors)]
-        rounded_rect(draw, (72, y, width-72, y+row_h), radius=36, fill=c+"E0", outline="#FFFFFF38", width=2)
+        rounded_rect(draw, (74, y, width-74, y+row_h), radius=40, fill=c, outline="#FFFFFF", width=2)
         cy = y + row_h//2
 
-        paste_flag(img, a, (width-240, cy-54, width-110, cy+54))
-        paste_flag(img, b, (110, cy-54, 240, cy+54))
+        paste_flag(img, a, (width-250, cy-56, width-115, cy+56))
+        paste_flag(img, b, (115, cy-56, 250, cy+56))
 
-        draw_text(draw, (width-385, cy), a, get_font(38), fill="#FFFFFF", max_width=255)
-        draw_text(draw, (385, cy), b, get_font(38), fill="#FFFFFF", max_width=255)
+        draw_text(draw, (width-405, cy), a, get_font(40), fill="#FFFFFF", max_width=275)
+        draw_text(draw, (405, cy), b, get_font(40), fill="#FFFFFF", max_width=275)
 
-        rounded_rect(draw, (width//2-118, cy-45, width//2+118, cy+45), radius=24, fill="#020617E8", outline="#FDE68A", width=2)
-        draw_text(draw, (width//2, cy), f"{sa} - {sb}", get_font(52), fill="#FDE68A")
+        rounded_rect(draw, (width//2-124, cy-45, width//2+124, cy+45), radius=24, fill="#020617", outline="#FDE68A", width=2)
+        draw_text(draw, (width//2, cy), f"{sa} - {sb}", get_font(54), fill="#FDE68A")
         y += row_h + gap
 
     footer_event(draw, width, height)
@@ -4238,25 +4240,26 @@ def create_group_standing_image(group_title, rows, use_template=True):
     ensure_generated_dir()
     count = max(len(rows), 1)
     width = 1200
-    row_h = 122 if count <= 6 else 104
+    row_h = 122 if count <= 6 else 102
     gap = 14
-    height = max(1250, 310 + count*row_h + max(0, count-1)*gap + 170)
+    content_h = 62 + 82 + count * row_h + max(0, count - 1) * gap
+    height = max(980, 275 + content_h + 145)
     img, draw = design_canvas("group_standing_template.png" if use_template else None, width, height, "purple")
     draw_design_header(draw, width, "مونديال المصيف 2026", group_title)
 
     # هيدر أعمدة
-    y = 285
-    rounded_rect(draw, (72, y, width-72, y+62), radius=22, fill="#020617DD", outline="#FFFFFF25", width=2)
+    y = 270
+    rounded_rect(draw, (74, y, width-74, y+62), radius=22, fill="#020617", outline="#FFFFFF", width=2)
     draw_text(draw, (990, y+31), "المنتخب", get_font(28), fill="#FFFFFF")
     draw_text(draw, (480, y+31), "لعب", get_font(26), fill="#FDE68A")
     draw_text(draw, (350, y+31), "+/-", get_font(26), fill="#FDE68A")
     draw_text(draw, (215, y+31), "نقاط", get_font(26), fill="#FDE68A")
     y += 82
 
-    colors = ["#7C3AED", "#2563EB", "#0891B2", "#059669", "#D97706", "#4F46E5", "#DC2626"]
+    colors = ["#0B6FD3", "#F2B705", "#C92A2A", "#0027B0", "#7C3AED", "#059669", "#D97706", "#4F46E5"]
     for i, (team, played, diff, pts) in enumerate(rows, start=1):
         c = colors[(i-1) % len(colors)]
-        rounded_rect(draw, (72, y, width-72, y+row_h), radius=30, fill=c+"D8", outline="#FFFFFF30", width=2)
+        rounded_rect(draw, (74, y, width-74, y+row_h), radius=31, fill=c, outline="#FFFFFF", width=2)
         cy = y + row_h//2
         draw_text(draw, (1100, cy), str(i), get_font(40), fill="#FDE68A" if i == 1 else "#FFFFFF")
         paste_flag(img, team, (950, cy-45, 1050, cy+45))
@@ -4277,25 +4280,25 @@ def create_top_scorers_template_image(items, use_template=True):
     items = sorted(items, key=lambda x: (-x[1], x[0]))
     count = max(len(items[:10]), 1)
     width = 1200
-    row_h = 112 if count <= 7 else 96
+    row_h = 122 if count <= 7 else 100
     gap = 14
-    height = max(1250, 300 + count*row_h + max(0, count-1)*gap + 170)
+    content_h = count * row_h + max(0, count - 1) * gap
+    height = max(920, 285 + content_h + 165)
     img, draw = design_canvas("scorers_template.png" if use_template else None, width, height, "purple")
     draw_design_header(draw, width, "مونديال المصيف 2026", "هدافين البطولة حتى الآن")
 
     colors = ["#F2B705", "#7C3AED", "#2563EB", "#0891B2", "#059669", "#D97706", "#4F46E5", "#DC2626"]
-    y = 300
+    y = 285
     for i, (name, goals, team) in enumerate(items[:10], start=1):
         c = colors[(i-1) % len(colors)]
-        fill = c+"D8" if i == 1 else "#FFFFFF18"
-        outline = "#FDE68A" if i == 1 else "#FFFFFF30"
-        rounded_rect(draw, (72, y, width-72, y+row_h), radius=30, fill=fill, outline=outline, width=2)
+        rounded_rect(draw, (74, y, width-74, y+row_h), radius=31, fill=c, outline="#FFFFFF", width=2)
         cy = y + row_h//2
-        draw_text(draw, (1085, cy), str(i), get_font(42), fill="#020617" if i == 1 else "#FDE68A")
+        rank_fill = "#020617" if i == 1 else "#FDE68A"
+        draw_text(draw, (1085, cy), str(i), get_font(42), fill=rank_fill)
         if team:
             paste_flag(img, team, (910, cy-42, 1005, cy+42))
         draw_text(draw, (685, cy), name, get_font(36 if count <= 7 else 30), fill="#FFFFFF", max_width=430)
-        draw_text(draw, (250, cy), f"{goals} {'هدف' if goals == 1 else 'أهداف'}", get_font(34), fill="#FDE68A")
+        draw_text(draw, (250, cy), f"{goals} {'هدف' if goals == 1 else 'أهداف'}", get_font(34), fill="#FFFFFF")
         y += row_h + gap
 
     footer_event(draw, width, height)
