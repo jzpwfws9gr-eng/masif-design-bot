@@ -4053,7 +4053,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/صورة_اليوم 6\n/صورة_الترتيب 1 6\n/صورة_الاساطير 1 6\n/صورة_احصائيات 1 6 لوحة عامة\n/صور_الاحصائيات 1 6\n"
         "/بطاقة فارس سالم\n/تقرير_الفترة 1 4\n/تفعيل_الصور_التلقائية\n/إيقاف_الصور_التلقائية\n\n"
         "أوامر التصاميم:\n"
-        "/تصميم_مباريات\n/نتائج_مباريات_اليوم\n/تصميم_هدافين\n\n"
+        "/تصميم_مباريات\n/تصميم_مباريات_تلقائي\n"
+        "/تصميم_نتائج_مباريات\n/تصميم_نتائج_مباريات_تلقائي\n"
+        "/تصميم_ترتيب_مجموعة\n/تصميم_ترتيب_مجموعة_تلقائي\n"
+        "/تصميم_هدافين\n/تصميم_هدافين_تلقائي\n\n"
         "أوامر الفحص والنشر:\n"
         "/الأيام\n/فحص 5\n/مشاركين 5\n/اسطورة 5\n/مقارنة 4 5\n/اعلان_اليوم 5\n/ملخص_اليوم 5\n\n"
         "أوامر الاستيراد والنسخ:\n"
@@ -4063,10 +4066,344 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+
+
+# ============================================================
+# V13 — تصاميم القوالب + التصاميم التلقائية
+# الأوامر:
+# /تصميم_مباريات + /تصميم_مباريات_تلقائي
+# /تصميم_نتائج_مباريات + /تصميم_نتائج_مباريات_تلقائي
+# /تصميم_ترتيب_مجموعة + /تصميم_ترتيب_مجموعة_تلقائي
+# /تصميم_هدافين + /تصميم_هدافين_تلقائي
+# ============================================================
+
+DESIGN_ZIP = "design_assets.zip"
+TEMPLATE_DIR = os.path.join("assets", "templates")
+
+def ensure_design_assets():
+    if os.path.exists(TEMPLATE_DIR):
+        return
+    if os.path.exists(DESIGN_ZIP):
+        try:
+            import zipfile
+            with zipfile.ZipFile(DESIGN_ZIP, "r") as z:
+                z.extractall(".")
+        except Exception:
+            pass
+
+def template_path(name):
+    ensure_design_assets()
+    p = os.path.join(TEMPLATE_DIR, name)
+    return p if os.path.exists(p) else None
+
+def design_canvas(template_name=None, width=1200, height=1500, theme="purple"):
+    if template_name:
+        p = template_path(template_name)
+        if p and os.path.exists(p):
+            try:
+                img = Image.open(p).convert("RGB").resize((width, height), Image.LANCZOS)
+                return img, ImageDraw.Draw(img)
+            except Exception:
+                pass
+    return make_canvas(width, height, theme=theme)
+
+def draw_design_header(draw, width, title, subtitle):
+    draw_text(draw, (width//2, 105), title, get_font(58), fill="#FFFFFF")
+    draw_text(draw, (width//2, 174), subtitle, get_font(42), fill="#FDE68A")
+    draw.line((170, 224, width-170, 224), fill="#FFFFFF40", width=2)
+
+def footer_event(draw, width, height):
+    draw.line((260, height-118, width-260, height-118), fill="#FFFFFF25", width=2)
+    draw_text(draw, (width//2, height-78), "المصيف ينقل لكم الحدث", get_font(34), fill="#FFFFFF")
+
+def parse_match_results_design_text(text):
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    if len(lines) <= 1:
+        return "اليوم", []
+    idx = 1
+    day_name = "اليوم"
+    # إذا السطر الثاني ليس نتيجة، نعتبره اسم اليوم
+    if idx < len(lines) and "|" not in lines[idx] and not re.search(r"\d+\s*[-–:]\s*\d+", lines[idx]):
+        day_name = lines[idx]
+        idx += 1
+    results = []
+    for line in lines[idx:]:
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 4:
+                try:
+                    results.append((parts[0], int(parts[1]), int(parts[2]), parts[3]))
+                    continue
+                except Exception:
+                    pass
+            if len(parts) == 2:
+                m1 = re.match(r"(.+?)(\d+)\s*$", parts[0])
+                m2 = re.match(r"^(\d+)\s*(.+)$", parts[1])
+                if m1 and m2:
+                    results.append((normalize_name(m1.group(1)), int(m1.group(2)), int(m2.group(1)), normalize_name(m2.group(2))))
+                    continue
+        m = re.match(r"(.+?)\s+(\d+)\s*[-–:]\s*(\d+)\s+(.+)$", line)
+        if m:
+            results.append((normalize_name(m.group(1)), int(m.group(2)), int(m.group(3)), normalize_name(m.group(4))))
+    return day_name, results
+
+def parse_group_standing_text(text):
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    if len(lines) <= 1:
+        return "المجموعة", []
+    group_title = lines[1]
+    rows = []
+    for line in lines[2:]:
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 4:
+            team = parts[0]
+            played = cell_int(parts[1], 0)
+            diff = cell_int(parts[2], 0)
+            pts = cell_int(parts[3], 0)
+            rows.append((team, played, diff, pts))
+    rows.sort(key=lambda x: (x[3], x[2], x[0]), reverse=True)
+    return group_title, rows
+
+def create_matches_template_image(day_name, matches, use_template=True):
+    ensure_generated_dir()
+    count = max(len(matches), 1)
+    width = 1200
+    row_h = 170 if count <= 4 else 140
+    gap = 28 if count <= 4 else 18
+    height = max(1250, 280 + count*row_h + max(0, count-1)*gap + 180)
+    img, draw = design_canvas("matches_template.png" if use_template else None, width, height, "purple")
+    draw_design_header(draw, width, "مونديال المصيف 2026", f"مباريات اليوم {day_name}")
+
+    colors = ["#7C3AED", "#2563EB", "#0EA5E9", "#059669", "#D97706", "#DC2626", "#4F46E5"]
+    y = 290
+    for i, (a, b, t) in enumerate(matches, start=1):
+        c = colors[(i-1) % len(colors)]
+        rounded_rect(draw, (72, y, width-72, y+row_h), radius=38, fill=c+"E6", outline="#FFFFFF38", width=2)
+        cy = y + row_h//2
+
+        paste_flag(img, a, (width-245, cy-58, width-105, cy+58))
+        paste_flag(img, b, (105, cy-58, 245, cy+58))
+
+        name_font = get_font(42 if count <= 4 else 34)
+        draw_text(draw, (width-390, cy-5), a, name_font, fill="#FFFFFF", max_width=260)
+        draw_text(draw, (390, cy-5), b, name_font, fill="#FFFFFF", max_width=260)
+
+        draw_text(draw, (width//2, cy-25), "×", get_font(58), fill="#FDE68A")
+        if t:
+            rounded_rect(draw, (width//2-110, cy+30, width//2+110, cy+78), radius=18, fill="#020617E8", outline="#FDE68A80", width=2)
+            draw_text(draw, (width//2, cy+54), t, get_font(26), fill="#FFFFFF")
+
+        y += row_h + gap
+
+    footer_event(draw, width, height)
+    suffix = "template" if use_template else "auto"
+    path = os.path.join(GENERATED_DIR, f"matches_{suffix}_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+def create_match_results_template_image(day_name, results, use_template=True):
+    ensure_generated_dir()
+    count = max(len(results), 1)
+    width = 1200
+    row_h = 160 if count <= 4 else 132
+    gap = 26 if count <= 4 else 18
+    height = max(1250, 285 + count*row_h + max(0, count-1)*gap + 180)
+    img, draw = design_canvas("match_results_template.png" if use_template else None, width, height, "blue")
+    draw_design_header(draw, width, "مونديال المصيف 2026", f"نتائج مباريات اليوم {day_name}")
+
+    colors = ["#2563EB", "#059669", "#7C3AED", "#D97706", "#0EA5E9", "#DC2626"]
+    y = 295
+    for i, (a, sa, sb, b) in enumerate(results, start=1):
+        c = colors[(i-1) % len(colors)]
+        rounded_rect(draw, (72, y, width-72, y+row_h), radius=36, fill=c+"E0", outline="#FFFFFF38", width=2)
+        cy = y + row_h//2
+
+        paste_flag(img, a, (width-240, cy-54, width-110, cy+54))
+        paste_flag(img, b, (110, cy-54, 240, cy+54))
+
+        draw_text(draw, (width-385, cy), a, get_font(38), fill="#FFFFFF", max_width=255)
+        draw_text(draw, (385, cy), b, get_font(38), fill="#FFFFFF", max_width=255)
+
+        rounded_rect(draw, (width//2-118, cy-45, width//2+118, cy+45), radius=24, fill="#020617E8", outline="#FDE68A", width=2)
+        draw_text(draw, (width//2, cy), f"{sa} - {sb}", get_font(52), fill="#FDE68A")
+        y += row_h + gap
+
+    footer_event(draw, width, height)
+    suffix = "template" if use_template else "auto"
+    path = os.path.join(GENERATED_DIR, f"match_results_{suffix}_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+def create_group_standing_image(group_title, rows, use_template=True):
+    ensure_generated_dir()
+    count = max(len(rows), 1)
+    width = 1200
+    row_h = 122 if count <= 6 else 104
+    gap = 14
+    height = max(1250, 310 + count*row_h + max(0, count-1)*gap + 170)
+    img, draw = design_canvas("group_standing_template.png" if use_template else None, width, height, "purple")
+    draw_design_header(draw, width, "مونديال المصيف 2026", group_title)
+
+    # هيدر أعمدة
+    y = 285
+    rounded_rect(draw, (72, y, width-72, y+62), radius=22, fill="#020617DD", outline="#FFFFFF25", width=2)
+    draw_text(draw, (990, y+31), "المنتخب", get_font(28), fill="#FFFFFF")
+    draw_text(draw, (480, y+31), "لعب", get_font(26), fill="#FDE68A")
+    draw_text(draw, (350, y+31), "+/-", get_font(26), fill="#FDE68A")
+    draw_text(draw, (215, y+31), "نقاط", get_font(26), fill="#FDE68A")
+    y += 82
+
+    colors = ["#7C3AED", "#2563EB", "#0891B2", "#059669", "#D97706", "#4F46E5", "#DC2626"]
+    for i, (team, played, diff, pts) in enumerate(rows, start=1):
+        c = colors[(i-1) % len(colors)]
+        rounded_rect(draw, (72, y, width-72, y+row_h), radius=30, fill=c+"D8", outline="#FFFFFF30", width=2)
+        cy = y + row_h//2
+        draw_text(draw, (1100, cy), str(i), get_font(40), fill="#FDE68A" if i == 1 else "#FFFFFF")
+        paste_flag(img, team, (950, cy-45, 1050, cy+45))
+        draw_text(draw, (760, cy), team, get_font(38 if count <= 6 else 32), fill="#FFFFFF", max_width=330)
+        draw_text(draw, (480, cy), str(played), get_font(36), fill="#FFFFFF")
+        draw_text(draw, (350, cy), f"{diff:+d}", get_font(36), fill="#FFFFFF")
+        draw_text(draw, (215, cy), str(pts), get_font(42), fill="#FDE68A")
+        y += row_h + gap
+
+    footer_event(draw, width, height)
+    suffix = "template" if use_template else "auto"
+    path = os.path.join(GENERATED_DIR, f"group_{suffix}_{_safe_filename(group_title)}.png")
+    img.save(path, quality=95)
+    return path
+
+def create_top_scorers_template_image(items, use_template=True):
+    ensure_generated_dir()
+    items = sorted(items, key=lambda x: (-x[1], x[0]))
+    count = max(len(items[:10]), 1)
+    width = 1200
+    row_h = 112 if count <= 7 else 96
+    gap = 14
+    height = max(1250, 300 + count*row_h + max(0, count-1)*gap + 170)
+    img, draw = design_canvas("scorers_template.png" if use_template else None, width, height, "purple")
+    draw_design_header(draw, width, "مونديال المصيف 2026", "هدافين البطولة حتى الآن")
+
+    colors = ["#F2B705", "#7C3AED", "#2563EB", "#0891B2", "#059669", "#D97706", "#4F46E5", "#DC2626"]
+    y = 300
+    for i, (name, goals, team) in enumerate(items[:10], start=1):
+        c = colors[(i-1) % len(colors)]
+        fill = c+"D8" if i == 1 else "#FFFFFF18"
+        outline = "#FDE68A" if i == 1 else "#FFFFFF30"
+        rounded_rect(draw, (72, y, width-72, y+row_h), radius=30, fill=fill, outline=outline, width=2)
+        cy = y + row_h//2
+        draw_text(draw, (1085, cy), str(i), get_font(42), fill="#020617" if i == 1 else "#FDE68A")
+        if team:
+            paste_flag(img, team, (910, cy-42, 1005, cy+42))
+        draw_text(draw, (685, cy), name, get_font(36 if count <= 7 else 30), fill="#FFFFFF", max_width=430)
+        draw_text(draw, (250, cy), f"{goals} {'هدف' if goals == 1 else 'أهداف'}", get_font(34), fill="#FDE68A")
+        y += row_h + gap
+
+    footer_event(draw, width, height)
+    suffix = "template" if use_template else "auto"
+    path = os.path.join(GENERATED_DIR, f"scorers_{suffix}.png")
+    img.save(path, quality=95)
+    return path
+
+def build_group_standing_caption(group_title, rows):
+    lines = [f"🏆 {group_title}", ""]
+    for i, (team, played, diff, pts) in enumerate(rows, start=1):
+        lines.append(f"{i}. {team} — لعب {played} | فارق {diff:+d} | نقاط {pts}")
+    lines.append("\nالمصيف ينقل لكم الحدث")
+    return "\n".join(lines)
+
+async def design_matches_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, matches = parse_matches_text(update.message.text)
+    if not matches:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات\nالسادس\nفرنسا|البرازيل|10:00 م\nالأرجنتين|ألمانيا|12:00 ص")
+        return
+    try:
+        path = create_matches_template_image(day_name, matches, use_template=True)
+        await send_photo_path(update, path, build_matches_announcement(day_name, matches))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم المباريات بالقالب ❌\n{e}")
+
+async def design_matches_auto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, matches = parse_matches_text(update.message.text)
+    if not matches:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_تلقائي\nالسادس\nفرنسا|البرازيل|10:00 م")
+        return
+    try:
+        path = create_matches_template_image(day_name, matches, use_template=False)
+        await send_photo_path(update, path, build_matches_announcement(day_name, matches))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم المباريات التلقائي ❌\n{e}")
+
+async def design_match_results_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, results = parse_match_results_design_text(update.message.text)
+    if not results:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_نتائج_مباريات\nالسادس\nالسعودية|2|1|إسبانيا\nفرنسا|3|0|البرازيل")
+        return
+    try:
+        path = create_match_results_template_image(day_name, results, use_template=True)
+        await send_photo_path(update, path, build_match_results_caption(results))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم نتائج المباريات بالقالب ❌\n{e}")
+
+async def design_match_results_auto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, results = parse_match_results_design_text(update.message.text)
+    if not results:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_نتائج_مباريات_تلقائي\nالسادس\nالسعودية|2|1|إسبانيا")
+        return
+    try:
+        path = create_match_results_template_image(day_name, results, use_template=False)
+        await send_photo_path(update, path, build_match_results_caption(results))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم نتائج المباريات التلقائي ❌\n{e}")
+
+async def design_group_standing_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    group_title, rows = parse_group_standing_text(update.message.text)
+    if not rows:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_ترتيب_مجموعة\nالمجموعة C\nاسكتلندا|1|1|3\nالبرازيل|1|0|1\nالمغرب|1|0|1\nهايتي|1|-1|0")
+        return
+    try:
+        path = create_group_standing_image(group_title, rows, use_template=True)
+        await send_photo_path(update, path, build_group_standing_caption(group_title, rows))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم ترتيب المجموعة بالقالب ❌\n{e}")
+
+async def design_group_standing_auto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    group_title, rows = parse_group_standing_text(update.message.text)
+    if not rows:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_ترتيب_مجموعة_تلقائي\nالمجموعة C\nاسكتلندا|1|1|3\nالبرازيل|1|0|1")
+        return
+    try:
+        path = create_group_standing_image(group_title, rows, use_template=False)
+        await send_photo_path(update, path, build_group_standing_caption(group_title, rows))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم ترتيب المجموعة التلقائي ❌\n{e}")
+
+async def design_scorers_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    items = parse_scorers_text(update.message.text)
+    if not items:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_هدافين\nراؤول خيمينيز|4|المكسيك\nفلوريان فيرتز|3|ألمانيا")
+        return
+    try:
+        path = create_top_scorers_template_image(items, use_template=True)
+        await send_photo_path(update, path, build_top_scorers_caption(items))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم الهدافين بالقالب ❌\n{e}")
+
+async def design_scorers_auto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    items = parse_scorers_text(update.message.text)
+    if not items:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_هدافين_تلقائي\nراؤول خيمينيز|4|المكسيك")
+        return
+    try:
+        path = create_top_scorers_template_image(items, use_template=False)
+        await send_photo_path(update, path, build_top_scorers_caption(items))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم الهدافين التلقائي ❌\n{e}")
+
 def main():
     if not TOKEN:
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
     ensure_flags_assets()
+    ensure_design_assets()
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/start"), start))
@@ -4086,9 +4423,19 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعلان_اليوم"), announcement_day_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملخص_اليوم"), summary_day_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات"), admin_only(matches_design_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_مباريات_اليوم"), admin_only(match_results_today_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين"), admin_only(top_scorers_design_command)))
+    # أوامر التصاميم بالقالب والتلقائي — الأوامر الأطول قبل الأقصر
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات_تلقائي(?:\\s|$)"), admin_only(design_matches_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات_تلقائي(?:\\s|$)"), admin_only(design_match_results_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_ترتيب_مجموعة_تلقائي(?:\\s|$)"), admin_only(design_group_standing_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين_تلقائي(?:\\s|$)"), admin_only(design_scorers_auto_command)))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات(?:\\s|$)"), admin_only(design_matches_template_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات(?:\\s|$)"), admin_only(design_match_results_template_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_ترتيب_مجموعة(?:\\s|$)"), admin_only(design_group_standing_template_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين(?:\\s|$)"), admin_only(design_scorers_template_command)))
+
+    # اسم قديم للتوافق فقط
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_مباريات_اليوم(?:\\s|$)"), admin_only(design_match_results_template_command)))
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استيراد_ملف"), admin_only(import_excel_file)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_استيراد"), admin_only(approve_import)))
