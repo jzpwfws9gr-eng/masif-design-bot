@@ -5053,9 +5053,7 @@ def clean_group_title_for_design(title):
     return title
 
 def draw_design_header(draw, width, title, subtitle, img=None):
-    # العنوان داخل مساحة علوية ثابتة + شعار استراحة المصيف
-    if img is not None:
-        paste_event_logo(img, width, y=48)
+    # V23: بدون شعار في جميع التصاميم
     draw_text(draw, (width//2, 96), title, get_font(54), fill="#FFFFFF")
     draw_text(draw, (width//2, 160), subtitle, get_font(34), fill="#FDE68A")
     draw.line((210, 213, width-210, 213), fill="#FFFFFF45", width=1)
@@ -5233,7 +5231,7 @@ def create_match_results_template_image(day_name, results, use_template=True):
         badge_w = 230 if row_h >= 104 else 190
         badge_h = 70 if row_h >= 104 else 56
         rounded_rect(draw, (width//2-badge_w//2, cy-badge_h//2, width//2+badge_w//2, cy+badge_h//2), radius=22, fill="#05070D", outline="#FDE68A", width=2)
-        draw_text(draw, (width//2, cy), f"{sa} - {sb}", get_font(max(32, name_size+12)), fill="#FDE68A")
+        draw_text(draw, (width//2, cy), f"{sb} - {sa}", get_font(max(32, name_size+12)), fill="#FDE68A")
         y += row_h + gap
 
     footer_event(draw, width, height)
@@ -5420,6 +5418,336 @@ async def design_scorers_auto_command(update: Update, context: ContextTypes.DEFA
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم الهدافين التلقائي ❌\n{e}")
 
+
+# ============================================================
+# V23 إضافات التصميم الإضافي:
+# ستايل 2 أزرق/ذهبي + ستايل 3 إطار + جميع المجموعات
+# ============================================================
+
+def _style2_canvas(width, height):
+    img = Image.new("RGB", (width, height), "#061633")
+    d = ImageDraw.Draw(img)
+    for y in range(height):
+        t = y / max(height, 1)
+        d.line((0, y, width, y), fill=(3, int(24 + 20*t), int(70 + 30*t)))
+
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    od.ellipse((80, -210, width-80, 560), fill=(15, 92, 190, 92))
+    od.ellipse((width*0.55, 330, width*1.20, 1050), fill=(0, 120, 255, 46))
+    od.rectangle((width*0.61, 430, width*0.90, 640), fill=(0, 115, 255, 36))
+    od.ellipse((-270, 500, 300, height+120), fill=(0, 70, 180, 70))
+    overlay = overlay.filter(ImageFilter.GaussianBlur(28))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    d = ImageDraw.Draw(img)
+
+    for i in range(0, 64, 7):
+        d.arc((80+i*2, 20+i, width-80-i*2, 720+i), 190, 335, fill="#1D6FEA55", width=2)
+    for i in range(18):
+        x = 60 + i * 18
+        y = height - 215 + (i % 3) * 8
+        d.ellipse((x, y, x+5, y+5), fill="#FBBF2435")
+    return img, d
+
+def _ampm_from_time(t):
+    t = normalize_name(t)
+    if "ص" in t or "AM" in t.upper():
+        period = "ص"
+    elif "م" in t or "PM" in t.upper():
+        period = "م"
+    else:
+        period = ""
+    tm = re.sub(r"(ص|م|AM|PM|am|pm)", "", t).strip()
+    return tm, period
+
+def create_matches_style2_image(day_name, matches):
+    ensure_generated_dir()
+    count = max(len(matches), 1)
+    width = 1200
+    row_h = 170 if count <= 4 else 148
+    gap = 22 if count <= 4 else 15
+    height = max(930, 330 + count * row_h + max(0, count-1) * gap + 95)
+    img, draw = _style2_canvas(width, height)
+
+    draw_text(draw, (width//2, 68), "MONDIAL AL MASEEF 2026", get_font(30), fill="#FFFFFF")
+    draw_text(draw, (width//2, 135), "مباريات اليوم", get_font(78), fill="#FFFFFF")
+    rounded_rect(draw, (width//2-230, 205, width//2+230, 260), radius=18, fill="#FBBF24", outline="#00000055", width=2)
+    draw_text(draw, (width//2, 233), f"اليوم {day_name}", get_font(30), fill="#061633")
+
+    y = 330
+    for a, b, t in matches:
+        x1, x2 = 170, width-170
+        rounded_rect(draw, (x1, y, x2, y+row_h), radius=28, fill="#0638A5", outline="#14B8F5", width=4)
+        draw.line((x1+8, y+row_h-3, x2-8, y+row_h-3), fill="#EF4444", width=4)
+        draw.line((x1+160, y+5, x2-160, y+5), fill="#22C55E", width=3)
+        draw.line((x1+360, y+5, x1+430, y+5), fill="#FBBF24", width=3)
+        cy = y + row_h//2
+        flag_w = min(135, row_h-46)
+        paste_flag(img, a, (x1+35, cy-flag_w//2, x1+35+flag_w, cy+flag_w//2))
+        paste_flag(img, b, (x2-35-flag_w, cy-flag_w//2, x2-35, cy+flag_w//2))
+        draw_text(draw, (x1+102, y+row_h-34), a, get_font(26), fill="#FFFFFF", max_width=230)
+        draw_text(draw, (x2-102, y+row_h-34), b, get_font(26), fill="#FFFFFF", max_width=230)
+        tm, period = _ampm_from_time(t)
+        draw_text(draw, (width//2, cy-14), tm, get_font(54), fill="#FBBF24")
+        if period:
+            draw_text(draw, (width//2, cy+42), period, get_font(34), fill="#FBBF24")
+        y += row_h + gap
+
+    draw_text(draw, (width//2, height-44), "المصيف ينقل لكم الحدث", get_font(30), fill="#FBBF24")
+    path = os.path.join(GENERATED_DIR, f"matches_style2_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+def create_match_results_style2_image(day_name, results):
+    ensure_generated_dir()
+    count = max(len(results), 1)
+    width = 1200
+    row_h = 170 if count <= 4 else 148
+    gap = 22 if count <= 4 else 15
+    height = max(930, 330 + count * row_h + max(0, count-1) * gap + 95)
+    img, draw = _style2_canvas(width, height)
+
+    draw_text(draw, (width//2, 68), "MONDIAL AL MASEEF 2026", get_font(30), fill="#FFFFFF")
+    draw_text(draw, (width//2, 135), "نتائج اليوم", get_font(78), fill="#FFFFFF")
+    rounded_rect(draw, (width//2-230, 205, width//2+230, 260), radius=18, fill="#FBBF24", outline="#00000055", width=2)
+    draw_text(draw, (width//2, 233), f"اليوم {day_name}", get_font(30), fill="#061633")
+
+    y = 330
+    for a, sa, sb, b in results:
+        x1, x2 = 170, width-170
+        rounded_rect(draw, (x1, y, x2, y+row_h), radius=28, fill="#0638A5", outline="#14B8F5", width=4)
+        draw.line((x1+8, y+row_h-3, x2-8, y+row_h-3), fill="#EF4444", width=4)
+        draw.line((x1+160, y+5, x2-160, y+5), fill="#22C55E", width=3)
+        cy = y + row_h//2
+        flag_w = min(135, row_h-46)
+        paste_flag(img, a, (x1+35, cy-flag_w//2, x1+35+flag_w, cy+flag_w//2))
+        paste_flag(img, b, (x2-35-flag_w, cy-flag_w//2, x2-35, cy+flag_w//2))
+        draw_text(draw, (x1+102, y+row_h-34), a, get_font(26), fill="#FFFFFF", max_width=230)
+        draw_text(draw, (x2-102, y+row_h-34), b, get_font(26), fill="#FFFFFF", max_width=230)
+        rounded_rect(draw, (width//2-118, cy-45, width//2+118, cy+45), radius=18, fill="#FBBF24", outline="#00000088", width=2)
+        draw_text(draw, (width//2, cy), f"{sb} - {sa}", get_font(52), fill="#061633")
+        y += row_h + gap
+
+    draw_text(draw, (width//2, height-44), "المصيف ينقل لكم الحدث", get_font(30), fill="#FBBF24")
+    path = os.path.join(GENERATED_DIR, f"results_style2_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+def create_scorers_style2_image(items):
+    ensure_generated_dir()
+    items = sorted(items, key=lambda x: (-x[1], x[0]))[:12]
+    count = max(len(items), 1)
+    width = 1200
+    row_h = 105 if count <= 8 else 88
+    gap = 14 if count <= 8 else 10
+    height = max(900, 310 + count*row_h + (count-1)*gap + 90)
+    img, draw = _style2_canvas(width, height)
+    draw_text(draw, (width//2, 80), "MONDIAL AL MASEEF 2026", get_font(30), fill="#FFFFFF")
+    draw_text(draw, (width//2, 150), "هدافين البطولة", get_font(72), fill="#FFFFFF")
+    rounded_rect(draw, (width//2-210, 215, width//2+210, 268), radius=18, fill="#FBBF24", outline="#00000055", width=2)
+    draw_text(draw, (width//2, 242), "تحديث مستمر", get_font(28), fill="#061633")
+    y = 315
+    for i, (name, goals, team) in enumerate(items, start=1):
+        rounded_rect(draw, (120, y, width-120, y+row_h), radius=24, fill="#0638A5", outline="#14B8F5", width=3)
+        cy = y + row_h//2
+        draw_text(draw, (1030, cy), str(i), get_font(34), fill="#FBBF24")
+        if team:
+            paste_flag(img, team, (850, cy-38, 930, cy+38))
+        draw_text(draw, (620, cy), name, get_font(34), fill="#FFFFFF", max_width=430)
+        draw_text(draw, (240, cy), f"{goals} {'هدف' if goals == 1 else 'أهداف'}", get_font(30), fill="#FBBF24")
+        y += row_h + gap
+    draw_text(draw, (width//2, height-42), "المصيف ينقل لكم الحدث", get_font(28), fill="#FBBF24")
+    path = os.path.join(GENERATED_DIR, "scorers_style2.png")
+    img.save(path, quality=95)
+    return path
+
+def create_group_style2_image(group_title, rows):
+    ensure_generated_dir()
+    count = max(len(rows), 1)
+    width = 1200
+    row_h = 105 if count <= 6 else 86
+    gap = 14 if count <= 6 else 10
+    height = max(870, 310 + count*row_h + (count-1)*gap + 90)
+    img, draw = _style2_canvas(width, height)
+    draw_text(draw, (width//2, 80), "MONDIAL AL MASEEF 2026", get_font(30), fill="#FFFFFF")
+    draw_text(draw, (width//2, 150), "ترتيب المجموعة", get_font(72), fill="#FFFFFF")
+    rounded_rect(draw, (width//2-220, 215, width//2+220, 268), radius=18, fill="#FBBF24", outline="#00000055", width=2)
+    draw_text(draw, (width//2, 242), clean_group_title_for_design(group_title), get_font(30), fill="#061633")
+    y = 315
+    for i, (team, played, diff, pts) in enumerate(rows, start=1):
+        rounded_rect(draw, (120, y, width-120, y+row_h), radius=24, fill="#0638A5", outline="#14B8F5", width=3)
+        cy = y + row_h//2
+        draw_text(draw, (1040, cy), str(i), get_font(34), fill="#FBBF24")
+        paste_flag(img, team, (870, cy-40, 950, cy+40))
+        draw_text(draw, (690, cy), team, get_font(34), fill="#FFFFFF", max_width=330)
+        draw_text(draw, (420, cy), f"لعب {played}", get_font(24), fill="#E5E7EB")
+        draw_text(draw, (300, cy), f"{int(diff):+d}", get_font(28), fill="#E5E7EB")
+        draw_text(draw, (190, cy), str(pts), get_font(34), fill="#FBBF24")
+        y += row_h + gap
+    draw_text(draw, (width//2, height-42), "المصيف ينقل لكم الحدث", get_font(28), fill="#FBBF24")
+    path = os.path.join(GENERATED_DIR, f"group_style2_{_safe_filename(group_title)}.png")
+    img.save(path, quality=95)
+    return path
+
+def parse_all_groups_text(text):
+    groups = []
+    current_title = None
+    current_rows = []
+    for raw in (text or "").splitlines()[1:]:
+        line = raw.strip()
+        if not line:
+            continue
+        if "|" not in line:
+            if current_title and current_rows:
+                groups.append((current_title, current_rows))
+                current_rows = []
+            current_title = line
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 4 and current_title:
+            try:
+                current_rows.append((parts[0], int(parts[1]), int(parts[2]), int(parts[3])))
+            except Exception:
+                pass
+    if current_title and current_rows:
+        groups.append((current_title, current_rows))
+    return groups
+
+def create_all_groups_image(groups):
+    ensure_generated_dir()
+    width, height = 1800, 2400
+    img, draw = _style2_canvas(width, height)
+    draw_text(draw, (width//2, 90), "MONDIAL AL MASEEF 2026", get_font(40), fill="#FFFFFF")
+    draw_text(draw, (width//2, 165), "ترتيب جميع المجموعات", get_font(72), fill="#FFFFFF")
+    cols = 3
+    margin_x, gap_x = 80, 38
+    card_w = (width - 2*margin_x - (cols-1)*gap_x) // cols
+    card_h = 475
+    start_y = 260
+    gap_y = 42
+    for idx, (title, rows) in enumerate(groups[:12]):
+        c = idx % cols
+        r = idx // cols
+        x = margin_x + c*(card_w+gap_x)
+        y = start_y + r*(card_h+gap_y)
+        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=28, fill="#0638A5EE", outline="#14B8F5", width=3)
+        rounded_rect(draw, (x+18, y+18, x+card_w-18, y+68), radius=18, fill="#FBBF24", outline="#00000055", width=1)
+        draw_text(draw, (x+card_w//2, y+43), clean_group_title_for_design(title), get_font(26), fill="#061633")
+        yy = y + 92
+        for pos, (team, played, diff, pts) in enumerate(rows[:4], start=1):
+            rounded_rect(draw, (x+20, yy, x+card_w-20, yy+72), radius=16, fill="#061633AA", outline="#FFFFFF22", width=1)
+            cy = yy + 36
+            draw_text(draw, (x+card_w-45, cy), str(pos), get_font(22), fill="#FBBF24")
+            paste_flag(img, team, (x+card_w-125, cy-24, x+card_w-75, cy+24))
+            draw_text(draw, (x+card_w-240, cy), team, get_font(22), fill="#FFFFFF", max_width=190)
+            draw_text(draw, (x+155, cy), str(pts), get_font(26), fill="#FBBF24")
+            draw_text(draw, (x+75, cy), f"{diff:+d}", get_font(21), fill="#E5E7EB")
+            yy += 84
+    draw_text(draw, (width//2, height-70), "المصيف ينقل لكم الحدث", get_font(36), fill="#FBBF24")
+    path = os.path.join(GENERATED_DIR, "all_groups_style2.png")
+    img.save(path, quality=95)
+    return path
+
+def _frame_canvas(width, height):
+    img = Image.new("RGB", (width, height), "#07111B")
+    d = ImageDraw.Draw(img)
+    for y in range(height):
+        t = y / max(height, 1)
+        d.line((0, y, width, y), fill=(5, int(18+20*t), int(30+24*t)))
+    overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
+    od.ellipse((-200, -120, 440, 460), fill=(10,200,120,30))
+    od.ellipse((width-360, height-420, width+260, height+160), fill=(70,90,255,40))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay.filter(ImageFilter.GaussianBlur(40))).convert("RGB")
+    return img, ImageDraw.Draw(img)
+
+def create_match_frame_style_image(day_name, items, is_results=False):
+    ensure_generated_dir()
+    count = max(len(items), 1)
+    width = 1200
+    row_h = 126 if count <= 6 else 104
+    gap = 18 if count <= 6 else 12
+    height = max(620, 220 + count*row_h + (count-1)*gap + 105)
+    img, draw = _frame_canvas(width, height)
+    draw_text(draw, (width//2, 80), "مونديال المصيف 2026", get_font(50), fill="#FFFFFF")
+    draw_text(draw, (width//2, 140), f"{'نتائج' if is_results else 'مباريات'} اليوم {day_name}", get_font(34), fill="#FDE68A")
+    y = 215
+    for item in items:
+        if is_results:
+            a, sa, sb, b = item
+            center = f"{sb} - {sa}"
+        else:
+            a, b, t = item
+            center = t
+        x1, x2 = 120, width-120
+        rounded_rect(draw, (x1, y, x2, y+row_h), radius=28, fill="#07110FCC", outline="#22C55E", width=3)
+        draw.line((x1+5, y+row_h-5, x1+260, y+row_h-5), fill="#F97316", width=10)
+        draw.line((x2-260, y+row_h-5, x2-5, y+row_h-5), fill="#2563EB", width=10)
+        draw.line((x1+10, y+5, x2-10, y+5), fill="#22C55E", width=4)
+        cy = y + row_h//2
+        flag_w = min(84, row_h-36)
+        paste_flag(img, a, (x2-160, cy-flag_w//2, x2-160+flag_w, cy+flag_w//2))
+        paste_flag(img, b, (x1+80, cy-flag_w//2, x1+80+flag_w, cy+flag_w//2))
+        draw_text(draw, (x2-320, cy), a, get_font(30), fill="#FFFFFF", max_width=270)
+        draw_text(draw, (x1+280, cy), b, get_font(30), fill="#FFFFFF", max_width=270)
+        rounded_rect(draw, (width//2-95, cy-38, width//2+95, cy+38), radius=18, fill="#B8FFF0", outline="#FFFFFFAA", width=2)
+        draw_text(draw, (width//2, cy), center, get_font(34), fill="#061633")
+        y += row_h + gap
+    draw_text(draw, (width//2, height-42), "المصيف ينقل لكم الحدث", get_font(28), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, f"{'results' if is_results else 'matches'}_frame_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+async def design_matches_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, matches = parse_matches_design_text(update.message.text)
+    if not matches:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_ستايل2\nالسابع\nالبرتغال|الكونغو الديمقراطية|8:00 م")
+        return
+    await send_photo_path(update, create_matches_style2_image(day_name, matches), build_matches_caption(day_name, matches))
+
+async def design_match_results_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, results = parse_match_results_design_text(update.message.text)
+    if not results:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_نتائج_مباريات_ستايل2\nالسابع\nالبرتغال|2|1|الكونغو الديمقراطية")
+        return
+    await send_photo_path(update, create_match_results_style2_image(day_name, results), build_match_results_caption(day_name, results))
+
+async def design_scorers_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    items = parse_scorers_text(update.message.text)
+    if not items:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_هدافين_ستايل2\nراؤول خيمينيز|4|المكسيك")
+        return
+    await send_photo_path(update, create_scorers_style2_image(items), build_top_scorers_caption(items))
+
+async def design_group_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    group_title, rows = parse_group_standing_text(update.message.text)
+    if not rows:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_ترتيب_مجموعة_ستايل2\nالمجموعة C\nالبرازيل|1|0|1")
+        return
+    await send_photo_path(update, create_group_style2_image(group_title, rows), f"ترتيب {group_title} ✅")
+
+async def design_matches_frame_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, matches = parse_matches_design_text(update.message.text)
+    if not matches:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_اطار\nالسابع\nالبرتغال|الكونغو الديمقراطية|8:00 م")
+        return
+    await send_photo_path(update, create_match_frame_style_image(day_name, matches, False), build_matches_caption(day_name, matches))
+
+async def design_results_frame_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, results = parse_match_results_design_text(update.message.text)
+    if not results:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_نتائج_مباريات_اطار\nالسابع\nالبرتغال|2|1|الكونغو الديمقراطية")
+        return
+    await send_photo_path(update, create_match_frame_style_image(day_name, results, True), build_match_results_caption(day_name, results))
+
+async def design_all_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    groups = parse_all_groups_text(update.message.text)
+    if not groups:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_جميع_المجموعات\nالمجموعة A\nفريق|1|0|3\n...\nالمجموعة B\nفريق|1|0|3")
+        return
+    await send_photo_path(update, create_all_groups_image(groups), "ترتيب جميع المجموعات ✅")
+
+
 def main():
     if not TOKEN:
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
@@ -5444,6 +5772,15 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعلان_اليوم"), announcement_day_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملخص_اليوم"), summary_day_command))
+    # V23 أوامر التصميم الإضافي
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات_ستايل2(?:\s|$)"), admin_only(design_matches_style2_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات_ستايل2(?:\s|$)"), admin_only(design_match_results_style2_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين_ستايل2(?:\s|$)"), admin_only(design_scorers_style2_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_ترتيب_مجموعة_ستايل2(?:\s|$)"), admin_only(design_group_style2_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات_اطار(?:\s|$)"), admin_only(design_matches_frame_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات_اطار(?:\s|$)"), admin_only(design_results_frame_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_جميع_المجموعات(?:\s|$)"), admin_only(design_all_groups_command)))
+
     # أوامر التصاميم بالقالب والتلقائي — الأوامر الأطول قبل الأقصر
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات_تلقائي(?:\s|$)"), admin_only(design_matches_auto_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات_تلقائي(?:\s|$)"), admin_only(design_match_results_auto_command)))
@@ -5542,13 +5879,13 @@ def create_daily_result_image(day, goals_count=None, clean_sheets=None):
     base_h = 420 + len(rows) * 56 + max(170, 85 + match_rows * 40) + 250
     height = max(1220, base_h)
     img, draw = design_canvas(None, width, height, "purple")
-    draw_design_header(draw, width, f"فانتزي المصيف 2026 | اليوم {ordinal_day(day)}", "أسطورة اليوم وترتيب المشاركين", img)
+    draw_design_header(draw, width, f"فانتزي المصيف 2026 - اليوم {ordinal_day(day)}", "أسطورة اليوم وترتيب المشاركين", img)
     fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=235, bottom_pad=110, accent="#8B5CF6")
 
     legends = " + ".join(data["winners"]) if data["winners"] else "لا يوجد"
     rounded_rect(draw, (90, fy1 + 18, 1010, fy1 + 150), radius=32, fill="#7C3AEDDD", outline="#FFFFFF40", width=2)
     draw_text(draw, (550, fy1 + 58), "أسطورة اليوم", get_font(28), fill="#FFFFFF")
-    draw_text(draw, (550, fy1 + 112), f"{legends} | {data['max_score']} نقطة", get_font(42), fill="#FFF6D6", max_width=850)
+    draw_text(draw, (550, fy1 + 112), f"{legends} - {data['max_score']} نقطة", get_font(42), fill="#FFF6D6", max_width=850)
     rounded_rect(draw, (1040, fy1 + 18, 1310, fy1 + 150), radius=26, fill="#F59E0BDD", outline="#FFFFFF33", width=2)
     draw_text(draw, (1175, fy1 + 58), "المشاركون", get_font(24), fill="#FFFFFF")
     draw_text(draw, (1175, fy1 + 112), f"{len(data['participants'])}", get_font(46), fill="#FFFFFF")
@@ -5582,7 +5919,7 @@ def create_daily_result_image(day, goals_count=None, clean_sheets=None):
         yy += 36
     else:
         for p in matchups.get("pairs", []):
-            line = f"{_clean_display_name(p['a'])} {p['a_points']} - {p['b_points']} {_clean_display_name(p['b'])} | الفائز: {_clean_display_name(p['winner'])}"
+            line = f"{_clean_display_name(p['a'])} {p['a_points']} - {p['b_points']} {_clean_display_name(p['b'])} - الفائز: {_clean_display_name(p['winner'])}"
             draw_text(draw, (700, yy), line, get_font(22), fill="#FFFFFF", max_width=1100)
             yy += 36
         if matchups.get("bye"):
