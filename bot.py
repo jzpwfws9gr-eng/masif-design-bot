@@ -7891,9 +7891,10 @@ def _v31_draw_team_name(draw, pos, name, font, max_width, fill="#FFFFFF"):
 
 def _v31_paste_flag(img, team_name, box):
     """
-    لصق أعلام V31 بحجم واضح.
-    ملاحظة: دالة paste_flag الأصلية تستخدم thumbnail وقد لا تكبر الأعلام الصغيرة،
-    لذلك هنا نعمل resize صريح داخل مربع العلم مع الحفاظ على النسبة.
+    لصق أعلام V31 بحجم أوضح وآمن.
+    - يكبر العلم صراحة بدل thumbnail.
+    - يقص الفراغ الشفاف حول العلم إذا موجود، عشان العلم يبان كبير داخل الكرت.
+    - إذا صار أي خطأ يرجع للدالة الأصلية بدون ما يطيح البوت.
     """
     x1, y1, x2, y2 = [int(v) for v in box]
     w = max(1, x2 - x1)
@@ -7902,6 +7903,16 @@ def _v31_paste_flag(img, team_name, box):
         path = flag_path_for(team_name)
         if path and os.path.exists(path):
             flag = Image.open(path).convert("RGBA")
+
+            # بعض ملفات الأعلام فيها فراغ شفاف، نقصّه عشان العلم يكبر فعليًا.
+            try:
+                alpha = flag.getchannel("A")
+                bbox = alpha.getbbox()
+                if bbox:
+                    flag = flag.crop(bbox)
+            except Exception:
+                pass
+
             fw, fh = flag.size
             if fw > 0 and fh > 0:
                 scale = min(w / fw, h / fh)
@@ -7919,7 +7930,6 @@ def _v31_paste_flag(img, team_name, box):
     except Exception:
         pass
 
-
 def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     x1, y1, x2, y2 = [int(v) for v in box]
     cy = (y1 + y2) // 2
@@ -7936,20 +7946,20 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     rounded_rect(draw, (x2-badge_size-10, y1+14, x2-10, y1+14+badge_size), radius=10, fill="#FBBF24", outline="#FFFFFF33", width=1)
     draw_text(draw, (x2-10-badge_size//2, y1+14+badge_size//2), str(idx), _v31_latin_font(18), fill="#061633", max_width=badge_size)
 
-    # الأعلام أكبر وأوضح، مع بقائها داخل حدود الكرت.
-    # نستخدم resize صريح للأعلام حتى تكبر فعلًا حتى لو ملفات الأعلام الأصلية صغيرة.
+    # الأعلام أكبر بحوالي 70٪ بصريًا، لكن بدون ما تضغط الاسم أو تطلع من الكرت.
+    # السر هنا: نكبر صندوق العلم + نقص الفراغ الشفاف من ملف العلم داخل _v31_paste_flag.
     if count >= 5:
-        flag_h = min(96, max(82, row_h - 28))
-        flag_w = int(flag_h * 1.68)
-        side_pad = 28
+        flag_h = min(110, row_h - 12)
+        flag_w = int(flag_h * 1.55)
+        side_pad = 18
     elif count == 4:
-        flag_h = min(112, row_h - 28)
-        flag_w = int(flag_h * 1.68)
-        side_pad = 30
+        flag_h = min(122, row_h - 14)
+        flag_w = int(flag_h * 1.55)
+        side_pad = 20
     else:
-        flag_h = min(122, row_h - 34)
-        flag_w = int(flag_h * 1.68)
-        side_pad = 34
+        flag_h = min(132, row_h - 16)
+        flag_w = int(flag_h * 1.55)
+        side_pad = 22
 
     # الفريق الأول يمين، الفريق الثاني يسار
     right_flag_box = (x2-side_pad-flag_w, cy-flag_h//2, x2-side_pad, cy+flag_h//2)
