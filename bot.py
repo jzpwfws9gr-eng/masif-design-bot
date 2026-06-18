@@ -6202,5 +6202,700 @@ def create_period_report_image(start_day, end_day):
     img.save(path, quality=95)
     return path
 
+
+
+# ============================================================
+# V26 FINAL OVERRIDES
+# اعتماد التعديلات النهائية:
+# - ستايل Games of the Day شبه المرجع بخلفية ثابتة
+# - كابتشن نظيف للتصاميم بدون نموذج فانتزي
+# - إصلاح صورة اليوم، بطاقة المشارك، سجل الأساطير، تقرير الفترة
+# - إيقاف صور الإحصائيات غير المقروءة كجداول
+# ============================================================
+
+def paste_event_logo(img, width, y=48):
+    # حسب الاعتماد: لا نضع شعار استراحة المصيف على تصاميم الفانتزي
+    return
+
+def draw_design_header(draw, width, title, subtitle, img=None):
+    draw_text(draw, (width//2, 96), title, get_font(54), fill="#FFFFFF", max_width=width-120)
+    draw_text(draw, (width//2, 160), subtitle, get_font(34), fill="#FDE68A", max_width=width-160)
+    draw.line((210, 213, width-210, 213), fill="#FFFFFF45", width=1)
+
+def _clean_display_name(value):
+    s = str(value or "").strip()
+    # إزالة رموز قد تظهر كمربعات داخل الصور
+    s = re.sub(r"[\U00010000-\U0010ffff]", "", s)
+    s = s.replace("🥇","").replace("🥈","").replace("🥉","")
+    s = s.replace("🐐","").replace("👑","").replace("✅","")
+    s = s.replace("—", "-").replace("–", "-").replace("|", "-")
+    return re.sub(r"\s+", " ", s).strip()
+
+def _safe_rank_label(idx):
+    return str(idx)
+
+def build_design_matches_caption(day_name, matches):
+    lines = ["🏆 مونديال المصيف 2026 🏆", f"🔥 مباريات اليوم ( {day_name} ) 🔥", ""]
+    for a, b, t in matches:
+        lines.append(f"{a} × {b} — {t}")
+    lines.append("")
+    lines.append("المصيف ينقل لكم الحدث")
+    return "\n".join(lines)
+
+def build_design_results_caption(day_name, results):
+    lines = ["🏆 نتائج مباريات اليوم 🏆", f"اليوم ( {day_name} )", ""]
+    for a, sa, sb, b in results:
+        lines.append(f"{a} {sa} - {sb} {b}")
+    lines.append("")
+    lines.append("المصيف ينقل لكم الحدث")
+    return "\n".join(lines)
+
+def _games_day_background(width, height):
+    img = Image.new("RGB", (width, height), "#06152F")
+    draw = ImageDraw.Draw(img)
+
+    # تدرج ثابت أزرق
+    for y in range(height):
+        t = y / max(1, height)
+        r = int(2 + 5*t)
+        g = int(14 + 20*t)
+        b = int(45 + 35*t)
+        draw.line((0, y, width, y), fill=(r, g, b))
+
+    overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
+
+    # دوائر/أشكال الخلفية الثابتة
+    od.ellipse((160, -185, width-150, 490), fill=(15, 92, 190, 112))
+    od.ellipse((width*0.62, 395, width*1.18, 1010), fill=(0, 102, 230, 50))
+    od.ellipse((width*0.68, 720, width*1.12, 1240), fill=(0, 95, 215, 42))
+    od.rectangle((width*0.63, 430, width*0.90, 640), fill=(0, 115, 255, 36))
+    od.rectangle((width*0.90, 520, width*1.08, 790), fill=(0, 105, 230, 42))
+    od.ellipse((width-80, 360, width+250, 720), fill=(0, 115, 255, 55))
+
+    # ظل تمثال/شكل جانبي يسار بروح المرجع، مو شعار رسمي
+    stat = Image.new("RGBA", (width, height), (0,0,0,0))
+    sd = ImageDraw.Draw(stat)
+    sx = int(width*0.08)
+    base_y = int(height*0.80)
+    blue = (20, 95, 190, 95)
+    sd.polygon([(sx-130, base_y+180),(sx+210, base_y+180),(sx+135, base_y-250),(sx-40, base_y-290)], fill=blue)
+    sd.ellipse((sx-45, base_y-420, sx+75, base_y-300), fill=(20,95,190,82))
+    # تاج بسيط
+    for ang in [-70,-45,-20,10,35,60]:
+        x2 = sx + 15 + int(115 * (ang/70))
+        sd.line((sx+15, base_y-405, x2, base_y-540), fill=(20,95,190,75), width=9)
+    # اليد/الشعلة
+    sd.line((sx-125, base_y-350, sx-205, base_y-625), fill=(20,95,190,85), width=34)
+    sd.ellipse((sx-245, base_y-700, sx-165, base_y-615), fill=(20,95,190,90))
+    sd.polygon([(sx-205, base_y-735),(sx-235, base_y-665),(sx-170, base_y-670)], fill=(20,95,190,85))
+    stat = stat.filter(ImageFilter.GaussianBlur(2))
+    overlay = Image.alpha_composite(overlay, stat)
+
+    overlay = overlay.filter(ImageFilter.GaussianBlur(8))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    # خطوط خفيفة علوية
+    for i in range(0, 70, 7):
+        draw.arc((80+i*2, 20+i, width-80-i*2, 720+i), 190, 335, fill="#1D6FEA45", width=2)
+
+    return img, draw
+
+def _draw_games_footer(draw, img, width, height):
+    # الراعي الأول: MASEEF SPORTS
+    pill_y = height - 142
+    pill_w, pill_h = 225, 58
+    x1 = width//2 - pill_w - 25
+    x2 = width//2 + 25
+
+    for x, label1, label2 in [
+        (x1, "MASEEF", "SPORTS"),
+        (x2, "MASEEF", "2026"),
+    ]:
+        rounded_rect(draw, (x, pill_y, x+pill_w, pill_y+pill_h), radius=18, fill="#071633BB", outline="#FFFFFFAA", width=2)
+        draw_text(draw, (x+pill_w//2, pill_y+22), label1, get_font(22), fill="#FFFFFF", max_width=pill_w-35)
+        draw_text(draw, (x+pill_w//2, pill_y+44), label2, get_font(16), fill="#E5E7EB", max_width=pill_w-35)
+
+    # بادج السعودية يمين
+    bx = width - 150
+    by = height - 225
+    draw_text(draw, (bx+55, by-28), "TIME OF DAY", get_font(18), fill="#FFFFFF")
+    rounded_rect(draw, (bx, by, bx+110, by+70), radius=20, fill="#087A36", outline="#A7F3D0", width=1)
+    draw_text(draw, (bx+55, by+35), "SA", get_font(30), fill="#FFFFFF")
+    rounded_rect(draw, (bx+8, by+76, bx+102, by+128), radius=18, fill="#0B7F36", outline="#A7F3D0", width=1)
+    draw_text(draw, (bx+55, by+102), "KSA", get_font(22), fill="#FFFFFF")
+    draw_text(draw, (bx+55, by+155), "SAUDI ARABIA", get_font(17), fill="#FFFFFF")
+
+    # النص السفلي
+    draw.line((110, height-55, width//2-240, height-55), fill="#D4AF37", width=2)
+    draw.line((width//2+240, height-55, width-110, height-55), fill="#D4AF37", width=2)
+    draw_text(draw, (width//2, height-55), "المصيف ينقل لكم الحدث", get_font(32), fill="#FBBF24")
+
+def _draw_games_header(draw, width, title, date_text):
+    draw_text(draw, (width//2, 70), "MONDIAL AL MASEEF 2026", get_font(34), fill="#FFFFFF")
+    draw_text(draw, (width//2, 165), title, get_font(78), fill="#FFFFFF", max_width=width-80)
+    rounded_rect(draw, (width//2-230, 255, width//2+230, 312), radius=18, fill="#FBBF24", outline="#00000070", width=2)
+    draw_text(draw, (width//2, 285), date_text, get_font(28), fill="#061633", max_width=430)
+
+def create_matches_style2_image(day_name, matches):
+    ensure_generated_dir()
+    count = max(len(matches), 1)
+    width = 1200
+    height = 1500 if count >= 4 else 1280
+    img, draw = _games_day_background(width, height)
+
+    _draw_games_header(draw, width, "GAMES OF THE DAY", f"اليوم {day_name}")
+
+    if count == 1:
+        card_h, gap, y = 245, 0, 490
+    elif count == 2:
+        card_h, gap, y = 205, 34, 430
+    elif count == 3:
+        card_h, gap, y = 180, 24, 400
+    elif count == 4:
+        card_h, gap, y = 155, 22, 400
+    else:
+        card_h, gap, y = 132, 17, 375
+
+    x1, x2 = 270, 890
+    for a, b, t in matches[:6]:
+        rounded_rect(draw, (x1, y, x2, y+card_h), radius=26, fill="#0638A5", outline="#13B6EA", width=3)
+        draw.line((x1+8, y+card_h-3, x2-8, y+card_h-3), fill="#EF4444", width=4)
+        draw.line((x1+80, y+4, x2-80, y+4), fill="#22C55E", width=3)
+        draw.line((x1+260, y+4, x1+315, y+4), fill="#FBBF24", width=3)
+        draw.arc((x1, y, x1+58, y+58), 180, 270, fill="#14B8F5", width=7)
+        draw.arc((x2-58, y+card_h-58, x2, y+card_h), 0, 90, fill="#EF4444", width=7)
+
+        cy = y + card_h//2
+        flag_w = min(150, card_h-42)
+        paste_flag(img, a, (x1+36, cy-flag_w//2, x1+36+flag_w, cy+flag_w//2))
+        paste_flag(img, b, (x2-36-flag_w, cy-flag_w//2, x2-36, cy+flag_w//2))
+
+        name_font = get_font(25 if count >= 4 else 29)
+        draw_text(draw, (x1+36+flag_w//2, y+card_h-28), _clean_display_name(a), name_font, fill="#FFFFFF", max_width=210)
+        draw_text(draw, (x2-36-flag_w//2, y+card_h-28), _clean_display_name(b), name_font, fill="#FFFFFF", max_width=210)
+
+        tm, period = _ampm_from_time(t)
+        draw_text(draw, (width//2, cy-14), tm, get_font(50 if count >= 4 else 62), fill="#FBBF24")
+        if period:
+            draw_text(draw, (width//2, cy+39), period, get_font(29 if count >= 4 else 36), fill="#FBBF24")
+        y += card_h + gap
+
+    _draw_games_footer(draw, img, width, height)
+    path = os.path.join(GENERATED_DIR, f"matches_style2_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+def create_match_results_style2_image(day_name, results):
+    ensure_generated_dir()
+    count = max(len(results), 1)
+    width = 1200
+    height = 1500 if count >= 4 else 1280
+    img, draw = _games_day_background(width, height)
+
+    _draw_games_header(draw, width, "MATCH RESULTS", f"اليوم {day_name}")
+
+    if count == 1:
+        card_h, gap, y = 245, 0, 490
+    elif count == 2:
+        card_h, gap, y = 205, 34, 430
+    elif count == 3:
+        card_h, gap, y = 180, 24, 400
+    elif count == 4:
+        card_h, gap, y = 155, 22, 400
+    else:
+        card_h, gap, y = 132, 17, 375
+
+    x1, x2 = 270, 890
+    for a, sa, sb, b in results[:6]:
+        rounded_rect(draw, (x1, y, x2, y+card_h), radius=26, fill="#0638A5", outline="#13B6EA", width=3)
+        draw.line((x1+8, y+card_h-3, x2-8, y+card_h-3), fill="#EF4444", width=4)
+        draw.line((x1+80, y+4, x2-80, y+4), fill="#22C55E", width=3)
+        cy = y + card_h//2
+        flag_w = min(145, card_h-46)
+        paste_flag(img, a, (x1+36, cy-flag_w//2, x1+36+flag_w, cy+flag_w//2))
+        paste_flag(img, b, (x2-36-flag_w, cy-flag_w//2, x2-36, cy+flag_w//2))
+
+        name_font = get_font(25 if count >= 4 else 29)
+        draw_text(draw, (x1+36+flag_w//2, y+card_h-28), _clean_display_name(a), name_font, fill="#FFFFFF", max_width=210)
+        draw_text(draw, (x2-36-flag_w//2, y+card_h-28), _clean_display_name(b), name_font, fill="#FFFFFF", max_width=210)
+
+        rounded_rect(draw, (width//2-96, cy-42, width//2+96, cy+42), radius=18, fill="#FBBF24", outline="#00000088", width=2)
+        draw_text(draw, (width//2, cy), f"{sa} - {sb}", get_font(48 if count >= 4 else 58), fill="#061633")
+        y += card_h + gap
+
+    _draw_games_footer(draw, img, width, height)
+    path = os.path.join(GENERATED_DIR, f"results_style2_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+def create_scorers_style2_image(items):
+    ensure_generated_dir()
+    items = sorted(items, key=lambda x: (-x[1], x[0]))[:12]
+    count = max(len(items), 1)
+    width = 1200
+    height = 1500
+    img, draw = _games_day_background(width, height)
+    _draw_games_header(draw, width, "TOP SCORERS", "هدافين البطولة")
+
+    if count <= 3:
+        row_h, gap, y = 110, 24, 430
+    else:
+        row_h, gap, y = 80, 14, 405
+
+    x1, x2 = 230, 950
+    for i, (name, goals, team) in enumerate(items, start=1):
+        rounded_rect(draw, (x1, y, x2, y+row_h), radius=24, fill="#0638A5", outline=v16_accent(i), width=3)
+        cy = y + row_h//2
+        draw_text(draw, (x2-55, cy), str(i), get_font(34), fill="#FBBF24")
+        if team:
+            paste_flag(img, team, (x2-145, cy-30, x2-85, cy+30))
+        draw_text(draw, (width//2, cy), _clean_display_name(name), get_font(30 if count <= 3 else 24), fill="#FFFFFF", max_width=420)
+        draw_text(draw, (x1+115, cy), f"{goals} أهداف", get_font(27 if count <= 3 else 23), fill="#FBBF24")
+        y += row_h + gap
+
+    _draw_games_footer(draw, img, width, height)
+    path = os.path.join(GENERATED_DIR, "scorers_style2.png")
+    img.save(path, quality=95)
+    return path
+
+def create_group_style2_image(group_title, rows):
+    ensure_generated_dir()
+    width, height = 1200, 1500
+    img, draw = _games_day_background(width, height)
+    title = clean_group_title_for_design(group_title)
+    if not str(title).startswith("المجموعة"):
+        title = f"المجموعة {title}"
+    _draw_games_header(draw, width, "GROUP STANDINGS", title)
+
+    x1, x2 = 210, 990
+    y = 435
+    row_h, gap = 105, 18
+    for i, (team, played, diff, pts) in enumerate(rows[:6], start=1):
+        rounded_rect(draw, (x1, y, x2, y+row_h), radius=24, fill="#0638A5", outline=v16_accent(i), width=3)
+        cy = y + row_h//2
+        draw_text(draw, (x2-52, cy), str(i), get_font(32), fill="#FBBF24")
+        paste_flag(img, team, (x2-145, cy-33, x2-80, cy+33))
+        draw_text(draw, (x2-300, cy), _clean_display_name(team), get_font(30), fill="#FFFFFF", max_width=260)
+        draw_text(draw, (x1+355, cy), f"لعب {played}", get_font(24), fill="#E5E7EB")
+        draw_text(draw, (x1+230, cy), f"{int(diff):+d}", get_font(28), fill="#E5E7EB")
+        draw_text(draw, (x1+90, cy), str(pts), get_font(34), fill="#FBBF24")
+        y += row_h + gap
+
+    _draw_games_footer(draw, img, width, height)
+    path = os.path.join(GENERATED_DIR, f"group_style2_{_safe_filename(group_title)}.png")
+    img.save(path, quality=95)
+    return path
+
+def create_all_groups_image(groups):
+    ensure_generated_dir()
+    width, height = 1800, 2400
+    img, draw = _games_day_background(width, height)
+    draw_text(draw, (width//2, 90), "MONDIAL AL MASEEF 2026", get_font(40), fill="#FFFFFF")
+    draw_text(draw, (width//2, 170), "ALL GROUP STANDINGS", get_font(72), fill="#FFFFFF", max_width=width-160)
+    draw_text(draw, (width//2, 235), "ترتيب جميع المجموعات", get_font(36), fill="#FBBF24")
+
+    cols = 3
+    margin_x, gap_x = 75, 35
+    card_w = (width - 2*margin_x - (cols-1)*gap_x) // cols
+    card_h = 470
+    start_y = 320
+    gap_y = 38
+
+    for idx, (title, rows) in enumerate(groups[:12]):
+        c = idx % cols
+        r = idx // cols
+        x = margin_x + c*(card_w+gap_x)
+        y = start_y + r*(card_h+gap_y)
+        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=28, fill="#0638A5EE", outline="#14B8F5", width=3)
+        rounded_rect(draw, (x+18, y+18, x+card_w-18, y+68), radius=18, fill="#FBBF24", outline="#00000055", width=1)
+        gt = clean_group_title_for_design(title)
+        if not str(gt).startswith("المجموعة"):
+            gt = f"المجموعة {gt}"
+        draw_text(draw, (x+card_w//2, y+43), gt, get_font(26), fill="#061633", max_width=card_w-40)
+        yy = y + 92
+        for pos, (team, played, diff, pts) in enumerate(rows[:4], start=1):
+            rounded_rect(draw, (x+20, yy, x+card_w-20, yy+72), radius=16, fill="#061633AA", outline="#FFFFFF22", width=1)
+            cy = yy + 36
+            draw_text(draw, (x+card_w-44, cy), str(pos), get_font(22), fill="#FBBF24")
+            paste_flag(img, team, (x+card_w-125, cy-24, x+card_w-75, cy+24))
+            draw_text(draw, (x+card_w-245, cy), _clean_display_name(team), get_font(21), fill="#FFFFFF", max_width=185)
+            draw_text(draw, (x+155, cy), str(pts), get_font(26), fill="#FBBF24")
+            draw_text(draw, (x+75, cy), f"{int(diff):+d}", get_font(21), fill="#E5E7EB")
+            yy += 84
+
+    draw_text(draw, (width//2, height-70), "المصيف ينقل لكم الحدث", get_font(36), fill="#FBBF24")
+    path = os.path.join(GENERATED_DIR, "all_groups_style2.png")
+    img.save(path, quality=95)
+    return path
+
+def create_daily_result_image(day, goals_count=None, clean_sheets=None):
+    ensure_generated_dir()
+    data = build_day_summary(day)
+    rows = data["sorted_rows"]
+    matchups = generate_matchups_for_day(day)
+    pairs = matchups.get("pairs", [])
+    match_rows = len(pairs) + (1 if matchups.get("bye") else 0)
+
+    goals_lines = [f"{_clean_display_name(p)} - {c}" for p, c in (goals_count or {}).items()] if goals_count else [f"{_clean_display_name(p)} - {pts} نقطة" for p, pts in data["player_points"].most_common(5)]
+    clean_lines = [_clean_display_name(x) for x in (clean_sheets or list(data["keeper_points"].keys()) or ["لا يوجد"])]
+    goals_lines = goals_lines or ["لا يوجد"]
+    clean_lines = clean_lines or ["لا يوجد"]
+
+    width = 1400
+    row_h = 44
+    match_box_h = max(165, 85 + match_rows * 36)
+    height = max(1580, 520 + len(rows)*50 + match_box_h + 300)
+    img, draw = design_canvas(None, width, height, "purple")
+    draw_design_header(draw, width, f"فانتزي المصيف 2026 - اليوم {ordinal_day(day)}", "أسطورة اليوم وترتيب المشاركين", img)
+    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=235, bottom_pad=95, accent="#8B5CF6")
+
+    legends = " + ".join(_clean_display_name(w) for w in data["winners"]) if data["winners"] else "لا يوجد"
+    rounded_rect(draw, (90, fy1 + 18, 1010, fy1 + 145), radius=32, fill="#7C3AEDDD", outline="#FFFFFF40", width=2)
+    draw_text(draw, (550, fy1 + 55), "أسطورة اليوم", get_font(27), fill="#FFFFFF")
+    draw_text(draw, (550, fy1 + 106), f"{legends} - {data['max_score']} نقطة", get_font(39), fill="#FFF6D6", max_width=850)
+    rounded_rect(draw, (1040, fy1 + 18, 1310, fy1 + 145), radius=26, fill="#F59E0BDD", outline="#FFFFFF33", width=2)
+    draw_text(draw, (1175, fy1 + 55), "المشاركون", get_font(24), fill="#FFFFFF")
+    draw_text(draw, (1175, fy1 + 106), f"{len(data['participants'])}", get_font(44), fill="#FFFFFF")
+
+    y = fy1 + 175
+    rounded_rect(draw, (90, y, 1310, y + 50), radius=16, fill="#05070D", outline="#FFFFFF55", width=1)
+    headers = [(1180, "المشارك"), (870, "النقاط"), (650, "الحارس"), (430, "الكابتن"), (190, "المركز")]
+    for x, t in headers:
+        draw_text(draw, (x, y + 25), t, get_font(21), fill="#FDE68A")
+    y += 60
+
+    for idx, r in enumerate(rows, start=1):
+        accent = "#F59E0B" if idx == 1 else "#FFFFFF22"
+        fill = "#1A1407" if idx == 1 else ("#0B1020" if idx % 2 else "#10172A")
+        rounded_rect(draw, (90, y, 1310, y + row_h), radius=14, fill=fill, outline=accent, width=2 if idx == 1 else 1)
+        cy = y + row_h // 2
+        draw_text(draw, (1180, cy), _clean_display_name(r["participant"]), get_font(22), fill="#FFFFFF", max_width=300)
+        draw_text(draw, (870, cy), str(r["total"]), get_font(25), fill="#FDE68A")
+        draw_text(draw, (650, cy), f"+{r['keeper_points']}", get_font(22), fill="#A7F3D0")
+        draw_text(draw, (430, cy), f"+{r['captain_points']}", get_font(22), fill="#C4B5FD")
+        draw_text(draw, (190, cy), str(idx), get_font(23), fill="#FFFFFF")
+        y += row_h + 6
+
+    rounded_rect(draw, (90, y + 18, 1310, y + 18 + match_box_h), radius=26, fill="#091122DD", outline="#22C55E", width=2)
+    draw_text(draw, (700, y + 52), "مواجهات اليوم", get_font(27), fill="#FDE68A")
+    yy = y + 88
+    if not pairs and not matchups.get("bye"):
+        draw_text(draw, (700, yy), "لا توجد مواجهات", get_font(22), fill="#FFFFFF")
+    else:
+        for p in pairs:
+            line = f"{_clean_display_name(p['a'])} {p['a_points']} - {p['b_points']} {_clean_display_name(p['b'])} - الفائز: {_clean_display_name(p['winner'])}"
+            draw_text(draw, (700, yy), line, get_font(20), fill="#FFFFFF", max_width=1120)
+            yy += 34
+        if matchups.get("bye"):
+            draw_text(draw, (700, yy), f"راحة الجولة: {_clean_display_name(matchups['bye'])}", get_font(20), fill="#FDE68A")
+
+    y = y + 18 + match_box_h + 26
+    box_h = 205
+    rounded_rect(draw, (90, y, 675, y + box_h), radius=26, fill="#091122DD", outline="#A855F7", width=2)
+    rounded_rect(draw, (725, y, 1310, y + box_h), radius=26, fill="#091122DD", outline="#06B6D4", width=2)
+    draw_text(draw, (382, y + 38), "الهدافين", get_font(30), fill="#FFFFFF")
+    draw_text(draw, (382, y + 120), "\n".join(goals_lines[:5]), get_font(23), fill="#E5E7EB", max_width=500)
+    draw_text(draw, (1018, y + 38), "الكلين شيت", get_font(30), fill="#FFFFFF")
+    draw_text(draw, (1018, y + 120), "\n".join(clean_lines[:5]), get_font(23), fill="#E5E7EB", max_width=500)
+
+    draw_text(draw, (width//2, height-48), "المصيف ينقل لكم الحدث", get_font(26), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, f"daily_result_day_{day}.png")
+    img.save(path, quality=95)
+    return path
+
+def create_legends_image(start_day=1, end_day=31):
+    ensure_generated_dir()
+    stats = collect_stats(start_day, end_day)
+    days = stats["days"]
+    width = 1200
+    count = max(len(days), 1)
+    row_h = 82
+    gap = 12
+    height = max(820, 265 + count*(row_h+gap) + 125)
+    img, draw = design_canvas(None, width, height, "purple")
+    draw_design_header(draw, width, "سجل أساطير الفانتزي", f"من اليوم {start_day} إلى اليوم {end_day}", img)
+    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=220, bottom_pad=100, accent="#8B5CF6")
+
+    y = fy1 + 24
+    rounded_rect(draw, (92, y, width-92, y+56), radius=18, fill="#05070D", outline="#FFFFFF55", width=1)
+    draw_text(draw, (1010, y+28), "اليوم", get_font(22), fill="#FDE68A")
+    draw_text(draw, (650, y+28), "أسطورة اليوم", get_font(22), fill="#FDE68A")
+    draw_text(draw, (220, y+28), "النقاط", get_font(22), fill="#FDE68A")
+    y += 72
+
+    if not days:
+        draw_text(draw, (width//2, y+35), "لا توجد أيام في هذا النطاق", get_font(24), fill="#FFFFFF")
+    else:
+        for idx, day in enumerate(days, start=1):
+            info = stats["per_day"].get(day, {})
+            winners = " + ".join(_clean_display_name(w) for w in info.get("winners", [])) if info.get("winners") else "لا يوجد"
+            max_score = info.get("max_score", 0)
+            accent = "#F59E0B" if idx == 1 else v16_accent(idx)
+            rounded_rect(draw, (92, y, width-92, y+row_h), radius=20, fill="#0B1020", outline=accent, width=2)
+            cy = y + row_h//2
+            draw_text(draw, (1010, cy), f"اليوم {ordinal_day(day)}", get_font(23), fill="#FFFFFF")
+            draw_text(draw, (650, cy), winners, get_font(22), fill="#FDE68A", max_width=500)
+            draw_text(draw, (220, cy), f"{max_score} نقطة", get_font(23), fill="#A7F3D0")
+            y += row_h + gap
+
+    draw_text(draw, (width//2, height-44), "المصيف ينقل لكم الحدث", get_font(24), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, f"legends_{start_day}_{end_day}.png")
+    img.save(path, quality=95)
+    return path
+
+def create_participant_card_image(name, start_day=1, end_day=31):
+    ensure_generated_dir()
+    stats = collect_stats(start_day, end_day)
+    if name not in PARTICIPANTS:
+        raise ValueError("اسم المشارك غير موجود")
+    rank = stats["ranking"].index(name) + 1 if name in stats["ranking"] else "-"
+    total = stats["totals"].get(name, 0)
+    day_scores = stats["scores_by_day"].get(name, {})
+    best_day = max(day_scores, key=lambda d: day_scores[d]) if day_scores else "-"
+    worst_day = min(day_scores, key=lambda d: day_scores[d]) if day_scores else "-"
+    best_score = day_scores.get(best_day, 0) if best_day != "-" else 0
+    worst_score = day_scores.get(worst_day, 0) if worst_day != "-" else 0
+    best_cap, best_cap_pts, best_cap_day = participant_best_captain(name, start_day, end_day)
+    wins = matchup_wins_map(start_day, end_day).get(name, 0)
+    pc = stats["participation_count"].get(name, 0)
+    days_count = len(stats["days"])
+    pct = f"{round(pc / days_count * 100, 1)}%" if days_count else "0%"
+
+    width, height = 1200, 940
+    img, draw = design_canvas(None, width, height, "purple")
+    draw_design_header(draw, width, "بطاقة مشارك فانتزي المصيف", _clean_display_name(name), img)
+    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=225, bottom_pad=105, accent="#8B5CF6")
+
+    best_day_text = f"اليوم {best_day}\n{best_score} نقاط" if best_day != "-" else "-"
+    worst_day_text = f"اليوم {worst_day}\n{worst_score} نقاط" if worst_day != "-" else "-"
+    cap_text = f"{_clean_display_name(best_cap)}\n{best_cap_pts} نقاط" if best_cap else "-"
+
+    cards = [
+        (90, fy1+20, 360, fy1+145, "المركز", f"#{rank}"),
+        (465, fy1+20, 735, fy1+145, "النقاط", str(total)),
+        (840, fy1+20, 1110, fy1+145, "أسطورة اليوم", str(stats["daily_wins"].get(name,0))),
+        (90, fy1+185, 360, fy1+315, "أفضل يوم", best_day_text),
+        (465, fy1+185, 735, fy1+315, "أسوأ يوم", worst_day_text),
+        (840, fy1+185, 1110, fy1+315, "نسبة المشاركة", pct),
+        (90, fy1+355, 545, fy1+500, "أفضل كابتن", cap_text),
+        (655, fy1+355, 1110, fy1+500, "انتصارات المواجهات اليومية", str(wins)),
+    ]
+    for x1,y1,x2,y2,t,v in cards:
+        rounded_rect(draw,(x1,y1,x2,y2), radius=28, fill="#091122DD", outline="#FFFFFF25", width=2)
+        draw_text(draw, ((x1+x2)//2, y1+34), t, get_font(25), fill="#E5E7EB", max_width=x2-x1-20)
+        draw_text(draw, ((x1+x2)//2, y1+92), v, get_font(31), fill="#FFFFFF", max_width=x2-x1-30)
+
+    draw_text(draw, (width//2, height-44), "المصيف ينقل لكم الحدث", get_font(24), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, f"participant_card_{_safe_filename(name)}.png")
+    img.save(path, quality=95)
+    return path
+
+def _period_start_rank_map(start_day):
+    before = _rank_map_until(start_day - 1)
+    if before:
+        return before
+    return _rank_map_until(start_day)
+
+def _movement_label(name, old_rank, new_rank):
+    if not name or old_rank is None or new_rank is None:
+        return "لا يوجد تغير"
+    return f"{_clean_display_name(name)}\nمن المركز {old_rank} إلى {new_rank}"
+
+def create_period_report_image(start_day, end_day):
+    ensure_generated_dir()
+    days, totals, cap_points, keeper_points, player_impact, player_zero, active_counts = period_stats(start_day, end_day)
+    if not days:
+        raise ValueError("ما فيه أيام في الفترة")
+
+    stats_range = collect_stats(start_day, end_day)
+    champion = totals.most_common(1)[0][0] if totals else "-"
+    champ_points = totals.get(champion, 0) if champion != "-" else 0
+
+    start_map = _period_start_rank_map(start_day)
+    end_map = _rank_map_until(end_day)
+    rising_name = falling_name = None
+    rising_delta = 0
+    falling_delta = 0
+    for name in PARTICIPANTS:
+        if name not in start_map or name not in end_map:
+            continue
+        delta = start_map[name] - end_map[name]
+        if delta > rising_delta:
+            rising_delta, rising_name = delta, name
+        if delta < falling_delta:
+            falling_delta, falling_name = delta, name
+
+    rising_text = _movement_label(rising_name, start_map.get(rising_name), end_map.get(rising_name)) if rising_name else "لا يوجد تغير"
+    falling_text = _movement_label(falling_name, start_map.get(falling_name), end_map.get(falling_name)) if falling_name else "لا يوجد تغير"
+
+    top_day_name, top_day_score, top_day = _biggest_daily_score(start_day, end_day)
+    legends_map = stats_range.get("daily_wins", {})
+    if legends_map:
+        top_legend_name, top_legend_count = max(legends_map.items(), key=lambda x: x[1])
+    else:
+        top_legend_name, top_legend_count = "-", 0
+
+    width = 1400
+    top5 = totals.most_common(5)
+    height = max(1080, 865 + len(top5) * 62)
+    img, draw = design_canvas(None, width, height, "purple")
+    draw_design_header(draw, width, f"تقرير الفترة من اليوم {start_day} إلى {end_day}", "فانتزي المصيف 2026", img)
+    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=230, bottom_pad=105, accent="#F59E0B")
+
+    cards = [
+        (80, fy1+15, 430, fy1+160, "بطل الفترة", f"{_clean_display_name(champion)}\n{champ_points} نقطة"),
+        (525, fy1+15, 875, fy1+160, "أكثر اللاعبين صعودًا", rising_text),
+        (970, fy1+15, 1320, fy1+160, "أكثر اللاعبين تراجعًا", falling_text),
+        (80, fy1+205, 652, fy1+355, "أعلى نقاط يومية في الفترة", f"{_clean_display_name(top_day_name)}\n{top_day_score} نقطة\nالجولة {top_day}"),
+        (748, fy1+205, 1320, fy1+355, "أكثر من فاز بأسطورة اليوم", f"{_clean_display_name(top_legend_name)}\n{top_legend_count} مرات"),
+    ]
+    for x1,y1,x2,y2,t,v in cards:
+        rounded_rect(draw,(x1,y1,x2,y2), radius=30, fill="#091122DD", outline="#FFFFFF25", width=2)
+        draw_text(draw, ((x1+x2)//2, y1+38), t, get_font(25), fill="#E5E7EB", max_width=x2-x1-20)
+        draw_text(draw, ((x1+x2)//2, y1+101), v, get_font(31), fill="#FFFFFF", max_width=x2-x1-30)
+
+    y = fy1 + 405
+    draw_text(draw, (700, y), "أفضل 5 في الفترة", get_font(36), fill="#FDE68A")
+    y += 55
+    for i, (pname, pts) in enumerate(top5, start=1):
+        accent = "#F59E0B" if i == 1 else v16_accent(i)
+        rounded_rect(draw,(170,y,1230,y+55), radius=18, fill="#0B1020", outline=accent, width=2)
+        draw_text(draw,(1110,y+28), f"{i}. {_clean_display_name(pname)}", get_font(28), fill="#FFFFFF", max_width=650)
+        draw_text(draw,(300,y+28), f"{pts} نقطة", get_font(28), fill="#FDE68A")
+        y += 65
+
+    draw_text(draw, (width//2, height-45), "المصيف ينقل لكم الحدث", get_font(24), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, f"period_report_{start_day}_{end_day}.png")
+    img.save(path, quality=95)
+    return path
+
+async def dashboard_sheet_image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        args = update.message.text.split(maxsplit=3)
+        start_day = int(args[1]) if len(args) >= 2 and args[1].isdigit() else 1
+        end_day = int(args[2]) if len(args) >= 3 and args[2].isdigit() else max(get_existing_days(1, 31) or [1])
+        sheet = args[3].strip() if len(args) >= 4 else ""
+        if "ترتيب" in sheet:
+            path = create_overall_ranking_image(start_day, end_day)
+            await send_photo_path(update, path, f"✅ الترتيب العام من اليوم {start_day} إلى {end_day}")
+        elif "أساطير" in sheet or "اساطير" in sheet or "سجل" in sheet:
+            path = create_legends_image(start_day, end_day)
+            await send_photo_path(update, path, f"✅ سجل الأساطير من اليوم {start_day} إلى {end_day}")
+        else:
+            await update.message.reply_text(
+                "صور الإحصائيات كجداول Excel غير معتمدة لأنها غير مقروءة داخل تيليجرام.\n"
+                "استخدم /احصائيات للملف، أو /صور_الاحصائيات للصور المعتمدة."
+            )
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تجهيز صورة الإحصائيات ❌\n{e}")
+
+async def all_dashboard_images_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        m = re.search(r"(\d+)\s+(\d+)", update.message.text)
+        if m:
+            start_day, end_day = int(m.group(1)), int(m.group(2))
+        else:
+            start_day, end_day = 1, max(get_existing_days(1, 31) or [1])
+        await update.message.reply_text("جاري تجهيز الصور المعتمدة فقط ✅")
+        await send_photo_path(update, create_overall_ranking_image(start_day, end_day), f"✅ الترتيب العام من اليوم {start_day} إلى {end_day}")
+        await send_photo_path(update, create_legends_image(start_day, end_day), f"✅ سجل الأساطير من اليوم {start_day} إلى {end_day}")
+        await send_photo_path(update, create_period_report_image(start_day, end_day), f"✅ تقرير الفترة {start_day} - {end_day}")
+        await update.message.reply_text("تم إيقاف صور الجداول الصغيرة غير المقروءة. ملف Excel موجود عبر /احصائيات ✅")
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تجهيز صور الإحصائيات ❌\n{e}")
+
+async def design_matches_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        day_name, matches = parse_matches_text(update.message.text)
+        if not matches:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_ستايل2\nالسابع\nالبرتغال|الكونغو الديمقراطية|8:00 م")
+            return
+        path = create_matches_style2_image(day_name, matches)
+        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم مباريات ستايل2 ❌\n{e}")
+
+async def design_match_results_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        day_name, results = parse_match_results_design_text(update.message.text)
+        if not results:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_نتائج_مباريات_ستايل2\nالسابع\nالبرتغال|2|1|الكونغو الديمقراطية")
+            return
+        path = create_match_results_style2_image(day_name, results)
+        await send_photo_path(update, path, build_design_results_caption(day_name, results))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم نتائج ستايل2 ❌\n{e}")
+
+async def design_scorers_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        items = parse_scorers_text(update.message.text)
+        if not items:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_هدافين_ستايل2\nراؤول خيمينيز|4|المكسيك")
+            return
+        path = create_scorers_style2_image(items)
+        await send_photo_path(update, path, build_top_scorers_caption(items))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم الهدافين ستايل2 ❌\n{e}")
+
+async def design_group_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        group_title, rows = parse_group_standing_text(update.message.text)
+        if not rows:
+            await update.message.reply_text("اكتبها كذا:\n/تصميم_ترتيب_مجموعة_ستايل2\nالمجموعة C\nالبرازيل|1|0|1")
+            return
+        path = create_group_style2_image(group_title, rows)
+        await send_photo_path(update, path, build_group_standing_caption(group_title, rows))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم ترتيب المجموعة ستايل2 ❌\n{e}")
+
+async def design_matches_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, matches = parse_matches_text(update.message.text)
+    if not matches:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات\nالسادس\nفرنسا|البرازيل|10:00 م\nالأرجنتين|ألمانيا|12:00 ص")
+        return
+    try:
+        path = create_matches_template_image(day_name, matches, use_template=True)
+        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم المباريات بالقالب ❌\n{e}")
+
+async def design_matches_auto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    day_name, matches = parse_matches_text(update.message.text)
+    if not matches:
+        await update.message.reply_text("اكتبها كذا:\n/تصميم_مباريات_تلقائي\nالسادس\nفرنسا|البرازيل|10:00 م")
+        return
+    try:
+        path = create_matches_template_image(day_name, matches, use_template=False)
+        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم المباريات التلقائي ❌\n{e}")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "البوت جاهز ✅\n\n"
+        "الأوامر الأساسية:\n"
+        "/اضافه 5\n/نتائج 5\n/اعتماد_نتائج 5\n/احصائيات\n/احصائيات 1 6\n/ترتيب_نص\n\n"
+        "أوامر الصور والتقارير:\n"
+        "/صورة_اليوم 6\n/صورة_الترتيب 1 6\n/صورة_الاساطير 1 6\n"
+        "/صور_الاحصائيات 1 6\n/بطاقة فارس سالم\n/تقرير_الفترة 1 6\n"
+        "/تفعيل_الصور_التلقائية\n/إيقاف_الصور_التلقائية\n\n"
+        "أوامر التصاميم:\n"
+        "/تصميم_مباريات\n/تصميم_مباريات_تلقائي\n"
+        "/تصميم_نتائج_مباريات\n/تصميم_نتائج_مباريات_تلقائي\n"
+        "/تصميم_ترتيب_مجموعة\n/تصميم_ترتيب_مجموعة_تلقائي\n"
+        "/تصميم_هدافين\n/تصميم_هدافين_تلقائي\n\n"
+        "التصميم الإضافي المعتمد:\n"
+        "/تصميم_مباريات_ستايل2\n/تصميم_نتائج_مباريات_ستايل2\n"
+        "/تصميم_هدافين_ستايل2\n/تصميم_ترتيب_مجموعة_ستايل2\n"
+        "/تصميم_مباريات_اطار\n/تصميم_نتائج_مباريات_اطار\n"
+        "/تصميم_جميع_المجموعات\n\n"
+        "أوامر الفحص والنشر:\n"
+        "/الأيام\n/فحص 5\n/مشاركين 5\n/اسطورة 5\n/مقارنة 4 5\n/اعلان_اليوم 5\n/ملخص_اليوم 5\n\n"
+        "أوامر الأمان:\n"
+        "/مسح_نتائج 5\n/مسح_يوم 5\n/مسح_الكل تأكيد\n/استرجاع_آخر\n/قفل_يوم 5\n/فتح_يوم 5\n/معرفي"
+    )
+
 if __name__ == "__main__":
     main()
