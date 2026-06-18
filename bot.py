@@ -7026,6 +7026,19 @@ def _format_design_date_text(raw):
         return EN_WEEKDAYS[raw]
     return raw.upper()
 
+
+def _display_time_en(t):
+    s = normalize_name(str(t or '').strip())
+    upper = s.upper()
+    if 'فجر' in s or 'ص' in s or 'AM' in upper:
+        period = 'AM'
+    elif 'م' in s or 'مساء' in s or 'PM' in upper:
+        period = 'PM'
+    else:
+        period = ''
+    tm = re.sub(r'(فجرًا|فجراً|فجرا|فجر|صباحًا|صباحا|ص|مساءً|مساء|م|AM|PM|am|pm)', '', s).strip()
+    return f"{tm} {period}".strip()
+
 # -------------------- Parsers V27 --------------------
 
 def parse_matches_text(text):
@@ -7289,11 +7302,42 @@ def _style4_clean_background(width=1200, height=1500):
     return img, draw
 
 
+def _draw_date_pill_only(draw, width, date_text):
+    # شريط التاريخ الديناميكي فقط — بدون إعادة رسم عنوان الخلفية الأصلي.
+    rounded_rect(draw, (width//2-240, 276, width//2+240, 334), radius=18, fill="#FBBF24", outline="#00000070", width=2)
+    draw_text(draw, (width//2, 306), date_text, get_font(28), fill="#061633", max_width=450)
+
+
+def _cover_style4_dynamic_areas(img, width, height, date_text):
+    # نحافظ على خلفية التمثال والعناوين والرعاة وشعار السعودية،
+    # ونغطي فقط تاريخ القالب القديم وخانات المباريات الثابتة.
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+
+    # تغطية مستطيل التاريخ الأصفر القديم
+    rounded_rect(od, (width//2-255, 266, width//2+255, 344), radius=22, fill="#08245FD8")
+
+    # تغطية خانات المباريات الثابتة فقط مع ترك التمثال والعناصر الجانبية ظاهرة
+    rounded_rect(od, (150, 350, 985, 1138), radius=38, fill="#061B58D8")
+
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    _draw_date_pill_only(draw, width, date_text)
+    return img, draw
+
+
 def _newlook_canvas(style, title, sub_title, width=1200, height=1500):
     style = int(style)
 
-    # ستايل 4 النهائي: لا نعتمد على الخلفية الجاهزة التي تحتوي خانات ثابتة أو تاريخ ثابت.
     if style == 4:
+        path = _template_bg_path(style)
+        if os.path.exists(path):
+            try:
+                img = Image.open(path).convert("RGB").resize((width, height), Image.LANCZOS)
+                return _cover_style4_dynamic_areas(img, width, height, sub_title)
+            except Exception:
+                pass
+        # احتياط فقط إذا لم توجد الخلفية الأصلية
         img, draw = _style4_clean_background(width, height)
         _draw_games_header(draw, width, title, sub_title)
         return img, draw
@@ -7359,10 +7403,13 @@ def create_matches_newlook_image(day_name, matches, style=2):
         draw_text(draw, (x1+38+flag_w//2, y+row_h-25), _clean_display_name(b), get_font(25 if count>=4 else 29), fill="#FFFFFF", max_width=210)
         center = t or "VS"
         if t:
-            tm, period = _ampm_from_time(t)
-            draw_text(draw, (width//2, cy-12), tm, get_font(50 if count>=4 else 62), fill="#FBBF24")
-            if period:
-                draw_text(draw, (width//2, cy+38), period, get_font(29 if count>=4 else 36), fill="#FBBF24")
+            if int(style) == 4:
+                draw_text(draw, (width//2, cy), _display_time_en(t), get_font(40 if count>=4 else 48), fill="#FBBF24", max_width=230)
+            else:
+                tm, period = _ampm_from_time(t)
+                draw_text(draw, (width//2, cy-12), tm, get_font(50 if count>=4 else 62), fill="#FBBF24")
+                if period:
+                    draw_text(draw, (width//2, cy+38), period, get_font(29 if count>=4 else 36), fill="#FBBF24")
         else:
             draw_text(draw, (width//2, cy), "VS", get_font(50), fill="#FBBF24")
         y += row_h + gap
