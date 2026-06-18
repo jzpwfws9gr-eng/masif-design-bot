@@ -7856,9 +7856,11 @@ def _v31_layout(count, clean=False):
     if count == 4:
         return 152, 22, 425 if not clean else 430
     if count == 5:
-        return 132, 17, 408 if not clean else 408
+        # مساحة أكبر للكروت حتى تظهر الأعلام أوضح بدون تغيير الهوية
+        return 140, 12, 400 if not clean else 400
     if count == 6:
-        return 116, 14, 395 if not clean else 398
+        # اعتمدنا تكبير الأعلام: نرفع ارتفاع الكرت ونقلل الفراغات بين الكروت
+        return 126, 8, 388 if not clean else 392
     return 100, 10, 390 if not clean else 390
 
 
@@ -7904,10 +7906,11 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     draw_text(draw, (x2-10-badge_size//2, y1+14+badge_size//2), str(idx), _v31_latin_font(18), fill="#061633", max_width=badge_size)
 
     # الأعلام أكبر وأوضح، مع بقائها داخل حدود الكرت.
-    # تكبير محسوب: تقريبًا +25٪ في حالة 5-6 مباريات بدون ضغط أسماء المنتخبات.
-    flag_h = min(88 if count <= 4 else 82, max(64, row_h - 24))
-    flag_w = min(165, int(flag_h * 1.55))
-    side_pad = 34
+    # تكبير قوي للأعلام بعد اعتماد المستخدم: تقريبًا ضعف المساحة البصرية السابقة،
+    # مع تعديل الهوامش حتى لا تدخل على أسماء المنتخبات أو مربع الوقت.
+    flag_h = min(122 if count <= 4 else 116, max(82, row_h - 10))
+    flag_w = min(198 if count >= 5 else 210, int(flag_h * 1.72))
+    side_pad = 24 if count >= 5 else 28
 
     # الفريق الأول يمين، الفريق الثاني يسار
     right_flag_box = (x2-side_pad-flag_w, cy-flag_h//2, x2-side_pad, cy+flag_h//2)
@@ -7926,16 +7929,16 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     base_team_size = 38 if count <= 2 else (36 if count == 3 else (34 if count == 4 else (31 if count <= 6 else 27)))
 
     right_text_left = cx + time_w//2 + 18
-    right_text_right = right_flag_box[0] - 16
-    left_text_left = left_flag_box[2] + 16
+    right_text_right = right_flag_box[0] - 10
+    left_text_left = left_flag_box[2] + 10
     left_text_right = cx - time_w//2 - 18
-    right_text_width = max(120, int(right_text_right - right_text_left))
-    left_text_width = max(120, int(left_text_right - left_text_left))
+    right_text_width = max(95, int(right_text_right - right_text_left))
+    left_text_width = max(95, int(left_text_right - left_text_left))
     right_text_x = (right_text_left + right_text_right) // 2
     left_text_x = (left_text_left + left_text_right) // 2
 
-    font_a = _v31_fit_ar_font(draw, team_a, base_team_size, right_text_width, min_size=24 if count <= 6 else 20)
-    font_b = _v31_fit_ar_font(draw, team_b, base_team_size, left_text_width, min_size=24 if count <= 6 else 20)
+    font_a = _v31_fit_ar_font(draw, team_a, base_team_size, right_text_width, min_size=22 if count <= 6 else 20)
+    font_b = _v31_fit_ar_font(draw, team_b, base_team_size, left_text_width, min_size=22 if count <= 6 else 20)
     _v31_draw_team_name(draw, (right_text_x, cy), team_a, font_a, right_text_width)
     _v31_draw_team_name(draw, (left_text_x, cy), team_b, font_b, left_text_width)
 
