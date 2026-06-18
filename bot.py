@@ -5858,6 +5858,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الاساطير"), legends_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), dashboard_sheet_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), all_dashboard_images_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملف_الاحصائيات(?:\\s|$)"), statistics_pdf_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بطاقة"), participant_card_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تقرير_الفترة"), period_report_command))
 
@@ -7946,18 +7947,18 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     rounded_rect(draw, (x2-badge_size-10, y1+14, x2-10, y1+14+badge_size), radius=10, fill="#FBBF24", outline="#FFFFFF33", width=1)
     draw_text(draw, (x2-10-badge_size//2, y1+14+badge_size//2), str(idx), _v31_latin_font(18), fill="#061633", max_width=badge_size)
 
-    # الأعلام أكبر بحوالي 70٪ بصريًا، لكن بدون ما تضغط الاسم أو تطلع من الكرت.
-    # السر هنا: نكبر صندوق العلم + نقص الفراغ الشفاف من ملف العلم داخل _v31_paste_flag.
+    # الأعلام بعد المراجعة الأخيرة صغّرناها 25٪ عن النسخة المكبّرة؛
+    # تبقى واضحة داخل الكرت بدون ما تزاحم أسماء المنتخبات.
     if count >= 5:
-        flag_h = min(110, row_h - 12)
+        flag_h = min(82, row_h - 14)
         flag_w = int(flag_h * 1.55)
         side_pad = 18
     elif count == 4:
-        flag_h = min(122, row_h - 14)
+        flag_h = min(92, row_h - 16)
         flag_w = int(flag_h * 1.55)
         side_pad = 20
     else:
-        flag_h = min(132, row_h - 16)
+        flag_h = min(100, row_h - 18)
         flag_w = int(flag_h * 1.55)
         side_pad = 22
 
@@ -8308,6 +8309,233 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+
+
+# ============================================================
+# AGREED FINAL PATCH — صور الإحصائيات كاملة + PDF فخم
+# ============================================================
+
+def _parse_range_from_text(text):
+    nums = get_numbers(text or "")
+    existing = get_existing_days(1, 999)
+    if not existing:
+        return 1, 1
+    if len(nums) >= 2:
+        start_day, end_day = int(nums[0]), int(nums[1])
+    elif len(nums) == 1:
+        start_day, end_day = 1, int(nums[0])
+    else:
+        start_day, end_day = min(existing), max(existing)
+
+    if start_day > end_day:
+        start_day, end_day = end_day, start_day
+    start_day = max(min(existing), start_day)
+    end_day = min(max(existing), end_day)
+    return start_day, end_day
+
+
+def _stats_active_participants(start_day, end_day):
+    stats = collect_stats(start_day, end_day)
+    ranking = stats.get("ranking", []) or PARTICIPANTS[:]
+    totals = stats.get("totals", {})
+    active_counts = stats.get("participation_count", {})
+    active = [p for p in ranking if totals.get(p, 0) > 0 or active_counts.get(p, 0) > 0]
+    return active or ranking or PARTICIPANTS[:]
+
+
+def create_statistics_cover_image(start_day, end_day):
+    ensure_generated_dir()
+    width, height = 1400, 1800
+    img, draw = design_canvas(None, width, height, "purple")
+    draw_design_header(draw, width, "فانتزي المصيف 2026", "الملف الإحصائي الرسمي", img)
+    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=260, bottom_pad=120, accent="#F59E0B")
+
+    rounded_rect(draw, (110, fy1+40, width-110, fy1+300), radius=38, fill="#091122DD", outline="#FFFFFF33", width=2)
+    draw_text(draw, (width//2, fy1+105), "فانتزي المصيف 2026", get_font(64), fill="#FFFFFF", max_width=1000)
+    draw_text(draw, (width//2, fy1+190), "التقرير الإحصائي الشامل", get_font(42), fill="#FDE68A", max_width=900)
+
+    rounded_rect(draw, (170, fy1+360, width-170, fy1+505), radius=28, fill="#7C3AEDDD", outline="#FFFFFF33", width=2)
+    draw_text(draw, (width//2, fy1+412), f"الفترة من اليوم {start_day} إلى اليوم {end_day}", get_font(38), fill="#FFFFFF", max_width=880)
+    draw_text(draw, (width//2, fy1+468), "تم توليد الملف مباشرة من بيانات الإكسل", get_font(28), fill="#E5E7EB", max_width=760)
+
+    features = [
+        "الترتيب العام",
+        "سجل الأساطير",
+        "تقرير الفترة",
+        "ملخصات الأيام",
+        "تفاصيل اختيارات اللاعبين",
+        "بطاقات المشاركين",
+    ]
+    y = fy1 + 600
+    for item in features:
+        rounded_rect(draw, (200, y, width-200, y+86), radius=24, fill="#0B1020", outline="#FFFFFF22", width=1)
+        draw_text(draw, (width//2, y+43), item, get_font(30), fill="#FFFFFF", max_width=800)
+        y += 102
+
+    draw_text(draw, (width//2, height-60), "المصيف ينقل لكم الحدث", get_font(28), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, f"statistics_cover_{start_day}_{end_day}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def create_day_choices_image(day):
+    ensure_generated_dir()
+    rows = read_day_rows(day, data_only=True)
+    if not rows:
+        raise ValueError(f"لا توجد بيانات لليوم {day}")
+
+    rows = sorted(rows, key=lambda r: (-int(r.get("total", 0)), _clean_display_name(r.get("participant"))))
+
+    width = 1600
+    row_h = 82
+    top = 330
+    bottom = 95
+    height = max(1320, top + len(rows) * (row_h + 10) + bottom)
+    img, draw = design_canvas(None, width, height, "purple")
+    draw_design_header(draw, width, f"تفاصيل اختيارات اللاعبين - اليوم {ordinal_day(day)}", "فانتزي المصيف 2026", img)
+    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=245, bottom_pad=95, accent="#06B6D4")
+
+    cols = [
+        (1450, "المشارك", 240),
+        (1215, "الحارس", 145),
+        (1010, "اللاعب 1", 145),
+        (805, "اللاعب 2", 145),
+        (600, "اللاعب 3", 145),
+        (390, "الكابتن", 145),
+        (155, "المجموع", 95),
+    ]
+    y = fy1 + 24
+    rounded_rect(draw, (65, y, width-65, y+58), radius=18, fill="#05070D", outline="#FFFFFF55", width=1)
+    for x, title, _mw in cols:
+        draw_text(draw, (x, y+29), title, get_font(22), fill="#FDE68A")
+    y += 74
+
+    for idx, r in enumerate(rows, start=1):
+        accent = "#F59E0B" if idx == 1 else ("#FFFFFF22" if idx % 2 else "#FFFFFF15")
+        fill = "#1A1407" if idx == 1 else ("#0B1020" if idx % 2 else "#10172A")
+        rounded_rect(draw, (65, y, width-65, y+row_h), radius=18, fill=fill, outline=accent, width=2 if idx == 1 else 1)
+        cy = y + row_h // 2
+        items = [
+            (1450, _clean_display_name(r.get("participant")), 240, "#FFFFFF"),
+            (1215, _clean_display_name(r.get("keeper")), 145, "#FFFFFF"),
+            (1010, _clean_display_name(r.get("p1")), 145, "#FFFFFF"),
+            (805, _clean_display_name(r.get("p2")), 145, "#FFFFFF"),
+            (600, _clean_display_name(r.get("p3")), 145, "#FFFFFF"),
+            (390, _clean_display_name(r.get("captain")), 145, "#FFFFFF"),
+            (155, str(int(r.get("total", 0))), 95, "#FDE68A"),
+        ]
+        for x, txt, mw, color in items:
+            draw_text(draw, (x, cy), txt or "-", get_font(24 if x != 155 else 27), fill=color, max_width=mw)
+        y += row_h + 10
+
+    draw_text(draw, (width//2, height-44), "المصيف ينقل لكم الحدث", get_font(24), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, f"day_choices_{day}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def build_statistics_image_paths(start_day, end_day, include_cover=False):
+    days = get_existing_days(start_day, end_day)
+    if not days:
+        raise ValueError("لا توجد أيام في هذا النطاق")
+
+    paths = []
+    if include_cover:
+        paths.append(create_statistics_cover_image(start_day, end_day))
+
+    paths.append(create_overall_ranking_image(start_day, end_day))
+    paths.append(create_legends_image(start_day, end_day))
+    paths.append(create_period_report_image(start_day, end_day))
+
+    for day in days:
+        paths.append(create_daily_result_image(day))
+
+    for day in days:
+        paths.append(create_day_choices_image(day))
+
+    for name in _stats_active_participants(start_day, end_day):
+        paths.append(create_participant_card_image(name, start_day, end_day))
+
+    return paths
+
+
+def _pdf_ready_image(path, max_w=1280):
+    img = Image.open(path)
+    if img.mode not in ("RGB", "L"):
+        if "A" in img.getbands():
+            bg = Image.new("RGB", img.size, "white")
+            bg.paste(img, mask=img.split()[-1])
+            img = bg
+        else:
+            img = img.convert("RGB")
+    else:
+        img = img.convert("RGB")
+
+    if img.width > max_w:
+        nh = int(img.height * (max_w / img.width))
+        img = img.resize((max_w, nh), Image.LANCZOS)
+    return img
+
+
+def create_statistics_pdf(start_day, end_day):
+    ensure_generated_dir()
+    paths = build_statistics_image_paths(start_day, end_day, include_cover=True)
+    images = [_pdf_ready_image(p) for p in paths]
+
+    out_path = os.path.join(GENERATED_DIR, f"fantasy_stats_{start_day}_{end_day}.pdf")
+    images[0].save(out_path, "PDF", save_all=True, append_images=images[1:], resolution=120.0)
+
+    for im in images:
+        try:
+            im.close()
+        except Exception:
+            pass
+
+    return out_path, len(paths)
+
+
+async def all_dashboard_images_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        start_day, end_day = _parse_range_from_text(update.message.text)
+        await update.message.reply_text(f"جاري تجهيز صور الإحصائيات من اليوم {start_day} إلى {end_day} ✅")
+        paths = build_statistics_image_paths(start_day, end_day, include_cover=False)
+        for p in paths:
+            await send_photo_path(update, p)
+        await update.message.reply_text(f"تم إرسال {len(paths)} صورة إحصائية ✅")
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تجهيز صور الإحصائيات ❌\n{e}")
+
+
+async def statistics_pdf_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        start_day, end_day = _parse_range_from_text(update.message.text)
+        await update.message.reply_text(f"جاري تجهيز ملف PDF من اليوم {start_day} إلى {end_day} ✅")
+        pdf_path, page_count = create_statistics_pdf(start_day, end_day)
+        with open(pdf_path, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename=f"فانتزي_المصيف_2026_{start_day}_{end_day}.pdf",
+                caption=f"✅ ملف الإحصائيات جاهز — {page_count} صفحة تقريبًا"
+            )
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تجهيز ملف الإحصائيات ❌\n{e}")
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "البوت جاهز ✅\n\n"
+        "الأوامر الأساسية:\n"
+        "/اضافه 5\n/نتائج 5\n/اعتماد_نتائج 5\n/احصائيات\n/احصائيات 1 6\n/الترتيب_العام\n/الترتيب_العام 1 6\n/ترتيب_نص\n\n"
+        "أوامر الصور والتقارير:\n"
+        "/صورة_اليوم 6\n/صورة_الترتيب 1 6\n/صورة_الاساطير 1 6\n/صورة_احصائيات 1 6 لوحة عامة\n"
+        "/صور_الاحصائيات\n/صور_الاحصائيات 1 6\n/ملف_الاحصائيات\n/ملف_الاحصائيات 1 6\n"
+        "/بطاقة فارس سالم\n/تقرير_الفترة 1 4\n/تفعيل_الصور_التلقائية\n/إيقاف_الصور_التلقائية\n\n"
+        "أوامر المباريات:\n"
+        "/مباريات_اليوم\n/مباريات_اليوم2\n/مباريات_الأيام\n/مباريات_الايام\n/كل_المجموعات\n\n"
+        "مهم: /نتائج للفانتزي فقط، و/انتهت لتصميم نتائج المباريات."
+    )
+
+
 # Main V27 — يعيد تسجيل كل الأوامر بالترتيب الصحيح.
 def main():
     if not TOKEN:
@@ -8344,6 +8572,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/هدافين_تلقائي(?:\s|$)"), admin_only(short_scorers_auto_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/كل_المجموعات_تلقائي(?:\s|$)"), admin_only(short_all_groups_auto_command)))
 
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الأيام(?:\s|$)"), admin_only(multi_days_matches_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الايام(?:\s|$)"), admin_only(multi_days_matches_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات(?:\s|$)"), admin_only(short_matches_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/انتهت(?:\s|$)"), admin_only(short_results_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/كل_المجموعات(?:\s|$)"), admin_only(short_all_groups_command)))
