@@ -7694,6 +7694,224 @@ async def multi_days_matches_command(update: Update, context: ContextTypes.DEFAU
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم مباريات الأيام ❌\n{e}")
 
+
+
+# ============================================================
+# V31 — Statue of Liberty Matches Today designs
+# الأوامر:
+# /مباريات_اليوم  : الخلفية الكاملة GAMES OF THE DAY + كروت المباريات
+# /مباريات_اليوم2 : خلفية التمثال النظيفة + عنوان/تاريخ/كروت ديناميكية
+# ============================================================
+
+V31_FULL_BG = "games_v31_full_bg.png"
+V31_CLEAN_BG = "games_v31_clean_bg.png"
+
+def _v31_latin_font(size):
+    # خط إنجليزي احتياطي للعناوين والتاريخ حتى ما تطلع مربعات لو خط العربي ما يدعم Latin.
+    candidates = [
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "Arial.ttf",
+    ]
+    try:
+        for fp in candidates:
+            if os.path.exists(fp):
+                return ImageFont.truetype(fp, size)
+    except Exception:
+        pass
+    return get_font(size)
+
+
+def _v31_template_path(name):
+    try:
+        p = template_path(name)
+        if p and os.path.exists(p):
+            return p
+    except Exception:
+        pass
+    return os.path.join("assets", "templates", name)
+
+
+def _v31_load_bg(name, width=1200, height=1500):
+    path = _v31_template_path(name)
+    if Image and os.path.exists(path):
+        try:
+            img = Image.open(path).convert("RGB").resize((width, height), Image.LANCZOS)
+            return img, ImageDraw.Draw(img)
+        except Exception:
+            pass
+    # احتياط لو الخلفية ناقصة: خلفية زرقاء نظيفة بدون كراش
+    img = Image.new("RGB", (width, height), "#061633")
+    draw = ImageDraw.Draw(img)
+    for y in range(height):
+        t = y / max(height - 1, 1)
+        r = int(2 + 4 * t)
+        g = int(13 + 16 * t)
+        b = int(36 + 42 * t)
+        draw.line((0, y, width, y), fill=(r, g, b))
+    return img, draw
+
+
+def _v31_safe_date(day_name):
+    try:
+        return _format_design_date_text(day_name)
+    except Exception:
+        return str(day_name or "").strip()
+
+
+def _v31_time_label(t):
+    t = str(t or "").strip()
+    if not t:
+        return "VS"
+    try:
+        return _display_time_en(t)
+    except Exception:
+        pass
+    try:
+        tm, period = _ampm_from_time(t)
+        return f"{tm} {period}".strip()
+    except Exception:
+        return t
+
+
+def _v31_layout(count, clean=False):
+    count = max(1, min(int(count or 1), 7))
+    if count == 1:
+        return 225, 0, 560 if not clean else 610
+    if count == 2:
+        return 188, 32, 500 if not clean else 535
+    if count == 3:
+        return 158, 24, 455 if not clean else 475
+    if count == 4:
+        return 134, 20, 420 if not clean else 430
+    if count == 5:
+        return 116, 15, 405 if not clean else 410
+    if count == 6:
+        return 103, 13, 395 if not clean else 398
+    return 92, 11, 390 if not clean else 390
+
+
+def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
+    x1, y1, x2, y2 = [int(v) for v in box]
+    cy = (y1 + y2) // 2
+    row_h = y2 - y1
+
+    # الكرت الأساسي
+    rounded_rect(draw, (x1, y1, x2, y2), radius=30, fill="#061633", outline="#2F80FF", width=3)
+    draw.line((x1+32, y1+5, x2-32, y1+5), fill="#FBBF24", width=3)
+    draw.line((x1+32, y2-5, x2-32, y2-5), fill="#1257D6", width=3)
+
+    # رقم المباراة
+    rounded_rect(draw, (x2-38, y1+18, x2-10, y1+46), radius=10, fill="#FBBF24", outline="#FFFFFF33", width=1)
+    draw_text(draw, (x2-24, y1+32), str(idx), _v31_latin_font(18), fill="#061633", max_width=28)
+
+    flag_w = min(112, max(62, row_h - 30))
+    flag_h = int(flag_w * 0.68)
+
+    # الفريق الأول يمين، الفريق الثاني يسار
+    paste_flag(img, team_a, (x2-52-flag_w, cy-flag_h//2, x2-52, cy+flag_h//2))
+    paste_flag(img, team_b, (x1+52, cy-flag_h//2, x1+52+flag_w, cy+flag_h//2))
+
+    font_team = 25 if count <= 4 else 20
+    draw_text(draw, (x2-215, cy), _clean_display_name(team_a), get_font(font_team), fill="#FFFFFF", max_width=195)
+    draw_text(draw, (x1+215, cy), _clean_display_name(team_b), get_font(font_team), fill="#FFFFFF", max_width=195)
+
+    # الوقت بالنص
+    rounded_rect(draw, (x1+330, cy-34, x2-330, cy+34), radius=18, fill="#020A1B", outline="#FBBF24", width=2)
+    draw_text(draw, ((x1+x2)//2, cy), _v31_time_label(time_text), _v31_latin_font(30 if count <= 4 else 24), fill="#FBBF24", max_width=205)
+
+
+def _v31_draw_date_pill(draw, width, y, day_name):
+    date_txt = _v31_safe_date(day_name)
+    if not date_txt:
+        return
+    x1, x2 = 345, width - 345
+    rounded_rect(draw, (x1, y-31, x2, y+31), radius=22, fill="#061633", outline="#FBBF24", width=2)
+    font_obj = get_font(30) if re.search(r"[\u0600-\u06FF]", date_txt) else _v31_latin_font(30)
+    draw_text(draw, (width//2, y), date_txt, font_obj, fill="#FFFFFF", max_width=x2-x1-30)
+
+
+def create_matches_today_v31_full_image(day_name, matches):
+    ensure_generated_dir()
+    matches = list(matches or [])[:7]
+    count = max(len(matches), 1)
+    width, height = 1200, 1500
+    img, draw = _v31_load_bg(V31_FULL_BG, width, height)
+
+    # الخلفية فيها العنوان والتذييل ثابتين؛ نضيف التاريخ والكروت فقط.
+    _v31_draw_date_pill(draw, width, 350, day_name)
+
+    row_h, gap, y = _v31_layout(count, clean=False)
+    x1, x2 = 255, 1035
+    for idx, (a, b, t) in enumerate(matches, start=1):
+        _v31_card(img, draw, (x1, y, x2, y+row_h), idx, a, b, t, count)
+        y += row_h + gap
+
+    path = os.path.join(GENERATED_DIR, "matches_today_v31_full.png")
+    img.save(path, quality=96)
+    return path
+
+
+def create_matches_today_v31_clean_image(day_name, matches):
+    ensure_generated_dir()
+    matches = list(matches or [])[:7]
+    count = max(len(matches), 1)
+    width, height = 1200, 1500
+    img, draw = _v31_load_bg(V31_CLEAN_BG, width, height)
+
+    # النسخة النظيفة: العنوان كامل ديناميكي من البوت.
+    draw_text(draw, (width//2, 70), "MONDIAL AL MASEEF 2026", _v31_latin_font(36), fill="#FFFFFF", max_width=760)
+    draw_text(draw, (width//2, 165), "GAMES OF THE DAY", _v31_latin_font(86), fill="#FFFFFF", max_width=940)
+    _v31_draw_date_pill(draw, width, 285, day_name)
+
+    row_h, gap, y = _v31_layout(count, clean=True)
+    x1, x2 = 255, 1035
+    for idx, (a, b, t) in enumerate(matches, start=1):
+        _v31_card(img, draw, (x1, y, x2, y+row_h), idx, a, b, t, count)
+        y += row_h + gap
+
+    draw_text(draw, (width//2, height-70), "المصيف ينقل لكم الحدث", get_font(36), fill="#FBBF24", max_width=620)
+    path = os.path.join(GENERATED_DIR, "matches_today_v31_clean.png")
+    img.save(path, quality=96)
+    return path
+
+
+async def matches_today_v31_full_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        day_name, matches = parse_matches_text(update.message.text)
+        if not matches:
+            await update.message.reply_text(
+                "اكتبها كذا:\n"
+                "/مباريات_اليوم\n"
+                "24/06/2026\n"
+                "السعودية * فرنسا * 8:00 م\n"
+                "إسبانيا * الأرجنتين * 11:00 م"
+            )
+            return
+        path = create_matches_today_v31_full_image(day_name, matches)
+        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم مباريات اليوم V31 ❌\n{e}")
+
+
+async def matches_today_v31_clean_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        day_name, matches = parse_matches_text(update.message.text)
+        if not matches:
+            await update.message.reply_text(
+                "اكتبها كذا:\n"
+                "/مباريات_اليوم2\n"
+                "24/06/2026\n"
+                "السعودية * فرنسا * 8:00 م\n"
+                "إسبانيا * الأرجنتين * 11:00 م"
+            )
+            return
+        path = create_matches_today_v31_clean_image(day_name, matches)
+        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم مباريات اليوم V31-2 ❌\n{e}")
+
+
 # -------------------- Render by style --------------------
 
 def render_matches_by_style(day_name, matches, style, auto=False):
@@ -8019,6 +8237,11 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_آخر"), admin_only(restore_last)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
+
+    # V31 — مباريات اليوم بالتصميم الجديد
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم2(?:\s|$)"), admin_only(matches_today_v31_clean_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم(?:\s|$)"), admin_only(matches_today_v31_full_command)))
+
     app.run_polling()
 
 
