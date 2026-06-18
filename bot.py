@@ -6897,5 +6897,906 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/مسح_نتائج 5\n/مسح_يوم 5\n/مسح_الكل تأكيد\n/استرجاع_آخر\n/قفل_يوم 5\n/فتح_يوم 5\n/معرفي"
     )
 
+
+# ============================================================
+# V27 FINAL — نظام الستايلات 1-4 + الأوامر المختصرة
+# اعتماد المستخدم:
+# - كل أوامر التصاميم تدعم ستايل 1-4
+# - الأوامر المختصرة: /مباريات /انتهت /مجموعة /هدافين /كل_المجموعات
+# - النسخ التلقائية تدعم 1-4
+# - /نتائج للفانتزي فقط، و/انتهت لتصميم نتائج المباريات
+# - دعم صيغ النجمة * بجانب | للصق السريع
+# ============================================================
+
+DESIGN_STYLE_KEY = "design_style"
+STYLE_NAMES = {
+    1: "ستايل 1 - القديم الموجود",
+    2: "ستايل 2 - اللوك الجديد الأزرق",
+    3: "ستايل 3 - الإطار الأسود",
+    4: "ستايل 4 - اللوك الجديد الفخم",
+}
+
+
+def current_design_style():
+    try:
+        settings = load_settings()
+        style = int(settings.get(DESIGN_STYLE_KEY, 4))
+        return style if style in (1, 2, 3, 4) else 4
+    except Exception:
+        return 4
+
+
+def save_design_style(style):
+    style = int(style)
+    if style not in (1, 2, 3, 4):
+        raise ValueError("الستايل لازم يكون من 1 إلى 4")
+    settings = load_settings()
+    settings[DESIGN_STYLE_KEY] = style
+    save_settings(settings)
+    return style
+
+
+def command_style(text, forced=None):
+    if forced in (1, 2, 3, 4):
+        return forced
+    first = ((text or "").splitlines() or [""])[0].strip()
+    parts = first.split()
+    if len(parts) >= 2:
+        try:
+            s = int(parts[1])
+            if s in (1, 2, 3, 4):
+                return s
+        except Exception:
+            pass
+    return current_design_style()
+
+
+def _body_lines_after_command(text):
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    return lines[1:]
+
+
+def _has_sep(line):
+    return any(x in str(line) for x in ["|", "*", "×", " x ", " X "])
+
+
+def _split_data_parts(line):
+    line = normalize_name(line).replace("✕", "×")
+    # لا نستبدل حرف x داخل أسماء مثل Mexico؛ فقط نفصل إذا جاء كفاصل مستقل
+    if "|" in line:
+        return [p.strip() for p in line.split("|") if p.strip()]
+    if "*" in line:
+        return [p.strip() for p in line.split("*") if p.strip()]
+    if "×" in line:
+        return [p.strip() for p in line.split("×") if p.strip()]
+    if re.search(r"\s+[xX]\s+", line):
+        return [p.strip() for p in re.split(r"\s+[xX]\s+", line) if p.strip()]
+    return [line]
+
+
+def _looks_like_match_line(line):
+    p = _split_data_parts(line)
+    return len(p) >= 2 and not re.search(r"\d+\s*[*×|\-–:]\s*\d+", line or "")
+
+
+def _looks_like_result_line(line):
+    if re.search(r"\d+\s*[*×|\-–:]\s*\d+", line or ""):
+        return True
+    p = _split_data_parts(line)
+    if len(p) >= 4:
+        return bool(re.search(r"^-?\d+$", p[1]) and re.search(r"^-?\d+$", p[2]))
+    return False
+
+
+def _maybe_day_and_rows(body_lines, kind="matches"):
+    if not body_lines:
+        return "اليوم", []
+    first = body_lines[0]
+    if kind == "results" and _looks_like_result_line(first):
+        return "اليوم", body_lines
+    if kind == "matches" and _looks_like_match_line(first):
+        return "اليوم", body_lines
+    return first, body_lines[1:]
+
+
+# -------------------- Parsers V27 --------------------
+
+def parse_matches_text(text):
+    body = _body_lines_after_command(text)
+    day_name, data_lines = _maybe_day_and_rows(body, "matches")
+    matches = []
+    for line in data_lines:
+        parts = _split_data_parts(line)
+        if len(parts) >= 3:
+            matches.append((normalize_name(parts[0]), normalize_name(parts[1]), normalize_name(parts[2])))
+        elif len(parts) == 2:
+            # يدعم: فرنسا * البرتغال بدون وقت
+            matches.append((normalize_name(parts[0]), normalize_name(parts[1]), ""))
+        else:
+            # يدعم: فرنسا - البرتغال - 8:00 م
+            m = re.match(r"(.+?)\s*[-–]\s*(.+?)(?:\s*[-–]\s*(.+))?$", line)
+            if m:
+                matches.append((normalize_name(m.group(1)), normalize_name(m.group(2)), normalize_name(m.group(3) or "")))
+    return normalize_name(day_name or "اليوم"), matches
+
+
+def parse_match_results_design_text(text):
+    body = _body_lines_after_command(text)
+    day_name, data_lines = _maybe_day_and_rows(body, "results")
+    results = []
+    for line in data_lines:
+        line = normalize_name(line)
+        parts = _split_data_parts(line)
+        if len(parts) >= 4:
+            # يدعم: فريق * 2 * 1 * فريق أو فريق|2|1|فريق
+            try:
+                if re.fullmatch(r"\d+", parts[1]) and re.fullmatch(r"\d+", parts[2]):
+                    results.append((normalize_name(parts[0]), int(parts[1]), int(parts[2]), normalize_name(parts[3])))
+                    continue
+            except Exception:
+                pass
+        # يدعم الصيغة المطلوبة: فرنسا 2 * 6 البرتغال
+        m = re.match(r"(.+?)\s+(\d+)\s*[*×|\-–:]\s*(\d+)\s+(.+)$", line)
+        if m:
+            results.append((normalize_name(m.group(1)), int(m.group(2)), int(m.group(3)), normalize_name(m.group(4))))
+            continue
+        # يدعم: فرنسا 2 * البرتغال 6 بشكل احتياطي
+        if len(parts) == 2:
+            m1 = re.match(r"(.+?)\s+(\d+)\s*$", parts[0])
+            m2 = re.match(r"^\s*(\d+)\s+(.+)$", parts[1])
+            if m1 and m2:
+                results.append((normalize_name(m1.group(1)), int(m1.group(2)), int(m2.group(1)), normalize_name(m2.group(2))))
+    return normalize_name(day_name or "اليوم"), results
+
+
+def parse_scorers_text(text):
+    body = _body_lines_after_command(text)
+    items = []
+    for line in body:
+        parts = _split_data_parts(line)
+        name = team = ""
+        goals = 0
+        if len(parts) >= 3:
+            # الجديد: ميسي * الأرجنتين * 3
+            if re.fullmatch(r"\d+", parts[2]):
+                name, team, goals = normalize_name(parts[0]), normalize_name(parts[1]), int(parts[2])
+            # القديم: ميسي|3|الأرجنتين
+            elif re.fullmatch(r"\d+", parts[1]):
+                name, goals, team = normalize_name(parts[0]), int(parts[1]), normalize_name(parts[2])
+        elif len(parts) == 2 and re.fullmatch(r"\d+", parts[1]):
+            name, goals, team = normalize_name(parts[0]), int(parts[1]), ""
+        if name and goals > 0:
+            items.append((name, goals, team))
+    return sorted(items, key=lambda x: (-x[1], x[0]))
+
+
+def _extract_group_row(line):
+    line = normalize_name(line)
+    if not line:
+        return None
+    parts = _split_data_parts(line)
+    if len(parts) >= 4:
+        team = normalize_name(parts[0])
+        nums = re.findall(r"[+-]?\d+", " ".join(parts[1:]))
+        if len(nums) >= 3:
+            return (team, int(nums[0]), int(nums[1]), int(nums[2]))
+    # يدعم: اسكتلندا لعب 1 اهداف 1 نقاط 6
+    m = re.match(r"(.+?)\s+لعب\s+([0-9]+)\s+(?:فارق|اهداف|أهداف|\+/-)\s+([+-]?[0-9]+)\s+نقاط\s+([0-9]+)\s*$", line)
+    if m:
+        return (normalize_name(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)))
+    # يدعم: اسكتلندا 1 +1 6
+    m = re.match(r"(.+?)\s+([0-9]+)\s+([+-]?[0-9]+)\s+([0-9]+)\s*$", line)
+    if m:
+        return (normalize_name(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)))
+    return None
+
+
+def parse_group_standing_text(text):
+    body = _body_lines_after_command(text)
+    if not body:
+        return "المجموعة", []
+    group_title = normalize_name(body[0])
+    rows = []
+    for line in body[1:]:
+        row = _extract_group_row(line)
+        if row:
+            rows.append(row)
+    rows.sort(key=lambda x: (x[3], x[2], x[0]), reverse=True)
+    return group_title, rows
+
+
+def parse_all_groups_text(text):
+    body = _body_lines_after_command(text)
+    groups = []
+    current_title = None
+    current_rows = []
+    for line in body:
+        row = _extract_group_row(line)
+        if row and current_title:
+            current_rows.append(row)
+            continue
+        # أي سطر ليس صف يعتبر عنوان مجموعة: A / المجموعة A
+        if current_title and current_rows:
+            current_rows.sort(key=lambda x: (x[3], x[2], x[0]), reverse=True)
+            groups.append((current_title, current_rows))
+            current_rows = []
+        current_title = normalize_name(line)
+    if current_title and current_rows:
+        current_rows.sort(key=lambda x: (x[3], x[2], x[0]), reverse=True)
+        groups.append((current_title, current_rows))
+    return groups
+
+
+# -------------------- Captions V27 --------------------
+
+def build_design_matches_caption(day_name, matches):
+    lines = ["🏆 مونديال المصيف 2026 🏆", f"🔥 مباريات اليوم ( {day_name} ) 🔥", ""]
+    for a, b, t in matches:
+        lines.append(f"{a} × {b}" + (f" — {t}" if t else ""))
+    lines.append("")
+    lines.append("المصيف ينقل لكم الحدث")
+    return "\n".join(lines)
+
+
+def build_design_results_caption(day_name, results):
+    lines = ["🏆 نتائج مباريات اليوم 🏆", f"اليوم ( {day_name} )", ""]
+    for a, sa, sb, b in results:
+        lines.append(f"{a} {sa} - {sb} {b}")
+    lines.append("")
+    lines.append("المصيف ينقل لكم الحدث")
+    return "\n".join(lines)
+
+
+def build_match_results_caption(results):
+    # للتوافق مع الأوامر القديمة التي لا تمرر اليوم
+    lines = ["🏆 نتائج مباريات اليوم 🏆", ""]
+    for a, sa, sb, b in results:
+        lines.append(f"{a} {sa} - {sb} {b}")
+    lines.append("\nالمصيف ينقل لكم الحدث")
+    return "\n".join(lines)
+
+
+def build_top_scorers_caption(items):
+    lines = ["🏆 هدافين البطولة 🏆", ""]
+    for i, (name, goals, team) in enumerate(sorted(items, key=lambda x: (-x[1], x[0])), start=1):
+        team_part = f" — {team}" if team else ""
+        lines.append(f"{i}. {name}{team_part} — {goals} أهداف")
+    lines.append("\nالمصيف ينقل لكم الحدث")
+    return "\n".join(lines)
+
+
+# -------------------- New Look Backgrounds/Designs V27 --------------------
+
+def _template_bg_path(style):
+    name = "games_style2_bg.png" if int(style) == 2 else "games_style4_bg.png"
+    return os.path.join("assets", "templates", name)
+
+
+def _newlook_canvas(style, title, sub_title, width=1200, height=1500):
+    style = int(style)
+    path = _template_bg_path(style)
+    if os.path.exists(path):
+        try:
+            img = Image.open(path).convert("RGB").resize((width, height))
+            draw = ImageDraw.Draw(img)
+            # غطاء خفيف عشان النصوص القديمة في الخلفية ما تتداخل
+            overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+            od = ImageDraw.Draw(overlay)
+            rounded_rect(od, (55, 45, width-55, 330), radius=30, fill="#06152F88")
+            rounded_rect(od, (170, 350, width-170, height-265), radius=36, fill="#03133499")
+            img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+            draw = ImageDraw.Draw(img)
+        except Exception:
+            img, draw = _games_day_background(width, height)
+    else:
+        img, draw = _games_day_background(width, height)
+    _draw_games_header(draw, width, title, sub_title)
+    return img, draw
+
+
+def _newlook_card(draw, box, i=1, style=2):
+    base_fill = "#0638A5" if int(style) == 2 else "#061E64"
+    accent = v16_accent(i)
+    rounded_rect(draw, box, radius=28, fill=base_fill, outline="#13B6EA" if int(style)==2 else "#3B82F6", width=3)
+    x1,y1,x2,y2 = box
+    draw.line((x1+10, y2-4, x2-10, y2-4), fill="#EF4444", width=4)
+    draw.line((x1+90, y1+4, x2-90, y1+4), fill="#22C55E", width=3)
+    draw.line((x1+310, y1+4, x1+375, y1+4), fill="#FBBF24", width=3)
+    draw.arc((x1, y1, x1+64, y1+64), 180, 270, fill=accent, width=6)
+    draw.arc((x2-64, y2-64, x2, y2), 0, 90, fill=accent, width=6)
+
+
+def _newlook_layout(count):
+    if count <= 1:
+        return 225, 0, 505
+    if count == 2:
+        return 200, 34, 430
+    if count == 3:
+        return 178, 26, 405
+    if count == 4:
+        return 155, 21, 388
+    return 128, 14, 370
+
+
+def create_matches_newlook_image(day_name, matches, style=2):
+    ensure_generated_dir()
+    count = max(len(matches), 1)
+    width, height = 1200, 1500
+    img, draw = _newlook_canvas(style, "GAMES OF THE DAY", f"اليوم {day_name}", width, height)
+    row_h, gap, y = _newlook_layout(count)
+    x1, x2 = 240, 960
+    for i, (a, b, t) in enumerate(matches[:7], start=1):
+        _newlook_card(draw, (x1, y, x2, y+row_h), i, style)
+        cy = y + row_h//2
+        flag_w = min(148, max(95, row_h - 34))
+        # الفريق الأول يمين، الثاني يسار
+        paste_flag(img, a, (x2-38-flag_w, cy-flag_w//2, x2-38, cy+flag_w//2))
+        paste_flag(img, b, (x1+38, cy-flag_w//2, x1+38+flag_w, cy+flag_w//2))
+        draw_text(draw, (x2-38-flag_w//2, y+row_h-25), _clean_display_name(a), get_font(25 if count>=4 else 29), fill="#FFFFFF", max_width=210)
+        draw_text(draw, (x1+38+flag_w//2, y+row_h-25), _clean_display_name(b), get_font(25 if count>=4 else 29), fill="#FFFFFF", max_width=210)
+        center = t or "VS"
+        if t:
+            tm, period = _ampm_from_time(t)
+            draw_text(draw, (width//2, cy-12), tm, get_font(50 if count>=4 else 62), fill="#FBBF24")
+            if period:
+                draw_text(draw, (width//2, cy+38), period, get_font(29 if count>=4 else 36), fill="#FBBF24")
+        else:
+            draw_text(draw, (width//2, cy), "VS", get_font(50), fill="#FBBF24")
+        y += row_h + gap
+    _draw_games_footer(draw, img, width, height)
+    path = os.path.join(GENERATED_DIR, f"matches_style{style}_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def create_match_results_newlook_image(day_name, results, style=2):
+    ensure_generated_dir()
+    count = max(len(results), 1)
+    width, height = 1200, 1500
+    img, draw = _newlook_canvas(style, "MATCH RESULTS", f"اليوم {day_name}", width, height)
+    row_h, gap, y = _newlook_layout(count)
+    x1, x2 = 240, 960
+    for i, (a, sa, sb, b) in enumerate(results[:7], start=1):
+        _newlook_card(draw, (x1, y, x2, y+row_h), i, style)
+        cy = y + row_h//2
+        flag_w = min(145, max(92, row_h - 38))
+        paste_flag(img, a, (x2-38-flag_w, cy-flag_w//2, x2-38, cy+flag_w//2))
+        paste_flag(img, b, (x1+38, cy-flag_w//2, x1+38+flag_w, cy+flag_w//2))
+        draw_text(draw, (x2-38-flag_w//2, y+row_h-25), _clean_display_name(a), get_font(24 if count>=4 else 28), fill="#FFFFFF", max_width=210)
+        draw_text(draw, (x1+38+flag_w//2, y+row_h-25), _clean_display_name(b), get_font(24 if count>=4 else 28), fill="#FFFFFF", max_width=210)
+        rounded_rect(draw, (width//2-100, cy-44, width//2+100, cy+44), radius=20, fill="#FBBF24", outline="#00000088", width=2)
+        draw_text(draw, (width//2, cy), f"{sa} - {sb}", get_font(52 if count>=4 else 60), fill="#061633")
+        y += row_h + gap
+    _draw_games_footer(draw, img, width, height)
+    path = os.path.join(GENERATED_DIR, f"results_style{style}_{_safe_filename(day_name)}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def create_scorers_newlook_image(items, style=2):
+    ensure_generated_dir()
+    items = sorted(items, key=lambda x: (-x[1], x[0]))[:12]
+    count = max(len(items), 1)
+    width, height = 1200, 1500
+    img, draw = _newlook_canvas(style, "TOP SCORERS", "هدافين البطولة", width, height)
+    if count <= 3:
+        row_h, gap, y = 122, 26, 430
+    elif count <= 6:
+        row_h, gap, y = 98, 18, 410
+    else:
+        row_h, gap, y = 74, 11, 395
+    x1, x2 = 210, 990
+    for i, (name, goals, team) in enumerate(items, start=1):
+        _newlook_card(draw, (x1, y, x2, y+row_h), i, style)
+        cy = y + row_h//2
+        draw_text(draw, (x2-55, cy), str(i), get_font(32 if count>6 else 38), fill="#FBBF24")
+        if team:
+            fw = min(84, max(58, row_h-18))
+            paste_flag(img, team, (x2-155, cy-fw//2, x2-155+fw, cy+fw//2))
+        draw_text(draw, (width//2+55, cy), _clean_display_name(name), get_font(25 if count>6 else 32), fill="#FFFFFF", max_width=430)
+        rounded_rect(draw, (x1+35, cy-34, x1+185, cy+34), radius=18, fill="#FBBF24", outline="#00000070", width=1)
+        draw_text(draw, (x1+110, cy), str(goals), get_font(40 if count<=6 else 32), fill="#061633")
+        draw_text(draw, (x1+250, cy), "أهداف", get_font(22 if count>6 else 26), fill="#FDE68A")
+        y += row_h + gap
+    _draw_games_footer(draw, img, width, height)
+    path = os.path.join(GENERATED_DIR, f"scorers_style{style}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def create_group_newlook_image(group_title, rows, style=2):
+    ensure_generated_dir()
+    width, height = 1200, 1500
+    title = clean_group_title_for_design(group_title)
+    if not str(title).startswith("المجموعة"):
+        title = f"المجموعة {title}"
+    img, draw = _newlook_canvas(style, "GROUP STANDINGS", title, width, height)
+    x1, x2 = 190, 1010
+    y = 395
+    rounded_rect(draw, (x1, y, x2, y+60), radius=20, fill="#061633DD", outline="#FFFFFF44", width=1)
+    draw_text(draw, (x2-175, y+30), "المنتخب", get_font(24), fill="#FFFFFF")
+    draw_text(draw, (x1+385, y+30), "لعب", get_font(23), fill="#FDE68A")
+    draw_text(draw, (x1+245, y+30), "+/-", get_font(23), fill="#FDE68A")
+    draw_text(draw, (x1+95, y+30), "نقاط", get_font(23), fill="#FDE68A")
+    y += 78
+    row_h, gap = 98, 14
+    for i, (team, played, diff, pts) in enumerate(rows[:8], start=1):
+        _newlook_card(draw, (x1, y, x2, y+row_h), i, style)
+        cy = y + row_h//2
+        draw_text(draw, (x2-48, cy), str(i), get_font(28), fill="#FBBF24")
+        paste_flag(img, team, (x2-135, cy-32, x2-70, cy+32))
+        draw_text(draw, (x2-285, cy), _clean_display_name(team), get_font(27), fill="#FFFFFF", max_width=250)
+        draw_text(draw, (x1+385, cy), str(played), get_font(27), fill="#FFFFFF")
+        draw_text(draw, (x1+245, cy), f"{int(diff):+d}", get_font(27), fill="#E5E7EB")
+        draw_text(draw, (x1+95, cy), str(pts), get_font(34), fill="#FBBF24")
+        y += row_h + gap
+    _draw_games_footer(draw, img, width, height)
+    path = os.path.join(GENERATED_DIR, f"group_style{style}_{_safe_filename(group_title)}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def create_all_groups_newlook_image(groups, style=2):
+    ensure_generated_dir()
+    width, height = 1800, 2400
+    img, draw = _games_day_background(width, height)
+    draw_text(draw, (width//2, 90), "MONDIAL AL MASEEF 2026", get_font(40), fill="#FFFFFF")
+    draw_text(draw, (width//2, 170), "ALL GROUP STANDINGS", get_font(72), fill="#FFFFFF", max_width=width-160)
+    draw_text(draw, (width//2, 235), "ترتيب جميع المجموعات", get_font(36), fill="#FBBF24")
+    cols = 3
+    margin_x, gap_x = 75, 35
+    card_w = (width - 2*margin_x - (cols-1)*gap_x) // cols
+    card_h = 470
+    start_y = 320
+    gap_y = 38
+    for idx, (title, rows) in enumerate(groups[:12]):
+        c = idx % cols
+        r = idx // cols
+        x = margin_x + c*(card_w+gap_x)
+        y = start_y + r*(card_h+gap_y)
+        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=28, fill="#0638A5EE", outline="#14B8F5", width=3)
+        rounded_rect(draw, (x+18, y+18, x+card_w-18, y+68), radius=18, fill="#FBBF24", outline="#00000055", width=1)
+        gt = clean_group_title_for_design(title)
+        if not str(gt).startswith("المجموعة"):
+            gt = f"المجموعة {gt}"
+        draw_text(draw, (x+card_w//2, y+43), gt, get_font(26), fill="#061633", max_width=card_w-40)
+        yy = y + 92
+        for pos, (team, played, diff, pts) in enumerate(rows[:4], start=1):
+            rounded_rect(draw, (x+20, yy, x+card_w-20, yy+72), radius=16, fill="#061633AA", outline="#FFFFFF22", width=1)
+            cy = yy + 36
+            draw_text(draw, (x+card_w-44, cy), str(pos), get_font(22), fill="#FBBF24")
+            paste_flag(img, team, (x+card_w-125, cy-24, x+card_w-75, cy+24))
+            draw_text(draw, (x+card_w-245, cy), _clean_display_name(team), get_font(21), fill="#FFFFFF", max_width=185)
+            draw_text(draw, (x+155, cy), str(pts), get_font(26), fill="#FBBF24")
+            draw_text(draw, (x+75, cy), f"{int(diff):+d}", get_font(21), fill="#E5E7EB")
+            yy += 84
+    draw_text(draw, (width//2, height-70), "المصيف ينقل لكم الحدث", get_font(36), fill="#FBBF24")
+    path = os.path.join(GENERATED_DIR, f"all_groups_style{style}.png")
+    img.save(path, quality=95)
+    return path
+
+
+# Override old style2 names to use V27 new look.
+def create_matches_style2_image(day_name, matches):
+    return create_matches_newlook_image(day_name, matches, 2)
+
+
+def create_match_results_style2_image(day_name, results):
+    return create_match_results_newlook_image(day_name, results, 2)
+
+
+def create_scorers_style2_image(items):
+    return create_scorers_newlook_image(items, 2)
+
+
+def create_group_style2_image(group_title, rows):
+    return create_group_newlook_image(group_title, rows, 2)
+
+
+def create_all_groups_image(groups):
+    return create_all_groups_newlook_image(groups, 2)
+
+
+# -------------------- Style 3 frame designs for all design types --------------------
+
+def create_scorers_frame_style_image(items):
+    ensure_generated_dir()
+    items = sorted(items, key=lambda x: (-x[1], x[0]))[:12]
+    count = max(len(items), 1)
+    width = 1200
+    row_h = 92 if count <= 8 else 72
+    gap = 14 if count <= 8 else 9
+    height = max(760, 220 + count*(row_h+gap) + 120)
+    img, draw = _frame_canvas(width, height)
+    draw_text(draw, (width//2, 80), "مونديال المصيف 2026", get_font(50), fill="#FFFFFF")
+    draw_text(draw, (width//2, 140), "هدافين البطولة", get_font(36), fill="#FDE68A")
+    y = 215
+    for i, (name, goals, team) in enumerate(items, start=1):
+        x1, x2 = 110, width-110
+        rounded_rect(draw, (x1, y, x2, y+row_h), radius=24, fill="#07110FCC", outline="#22C55E" if i==1 else "#2563EB", width=3)
+        cy = y + row_h//2
+        draw_text(draw, (x2-45, cy), str(i), get_font(28), fill="#FDE68A")
+        if team:
+            paste_flag(img, team, (x2-130, cy-30, x2-70, cy+30))
+        draw_text(draw, (width//2+95, cy), _clean_display_name(name), get_font(28 if count<=8 else 23), fill="#FFFFFF", max_width=450)
+        rounded_rect(draw, (x1+45, cy-30, x1+180, cy+30), radius=16, fill="#B8FFF0", outline="#FFFFFFAA", width=2)
+        draw_text(draw, (x1+112, cy), str(goals), get_font(34 if count<=8 else 28), fill="#061633")
+        y += row_h + gap
+    draw_text(draw, (width//2, height-42), "المصيف ينقل لكم الحدث", get_font(28), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, "scorers_frame.png")
+    img.save(path, quality=95)
+    return path
+
+
+def create_group_frame_style_image(group_title, rows):
+    ensure_generated_dir()
+    width = 1200
+    count = max(len(rows), 1)
+    row_h = 92 if count <= 8 else 74
+    gap = 13 if count <= 8 else 8
+    height = max(820, 245 + count*(row_h+gap) + 110)
+    img, draw = _frame_canvas(width, height)
+    title = clean_group_title_for_design(group_title)
+    if not str(title).startswith("المجموعة"):
+        title = f"المجموعة {title}"
+    draw_text(draw, (width//2, 80), "مونديال المصيف 2026", get_font(50), fill="#FFFFFF")
+    draw_text(draw, (width//2, 140), title, get_font(36), fill="#FDE68A")
+    y = 215
+    x1, x2 = 95, width-95
+    rounded_rect(draw, (x1, y, x2, y+56), radius=20, fill="#061633", outline="#22C55E", width=2)
+    draw_text(draw, (940, y+28), "المنتخب", get_font(24), fill="#FFFFFF")
+    draw_text(draw, (530, y+28), "لعب", get_font(22), fill="#FDE68A")
+    draw_text(draw, (385, y+28), "+/-", get_font(22), fill="#FDE68A")
+    draw_text(draw, (220, y+28), "نقاط", get_font(22), fill="#FDE68A")
+    y += 76
+    for i, (team, played, diff, pts) in enumerate(rows[:10], start=1):
+        rounded_rect(draw, (x1, y, x2, y+row_h), radius=24, fill="#07110FCC", outline="#22C55E" if i==1 else "#2563EB", width=2)
+        cy = y + row_h//2
+        draw_text(draw, (1045, cy), str(i), get_font(25), fill="#FDE68A")
+        paste_flag(img, team, (940, cy-30, 1000, cy+30))
+        draw_text(draw, (760, cy), _clean_display_name(team), get_font(27 if count<=8 else 23), fill="#FFFFFF", max_width=310)
+        draw_text(draw, (530, cy), str(played), get_font(25), fill="#FFFFFF")
+        draw_text(draw, (385, cy), f"{int(diff):+d}", get_font(25), fill="#FFFFFF")
+        draw_text(draw, (220, cy), str(pts), get_font(32), fill="#FDE68A")
+        y += row_h + gap
+    draw_text(draw, (width//2, height-42), "المصيف ينقل لكم الحدث", get_font(28), fill="#FFFFFF")
+    path = os.path.join(GENERATED_DIR, f"group_frame_{_safe_filename(group_title)}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def create_all_groups_frame_style_image(groups):
+    # ستايل 3 لجميع المجموعات بنفس روح الإطار لكن أوسع.
+    return create_all_groups_newlook_image(groups, 3)
+
+
+# -------------------- Render by style --------------------
+
+def render_matches_by_style(day_name, matches, style, auto=False):
+    style = int(style)
+    if style == 1:
+        return create_matches_template_image(day_name, matches, use_template=not auto)
+    if style == 2:
+        return create_matches_newlook_image(day_name, matches, 2)
+    if style == 3:
+        return create_match_frame_style_image(day_name, matches, False)
+    return create_matches_newlook_image(day_name, matches, 4)
+
+
+def render_results_by_style(day_name, results, style, auto=False):
+    style = int(style)
+    if style == 1:
+        return create_match_results_template_image(day_name, results, use_template=not auto)
+    if style == 2:
+        return create_match_results_newlook_image(day_name, results, 2)
+    if style == 3:
+        return create_match_frame_style_image(day_name, results, True)
+    return create_match_results_newlook_image(day_name, results, 4)
+
+
+def render_scorers_by_style(items, style, auto=False):
+    style = int(style)
+    if style == 1:
+        return create_top_scorers_template_image(items, use_template=not auto)
+    if style == 2:
+        return create_scorers_newlook_image(items, 2)
+    if style == 3:
+        return create_scorers_frame_style_image(items)
+    return create_scorers_newlook_image(items, 4)
+
+
+def render_group_by_style(group_title, rows, style, auto=False):
+    style = int(style)
+    if style == 1:
+        return create_group_standing_image(group_title, rows, use_template=not auto)
+    if style == 2:
+        return create_group_newlook_image(group_title, rows, 2)
+    if style == 3:
+        return create_group_frame_style_image(group_title, rows)
+    return create_group_newlook_image(group_title, rows, 4)
+
+
+def render_all_groups_by_style(groups, style, auto=False):
+    style = int(style)
+    if style == 1:
+        return create_all_groups_newlook_image(groups, 1)
+    if style == 3:
+        return create_all_groups_frame_style_image(groups)
+    if style == 4:
+        return create_all_groups_newlook_image(groups, 4)
+    return create_all_groups_newlook_image(groups, 2)
+
+
+# -------------------- Commands V27 --------------------
+
+async def set_style_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nums = get_numbers(update.message.text)
+    if not nums or nums[0] not in (1, 2, 3, 4):
+        await update.message.reply_text("اكتبها كذا:\n/اعتماد_ستايل 4\n\nالخيارات: 1، 2، 3، 4")
+        return
+    style = save_design_style(nums[0])
+    await update.message.reply_text(f"تم اعتماد الستايل {style} ✅\n{STYLE_NAMES[style]}")
+
+
+async def get_style_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    style = current_design_style()
+    await update.message.reply_text(f"الستايل الحالي: {style} ✅\n{STYLE_NAMES.get(style, '')}")
+
+
+async def matches_command_v27(update: Update, context: ContextTypes.DEFAULT_TYPE, forced_style=None, auto=False):
+    try:
+        style = command_style(update.message.text, forced_style)
+        day_name, matches = parse_matches_text(update.message.text)
+        if not matches:
+            await update.message.reply_text("اكتبها كذا:\n/مباريات 4\nالسابع\nفرنسا * البرتغال * 8:00 م\nإنجلترا * كرواتيا * 11:00 م")
+            return
+        path = render_matches_by_style(day_name, matches, style, auto=auto)
+        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم المباريات ❌\n{e}")
+
+
+async def results_command_v27(update: Update, context: ContextTypes.DEFAULT_TYPE, forced_style=None, auto=False):
+    try:
+        style = command_style(update.message.text, forced_style)
+        day_name, results = parse_match_results_design_text(update.message.text)
+        if not results:
+            await update.message.reply_text("اكتبها كذا:\n/انتهت 4\nالسابع\nفرنسا 2 * 6 البرتغال\nإنجلترا 3 * 0 كرواتيا")
+            return
+        path = render_results_by_style(day_name, results, style, auto=auto)
+        await send_photo_path(update, path, build_design_results_caption(day_name, results))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم نتائج المباريات ❌\n{e}")
+
+
+async def scorers_command_v27(update: Update, context: ContextTypes.DEFAULT_TYPE, forced_style=None, auto=False):
+    try:
+        style = command_style(update.message.text, forced_style)
+        items = parse_scorers_text(update.message.text)
+        if not items:
+            await update.message.reply_text("اكتبها كذا:\n/هدافين 4\nميسي * الأرجنتين * 3\nرونالدو * البرتغال * 6")
+            return
+        path = render_scorers_by_style(items, style, auto=auto)
+        await send_photo_path(update, path, build_top_scorers_caption(items))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم الهدافين ❌\n{e}")
+
+
+async def group_command_v27(update: Update, context: ContextTypes.DEFAULT_TYPE, forced_style=None, auto=False):
+    try:
+        style = command_style(update.message.text, forced_style)
+        group_title, rows = parse_group_standing_text(update.message.text)
+        if not rows:
+            await update.message.reply_text("اكتبها كذا:\n/مجموعة 4\nC\nاسكتلندا * لعب 1 * فارق +1 * نقاط 6\nالمغرب * لعب 1 * فارق 0 * نقاط 1")
+            return
+        path = render_group_by_style(group_title, rows, style, auto=auto)
+        await send_photo_path(update, path, build_group_standing_caption(group_title, rows))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم ترتيب المجموعة ❌\n{e}")
+
+
+async def all_groups_command_v27(update: Update, context: ContextTypes.DEFAULT_TYPE, forced_style=None, auto=False):
+    try:
+        style = command_style(update.message.text, forced_style)
+        groups = parse_all_groups_text(update.message.text)
+        if not groups:
+            await update.message.reply_text("اكتبها كذا:\n/كل_المجموعات 4\nA\nالمكسيك * 1 * +2 * 3\nكوريا الجنوبية * 1 * +1 * 3\n\nB\nكندا * 1 * 0 * 1")
+            return
+        path = render_all_groups_by_style(groups, style, auto=auto)
+        await send_photo_path(update, path, "ترتيب جميع المجموعات ✅")
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم جميع المجموعات ❌\n{e}")
+
+
+# Wrappers عشان MessageHandler يستدعي دالة بدون بارامترات إضافية
+async def short_matches_command(update, context):
+    return await matches_command_v27(update, context)
+async def short_matches_auto_command(update, context):
+    return await matches_command_v27(update, context, auto=True)
+async def short_results_command(update, context):
+    return await results_command_v27(update, context)
+async def short_results_auto_command(update, context):
+    return await results_command_v27(update, context, auto=True)
+async def short_scorers_command(update, context):
+    return await scorers_command_v27(update, context)
+async def short_scorers_auto_command(update, context):
+    return await scorers_command_v27(update, context, auto=True)
+async def short_group_command(update, context):
+    return await group_command_v27(update, context)
+async def short_group_auto_command(update, context):
+    return await group_command_v27(update, context, auto=True)
+async def short_all_groups_command(update, context):
+    return await all_groups_command_v27(update, context)
+async def short_all_groups_auto_command(update, context):
+    return await all_groups_command_v27(update, context, auto=True)
+
+# Old commands routed to the new 1-4 style system.
+async def design_matches_template_command(update, context):
+    return await matches_command_v27(update, context, auto=False)
+async def design_matches_auto_command(update, context):
+    return await matches_command_v27(update, context, auto=True)
+async def design_match_results_template_command(update, context):
+    return await results_command_v27(update, context, auto=False)
+async def design_match_results_auto_command(update, context):
+    return await results_command_v27(update, context, auto=True)
+async def design_group_standing_template_command(update, context):
+    return await group_command_v27(update, context, auto=False)
+async def design_group_standing_auto_command(update, context):
+    return await group_command_v27(update, context, auto=True)
+async def design_scorers_template_command(update, context):
+    return await scorers_command_v27(update, context, auto=False)
+async def design_scorers_auto_command(update, context):
+    return await scorers_command_v27(update, context, auto=True)
+
+async def design_matches_style2_command(update, context):
+    return await matches_command_v27(update, context, forced_style=2)
+async def design_match_results_style2_command(update, context):
+    return await results_command_v27(update, context, forced_style=2)
+async def design_scorers_style2_command(update, context):
+    return await scorers_command_v27(update, context, forced_style=2)
+async def design_group_style2_command(update, context):
+    return await group_command_v27(update, context, forced_style=2)
+async def design_matches_frame_command(update, context):
+    return await matches_command_v27(update, context, forced_style=3)
+async def design_results_frame_command(update, context):
+    return await results_command_v27(update, context, forced_style=3)
+async def design_all_groups_command(update, context):
+    return await all_groups_command_v27(update, context)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "البوت جاهز ✅\n\n"
+        "الأوامر الأساسية:\n"
+        "/اضافه 5\n/نتائج 5\n/اعتماد_نتائج 5\n/احصائيات\n/احصائيات 1 6\n/الترتيب_العام\n/الترتيب_العام 1 6\n/ترتيب_نص\n\n"
+        "أوامر الصور والتقارير:\n"
+        "/صورة_اليوم 6\n/صورة_الترتيب 1 6\n/صورة_الاساطير 1 6\n/صورة_احصائيات 1 6 لوحة عامة\n/صور_الاحصائيات 1 6\n"
+        "/بطاقة فارس سالم\n/تقرير_الفترة 1 4\n/تفعيل_الصور_التلقائية\n/إيقاف_الصور_التلقائية\n\n"
+        "أوامر الستايل:\n"
+        "/اعتماد_ستايل 1\n/اعتماد_ستايل 2\n/اعتماد_ستايل 3\n/اعتماد_ستايل 4\n/الستايل\n\n"
+        "أوامر التصاميم المختصرة:\n"
+        "/مباريات 4\n/انتهت 4\n/مجموعة 4\n/هدافين 4\n/كل_المجموعات 4\n\n"
+        "الأوامر التلقائية المختصرة:\n"
+        "/مباريات_تلقائي 4\n/انتهت_تلقائي 4\n/مجموعة_تلقائي 4\n/هدافين_تلقائي 4\n/كل_المجموعات_تلقائي 4\n\n"
+        "أوامر التصاميم القديمة باقية وتدعم 1-4:\n"
+        "/تصميم_مباريات 4\n/تصميم_مباريات_تلقائي 4\n/تصميم_نتائج_مباريات 4\n/تصميم_نتائج_مباريات_تلقائي 4\n"
+        "/تصميم_ترتيب_مجموعة 4\n/تصميم_ترتيب_مجموعة_تلقائي 4\n/تصميم_هدافين 4\n/تصميم_هدافين_تلقائي 4\n"
+        "/تصميم_مباريات_ستايل2\n/تصميم_نتائج_مباريات_ستايل2\n/تصميم_هدافين_ستايل2\n/تصميم_ترتيب_مجموعة_ستايل2\n"
+        "/تصميم_مباريات_اطار\n/تصميم_نتائج_مباريات_اطار\n/تصميم_جميع_المجموعات 4\n\n"
+        "أوامر الكأس:\n"
+        "/بدء_الكاس 7\n/حالة_الكاس\n/مواجهات_الكاس\n/نتائج_الكاس\n/إعادة_الكاس_من 7\n/الغاء_الكاس تأكيد\n\n"
+        "أوامر الفحص والنشر:\n"
+        "/الأيام\n/فحص 5\n/مشاركين 5\n/اسطورة 5\n/مقارنة 4 5\n/اعلان_اليوم 5\n/ملخص_اليوم 5\n\n"
+        "أوامر الاستيراد والنسخ:\n"
+        "/استيراد_ملف\n/اعتماد_استيراد\n/إلغاء_استيراد\n/نسخة_احتياطية\n/استرجاع_نسخة\n/تنظيف_الأيام\n/تنظيف_الملفات\n\n"
+        "أوامر الأمان:\n"
+        "/مسح_نتائج 5\n/مسح_يوم 5\n/مسح_الكل تأكيد\n/استرجاع_آخر\n/قفل_يوم 5\n/فتح_يوم 5\n/معرفي\n\n"
+        "مهم: /نتائج للفانتزي فقط، و/انتهت لتصميم نتائج المباريات."
+    )
+
+
+# Main V27 — يعيد تسجيل كل الأوامر بالترتيب الصحيح.
+def main():
+    if not TOKEN:
+        raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
+    ensure_flags_assets()
+    ensure_design_assets()
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/start"), start))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:من_انا|معرفي)"), who_am_i))
+    app.add_handler(MessageHandler(filters.Document.ALL, remember_last_file))
+
+    # صور وتقارير
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تفعيل_الصور_التلقائية"), admin_only(enable_auto_images)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إيقاف_الصور_التلقائية"), admin_only(disable_auto_images)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ايقاف_الصور_التلقائية"), admin_only(disable_auto_images)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_اليوم"), daily_image_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الترتيب"), overall_image_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الاساطير"), legends_image_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), dashboard_sheet_image_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), all_dashboard_images_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بطاقة"), participant_card_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تقرير_الفترة"), period_report_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعلان_اليوم"), announcement_day_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملخص_اليوم"), summary_day_command))
+
+    # ستايل وتصاميم مختصرة — الأطول قبل الأقصر
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_ستايل(?:\s|$)"), admin_only(set_style_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الستايل(?:\s|$)"), admin_only(get_style_command)))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_تلقائي(?:\s|$)"), admin_only(short_matches_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/انتهت_تلقائي(?:\s|$)"), admin_only(short_results_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مجموعة_تلقائي(?:\s|$)"), admin_only(short_group_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/هدافين_تلقائي(?:\s|$)"), admin_only(short_scorers_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/كل_المجموعات_تلقائي(?:\s|$)"), admin_only(short_all_groups_auto_command)))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات(?:\s|$)"), admin_only(short_matches_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/انتهت(?:\s|$)"), admin_only(short_results_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/كل_المجموعات(?:\s|$)"), admin_only(short_all_groups_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مجموعة(?:\s|$)"), admin_only(short_group_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/هدافين(?:\s|$)"), admin_only(short_scorers_command)))
+
+    # أوامر التصميم القديمة + ستايلات قديمة
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات_ستايل2(?:\s|$)"), admin_only(design_matches_style2_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات_ستايل2(?:\s|$)"), admin_only(design_match_results_style2_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين_ستايل2(?:\s|$)"), admin_only(design_scorers_style2_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_ترتيب_مجموعة_ستايل2(?:\s|$)"), admin_only(design_group_style2_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات_اطار(?:\s|$)"), admin_only(design_matches_frame_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات_اطار(?:\s|$)"), admin_only(design_results_frame_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_جميع_المجموعات(?:\s|$)"), admin_only(design_all_groups_command)))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات_تلقائي(?:\s|$)"), admin_only(design_matches_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات_تلقائي(?:\s|$)"), admin_only(design_match_results_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_ترتيب_مجموعة_تلقائي(?:\s|$)"), admin_only(design_group_standing_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين_تلقائي(?:\s|$)"), admin_only(design_scorers_auto_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات(?:\s|$)"), admin_only(design_matches_template_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات(?:\s|$)"), admin_only(design_match_results_template_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_ترتيب_مجموعة(?:\s|$)"), admin_only(design_group_standing_template_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين(?:\s|$)"), admin_only(design_scorers_template_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_مباريات_اليوم(?:\s|$)"), admin_only(design_match_results_template_command)))
+
+    # استيراد ونسخ
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استيراد_ملف"), admin_only(import_excel_file)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_استيراد"), admin_only(approve_import)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_استيراد"), admin_only(cancel_import)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الغاء_استيراد"), admin_only(cancel_import)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نسخة_احتياطية"), admin_only(backup_zip)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_نسخة"), admin_only(restore_backup_zip)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الأيام"), admin_only(clean_days)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الايام"), admin_only(clean_days)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الملفات"), admin_only(clean_temp_files)))
+
+    # الكأس
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بدء_الكاس(?:\s|$)"), admin_only(start_cup_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/حالة_الكاس(?:\s|$)"), admin_only(cup_status_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_الكاس(?:\s|$)"), admin_only(cup_results_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مواجهات_الكاس(?:\s|$)"), admin_only(cup_matches_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إعادة_الكاس_من(?:\s|$)"), admin_only(reset_cup_from_day_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعادة_الكاس_من(?:\s|$)"), admin_only(reset_cup_from_day_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الغاء_الكاس(?:\s|$)"), admin_only(cancel_cup_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_الكاس(?:\s|$)"), admin_only(cancel_cup_command)))
+
+    # فانتزي أساسي
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه"), admin_only(add_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_نتائج(?:\s|$)"), admin_only(approve_results_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), admin_only(results_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), overall))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_نص"), ranking_text))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/?(?:احصائيات|إحصائيات)(?:\s|$)"), dashboard))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(الأيام|الايام)"), list_days))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فحص"), inspect_day))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مشاركين"), participants_day))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اسطورة"), legend_day))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مقارنة"), compare_days))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_الكل"), admin_only(clear_all)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_يوم"), admin_only(clear_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_نتائج"), admin_only(clear_results)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_آخر"), admin_only(restore_last)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
+    app.run_polling()
+
+
 if __name__ == "__main__":
     main()
