@@ -6999,6 +6999,33 @@ def _maybe_day_and_rows(body_lines, kind="matches"):
     return first, body_lines[1:]
 
 
+
+EN_WEEKDAYS = {
+    'السبت': 'SATURDAY', 'الاحد': 'SUNDAY', 'الأحد': 'SUNDAY', 'الاثنين': 'MONDAY', 'الإثنين': 'MONDAY',
+    'الثلاثاء': 'TUESDAY', 'الاربعاء': 'WEDNESDAY', 'الأربعاء': 'WEDNESDAY', 'الخميس': 'THURSDAY',
+    'الجمعة': 'FRIDAY', 'الاحد ': 'SUNDAY'
+}
+EN_MONTHS = {
+    1: 'JANUARY', 2: 'FEBRUARY', 3: 'MARCH', 4: 'APRIL', 5: 'MAY', 6: 'JUNE',
+    7: 'JULY', 8: 'AUGUST', 9: 'SEPTEMBER', 10: 'OCTOBER', 11: 'NOVEMBER', 12: 'DECEMBER'
+}
+
+def _format_design_date_text(raw):
+    raw = normalize_name(str(raw or '').strip())
+    if not raw:
+        return ''
+    m = re.match(r'^(\d{1,2})\/(\d{1,2})\/(\d{4})$', raw)
+    if m:
+        d, mo, y = map(int, m.groups())
+        try:
+            dt = datetime(y, mo, d)
+            return f"{dt.strftime('%A').upper()}, {dt.day} {EN_MONTHS.get(dt.month, dt.strftime('%B').upper())} {dt.year}"
+        except Exception:
+            return raw
+    if raw in EN_WEEKDAYS:
+        return EN_WEEKDAYS[raw]
+    return raw.upper()
+
 # -------------------- Parsers V27 --------------------
 
 def parse_matches_text(text):
@@ -7069,6 +7096,35 @@ def parse_scorers_text(text):
             items.append((name, goals, team))
     return sorted(items, key=lambda x: (-x[1], x[0]))
 
+
+
+def parse_multi_days_matches_text(text):
+    body = _body_lines_after_command(text)
+    sections = []
+    current_date = None
+    current_matches = []
+    for line in body:
+        line = normalize_name(line)
+        if not line:
+            continue
+        if re.fullmatch(r'\d{1,2}/\d{1,2}/\d{4}', line):
+            if current_date and current_matches:
+                sections.append((current_date, current_matches))
+            current_date = line
+            current_matches = []
+            continue
+        parts = _split_data_parts(line)
+        if len(parts) >= 3:
+            current_matches.append((normalize_name(parts[0]), normalize_name(parts[1]), normalize_name(parts[2])))
+        elif len(parts) == 2:
+            current_matches.append((normalize_name(parts[0]), normalize_name(parts[1]), ''))
+        else:
+            m = re.match(r'(.+?)\s*[*|\-–]\s*(.+?)(?:\s*[*|\-–]\s*(.+))?$', line)
+            if m:
+                current_matches.append((normalize_name(m.group(1)), normalize_name(m.group(2)), normalize_name(m.group(3) or '')))
+    if current_date and current_matches:
+        sections.append((current_date, current_matches))
+    return sections
 
 def _extract_group_row(line):
     line = normalize_name(line)
@@ -7222,7 +7278,7 @@ def create_matches_newlook_image(day_name, matches, style=2):
     ensure_generated_dir()
     count = max(len(matches), 1)
     width, height = 1200, 1500
-    img, draw = _newlook_canvas(style, "GAMES OF THE DAY", f"اليوم {day_name}", width, height)
+    img, draw = _newlook_canvas(style, "GAMES OF THE DAY", _format_design_date_text(day_name), width, height)
     row_h, gap, y = _newlook_layout(count)
     x1, x2 = 240, 960
     for i, (a, b, t) in enumerate(matches[:7], start=1):
@@ -7253,7 +7309,7 @@ def create_match_results_newlook_image(day_name, results, style=2):
     ensure_generated_dir()
     count = max(len(results), 1)
     width, height = 1200, 1500
-    img, draw = _newlook_canvas(style, "MATCH RESULTS", f"اليوم {day_name}", width, height)
+    img, draw = _newlook_canvas(style, "MATCH RESULTS", _format_design_date_text(day_name), width, height)
     row_h, gap, y = _newlook_layout(count)
     x1, x2 = 240, 960
     for i, (a, sa, sb, b) in enumerate(results[:7], start=1):
@@ -7469,6 +7525,60 @@ def create_all_groups_frame_style_image(groups):
     # ستايل 3 لجميع المجموعات بنفس روح الإطار لكن أوسع.
     return create_all_groups_newlook_image(groups, 3)
 
+
+
+def create_multi_days_matches_image(schedule_blocks, style=4):
+    ensure_generated_dir()
+    width, height = 1800, 2400
+    img, draw = _games_day_background(width, height)
+    draw_text(draw, (width//2, 90), "MONDIAL AL MASEEF 2026", get_font(40), fill="#FFFFFF")
+    draw_text(draw, (width//2, 170), "MATCH SCHEDULE", get_font(72), fill="#FFFFFF", max_width=width-160)
+    draw_text(draw, (width//2, 235), "جدول المباريات", get_font(36), fill="#FBBF24")
+    cols = 2
+    margin_x, gap_x = 90, 45
+    card_w = (width - 2*margin_x - gap_x) // cols
+    card_h = 650
+    start_y = 320
+    gap_y = 42
+    for idx, (date_txt, matches) in enumerate(schedule_blocks[:6]):
+        c = idx % cols
+        r = idx // cols
+        x = margin_x + c*(card_w+gap_x)
+        y = start_y + r*(card_h+gap_y)
+        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=28, fill="#0638A5EE", outline="#14B8F5", width=3)
+        rounded_rect(draw, (x+18, y+18, x+card_w-18, y+82), radius=18, fill="#FBBF24", outline="#00000055", width=1)
+        draw_text(draw, (x+card_w//2, y+50), _format_design_date_text(date_txt), get_font(26), fill="#061633", max_width=card_w-40)
+        yy = y + 108
+        for a, b, t in matches[:6]:
+            rounded_rect(draw, (x+20, yy, x+card_w-20, yy+76), radius=16, fill="#061633AA", outline="#FFFFFF22", width=1)
+            cy = yy + 38
+            paste_flag(img, a, (x+card_w-120, cy-25, x+card_w-68, cy+25))
+            paste_flag(img, b, (x+68, cy-25, x+120, cy+25))
+            draw_text(draw, (x+card_w-225, cy), _clean_display_name(a), get_font(20), fill="#FFFFFF", max_width=165)
+            draw_text(draw, (x+225, cy), _clean_display_name(b), get_font(20), fill="#FFFFFF", max_width=165)
+            if t:
+                tm, period = _ampm_from_time(t)
+                mid = tm if not period else f"{tm} {period}"
+            else:
+                mid = 'VS'
+            draw_text(draw, (x+card_w//2, cy), mid, get_font(20), fill="#FBBF24", max_width=160)
+            yy += 88
+    draw_text(draw, (width//2, height-70), "المصيف ينقل لكم الحدث", get_font(36), fill="#FBBF24")
+    path = os.path.join(GENERATED_DIR, f"multi_days_style{style}.png")
+    img.save(path, quality=95)
+    return path
+
+async def multi_days_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        style = command_style(update.message.text, 4)
+        blocks = parse_multi_days_matches_text(update.message.text)
+        if not blocks:
+            await update.message.reply_text("اكتبها كذا:\n/مباريات_الأيام 4\n24/06/2026\nالهلال * النصر * 8:00 م\nالهلال * الشباب * 10:00 م\n\n25/06/2026\nالأهلي * الاتحاد * 9:00 م")
+            return
+        path = create_multi_days_matches_image(blocks, style)
+        await send_photo_path(update, path, "جدول مباريات عدة أيام ✅")
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم مباريات الأيام ❌\n{e}")
 
 # -------------------- Render by style --------------------
 
