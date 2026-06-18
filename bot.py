@@ -7904,9 +7904,10 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     draw_text(draw, (x2-10-badge_size//2, y1+14+badge_size//2), str(idx), _v31_latin_font(18), fill="#061633", max_width=badge_size)
 
     # الأعلام أكبر وأوضح، مع بقائها داخل حدود الكرت.
-    flag_w = min(136, max(78, row_h - 18))
-    flag_h = int(flag_w * 0.68)
-    side_pad = 42
+    # تكبير محسوب: تقريبًا +25٪ في حالة 5-6 مباريات بدون ضغط أسماء المنتخبات.
+    flag_h = min(88 if count <= 4 else 82, max(64, row_h - 24))
+    flag_w = min(165, int(flag_h * 1.55))
+    side_pad = 34
 
     # الفريق الأول يمين، الفريق الثاني يسار
     right_flag_box = (x2-side_pad-flag_w, cy-flag_h//2, x2-side_pad, cy+flag_h//2)
@@ -7960,7 +7961,7 @@ def create_matches_today_v31_full_image(day_name, matches):
     _v31_draw_date_pill(draw, width, 350, day_name)
 
     row_h, gap, y = _v31_layout(count, clean=False)
-    x1, x2 = 225, 1045
+    x1, x2 = 212, 1058
     for idx, (a, b, t) in enumerate(matches, start=1):
         _v31_card(img, draw, (x1, y, x2, y+row_h), idx, a, b, t, count)
         y += row_h + gap
@@ -7983,7 +7984,7 @@ def create_matches_today_v31_clean_image(day_name, matches):
     _v31_draw_date_pill(draw, width, 285, day_name)
 
     row_h, gap, y = _v31_layout(count, clean=True)
-    x1, x2 = 225, 1045
+    x1, x2 = 212, 1058
     for idx, (a, b, t) in enumerate(matches, start=1):
         _v31_card(img, draw, (x1, y, x2, y+row_h), idx, a, b, t, count)
         y += row_h + gap
