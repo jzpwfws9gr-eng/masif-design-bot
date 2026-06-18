@@ -5045,7 +5045,9 @@ def paste_event_logo(img, width, y=48):
 
 def clean_group_title_for_design(title):
     title = str(title or "").strip()
-    # منع ظهور مربع بدل حرف المجموعة في بعض الخطوط/الأجهزة
+    # تنظيف رموز/إيموجي تسبب مربعات داخل عنوان المجموعة، مع تحويل الحروف الإنجليزية لعربي واضح.
+    title = re.sub(r"[🏆⭐🔥⚽️✅❌📌:：\-–—|]+", " ", title)
+    title = re.sub(r"\s+", " ", title).strip()
     mapping = {
         "A": "أ", "B": "ب", "C": "ج", "D": "د", "E": "هـ", "F": "و",
         "G": "ز", "H": "ح", "I": "ط", "J": "ي", "K": "ك", "L": "ل",
@@ -5055,6 +5057,9 @@ def clean_group_title_for_design(title):
         return "المجموعة " + mapping.get(letter, letter)
     title = re.sub(r"المجموعة\s+([A-Za-z])\b", repl, title)
     title = re.sub(r"Group\s+([A-Za-z])\b", repl, title, flags=re.I)
+    # لو السطر مجرد A/B/C نحوله قبل إضافة كلمة المجموعة في دوال الرسم.
+    if re.fullmatch(r"[A-Za-z]", title):
+        title = mapping.get(title.upper(), title.upper())
     return title
 
 def draw_design_header(draw, width, title, subtitle, img=None):
@@ -7506,41 +7511,103 @@ def create_group_newlook_image(group_title, rows, style=2):
     return path
 
 
+def _fit_font_to_width(draw, text, start_size, max_width, min_size=16):
+    size = int(start_size)
+    text = str(text or "")
+    while size > int(min_size):
+        try:
+            if text_width(draw, text, get_font(size)) <= max_width:
+                break
+        except Exception:
+            break
+        size -= 1
+    return get_font(max(size, int(min_size)))
+
+
 def create_all_groups_newlook_image(groups, style=2):
     ensure_generated_dir()
-    width, height = 1800, 2400
-    img, draw = _games_day_background(width, height)
-    draw_text(draw, (width//2, 90), "MONDIAL AL MASEEF 2026", get_font(40), fill="#FFFFFF")
-    draw_text(draw, (width//2, 170), "ALL GROUP STANDINGS", get_font(72), fill="#FFFFFF", max_width=width-160)
-    draw_text(draw, (width//2, 235), "ترتيب جميع المجموعات", get_font(36), fill="#FBBF24")
+    groups = list(groups or [])[:12]
+    width = 1800
     cols = 3
-    margin_x, gap_x = 75, 35
+    margin_x, gap_x = 72, 34
     card_w = (width - 2*margin_x - (cols-1)*gap_x) // cols
-    card_h = 470
-    start_y = 320
-    gap_y = 38
-    for idx, (title, rows) in enumerate(groups[:12]):
+
+    # ارتفاع كل صف في الشبكة يعتمد على أكبر عدد فرق في مجموعات هذا الصف،
+    # عشان نقلل الفراغات الزرقاء الفاضية مع بقاء كل المجموعات في صورة واحدة.
+    row_h = 62
+    row_gap = 8
+    grid_gap_y = 32
+    min_card_h = 285
+    header_h = 74
+    label_h = 34
+    bottom_pad = 24
+
+    row_heights = []
+    for r in range(4):
+        chunk = groups[r*cols:(r+1)*cols]
+        max_rows = max([min(len(rows), 4) for _title, rows in chunk] + [1])
+        ch = header_h + label_h + 18 + max_rows * row_h + max(0, max_rows-1) * row_gap + bottom_pad
+        row_heights.append(max(min_card_h, ch))
+
+    start_y = 300
+    footer_space = 110
+    height = int(start_y + sum(row_heights) + grid_gap_y*(len(row_heights)-1) + footer_space)
+    height = max(1640, min(height, 2320))
+
+    img, draw = _games_day_background(width, height)
+    # تغميق خفيف خلف المحتوى لتحسين القراءة بدون تغيير الهوية.
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (45, 40, width-45, height-45), radius=40, fill="#06152F55", outline="#FFFFFF22", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    draw_text(draw, (width//2, 82), "MONDIAL AL MASEEF 2026", _v31_latin_font(42) if '_v31_latin_font' in globals() else get_font(40), fill="#FFFFFF", max_width=900)
+    draw_text(draw, (width//2, 160), "ALL GROUP STANDINGS", _v31_latin_font(74) if '_v31_latin_font' in globals() else get_font(72), fill="#FFFFFF", max_width=width-170)
+    draw_text(draw, (width//2, 230), "ترتيب جميع المجموعات", get_font(40), fill="#FBBF24", max_width=800)
+
+    y_cursor = start_y
+    for idx, (title, rows) in enumerate(groups):
         c = idx % cols
         r = idx // cols
+        if c == 0 and idx != 0:
+            y_cursor += row_heights[r-1] + grid_gap_y
+
         x = margin_x + c*(card_w+gap_x)
-        y = start_y + r*(card_h+gap_y)
-        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=28, fill="#0638A5EE", outline="#14B8F5", width=3)
-        rounded_rect(draw, (x+18, y+18, x+card_w-18, y+68), radius=18, fill="#FBBF24", outline="#00000055", width=1)
+        y = y_cursor
+        card_h = row_heights[r]
+
+        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=28, fill="#0638A5E8", outline="#14B8F5", width=3)
+        rounded_rect(draw, (x+16, y+16, x+card_w-16, y+66), radius=16, fill="#FBBF24", outline="#00000055", width=1)
+
         gt = clean_group_title_for_design(title)
         if not str(gt).startswith("المجموعة"):
             gt = f"المجموعة {gt}"
-        draw_text(draw, (x+card_w//2, y+43), gt, get_font(26), fill="#061633", max_width=card_w-40)
-        yy = y + 92
+        draw_text(draw, (x+card_w//2, y+41), gt, get_font(29), fill="#061633", max_width=card_w-44)
+
+        label_y = y + 88
+        draw_text(draw, (x+card_w-64, label_y), "#", get_font(18), fill="#FDE68A")
+        draw_text(draw, (x+card_w-205, label_y), "المنتخب", get_font(18), fill="#FDE68A", max_width=190)
+        draw_text(draw, (x+195, label_y), "لعب", get_font(18), fill="#FDE68A")
+        draw_text(draw, (x+118, label_y), "+/-", get_font(18), fill="#FDE68A")
+        draw_text(draw, (x+48, label_y), "نقاط", get_font(18), fill="#FDE68A")
+
+        yy = y + 108
         for pos, (team, played, diff, pts) in enumerate(rows[:4], start=1):
-            rounded_rect(draw, (x+20, yy, x+card_w-20, yy+72), radius=16, fill="#061633AA", outline="#FFFFFF22", width=1)
-            cy = yy + 36
-            draw_text(draw, (x+card_w-44, cy), str(pos), get_font(22), fill="#FBBF24")
-            paste_flag(img, team, (x+card_w-125, cy-24, x+card_w-75, cy+24))
-            draw_text(draw, (x+card_w-245, cy), _clean_display_name(team), get_font(21), fill="#FFFFFF", max_width=185)
-            draw_text(draw, (x+155, cy), str(pts), get_font(26), fill="#FBBF24")
-            draw_text(draw, (x+75, cy), f"{int(diff):+d}", get_font(21), fill="#E5E7EB")
-            yy += 84
-    draw_text(draw, (width//2, height-70), "المصيف ينقل لكم الحدث", get_font(36), fill="#FBBF24")
+            rounded_rect(draw, (x+16, yy, x+card_w-16, yy+row_h), radius=15, fill="#061633B8", outline="#FFFFFF30", width=1)
+            cy = yy + row_h//2
+            draw_text(draw, (x+card_w-34, cy), str(pos), get_font(23), fill="#FBBF24")
+            fw, fh = 56, 38
+            paste_flag(img, team, (x+card_w-100, cy-fh//2, x+card_w-100+fw, cy+fh//2))
+            team_name = _clean_display_name(team)
+            team_font = _fit_font_to_width(draw, team_name, 24, 190, min_size=17)
+            draw_text(draw, (x+card_w-230, cy), team_name, team_font, fill="#FFFFFF", max_width=205)
+            draw_text(draw, (x+195, cy), str(played), get_font(23), fill="#FFFFFF")
+            draw_text(draw, (x+118, cy), f"{int(diff):+d}", get_font(23), fill="#E5E7EB")
+            draw_text(draw, (x+48, cy), str(pts), get_font(29), fill="#FBBF24")
+            yy += row_h + row_gap
+
+    draw_text(draw, (width//2, height-50), "المصيف ينقل لكم الحدث", get_font(38), fill="#FBBF24", max_width=700)
     path = os.path.join(GENERATED_DIR, f"all_groups_style{style}.png")
     img.save(path, quality=95)
     return path
@@ -7775,20 +7842,24 @@ def _v31_time_label(t):
 
 
 def _v31_layout(count, clean=False):
+    """
+    توزيع V31 بعد الاعتماد: نستغل المساحة الوسطى أكثر ونقلل الفراغ تحت الكروت،
+    مع الحفاظ على العنوان والتذييل الثابتين داخل الخلفية.
+    """
     count = max(1, min(int(count or 1), 7))
     if count == 1:
-        return 225, 0, 560 if not clean else 610
+        return 240, 0, 555 if not clean else 600
     if count == 2:
-        return 188, 32, 500 if not clean else 535
+        return 205, 38, 490 if not clean else 520
     if count == 3:
-        return 158, 24, 455 if not clean else 475
+        return 172, 30, 455 if not clean else 465
     if count == 4:
-        return 134, 20, 420 if not clean else 430
+        return 152, 22, 425 if not clean else 430
     if count == 5:
-        return 116, 15, 405 if not clean else 410
+        return 132, 17, 408 if not clean else 408
     if count == 6:
-        return 103, 13, 395 if not clean else 398
-    return 92, 11, 390 if not clean else 390
+        return 116, 14, 395 if not clean else 398
+    return 100, 10, 390 if not clean else 390
 
 
 def _v31_fit_ar_font(draw, text, start_size, max_width, min_size=20):
@@ -7832,10 +7903,10 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     rounded_rect(draw, (x2-badge_size-10, y1+14, x2-10, y1+14+badge_size), radius=10, fill="#FBBF24", outline="#FFFFFF33", width=1)
     draw_text(draw, (x2-10-badge_size//2, y1+14+badge_size//2), str(idx), _v31_latin_font(18), fill="#061633", max_width=badge_size)
 
-    # الأعلام أكبر قليلًا، لكن تبقى داخل حدود الكرت.
-    flag_w = min(118, max(66, row_h - 24))
+    # الأعلام أكبر وأوضح، مع بقائها داخل حدود الكرت.
+    flag_w = min(136, max(78, row_h - 18))
     flag_h = int(flag_w * 0.68)
-    side_pad = 48
+    side_pad = 42
 
     # الفريق الأول يمين، الفريق الثاني يسار
     right_flag_box = (x2-side_pad-flag_w, cy-flag_h//2, x2-side_pad, cy+flag_h//2)
@@ -7844,14 +7915,14 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     paste_flag(img, team_b, left_flag_box)
 
     # مربع الوقت بالنص: ثابت وواضح، ولا يأكل مساحة أسماء المنتخبات.
-    time_w = 178 if count <= 3 else (162 if count <= 5 else 148)
-    time_h = 68 if row_h >= 115 else 60
+    time_w = 176 if count <= 3 else (158 if count <= 5 else 146)
+    time_h = 70 if row_h >= 115 else 62
     cx = (x1 + x2) // 2
     rounded_rect(draw, (cx-time_w//2, cy-time_h//2, cx+time_w//2, cy+time_h//2), radius=18, fill="#020A1B", outline="#FBBF24", width=2)
-    draw_text(draw, (cx, cy), _v31_time_label(time_text), _v31_latin_font(30 if count <= 4 else 25), fill="#FBBF24", max_width=time_w-16)
+    draw_text(draw, (cx, cy), _v31_time_label(time_text), _v31_latin_font(31 if count <= 4 else 27), fill="#FBBF24", max_width=time_w-16)
 
-    # أسماء المنتخبات: تكبير محسوب حسب عدد المباريات، مع بقاء النص داخل مساحته.
-    base_team_size = 34 if count <= 2 else (32 if count == 3 else (29 if count == 4 else (26 if count <= 6 else 24)))
+    # أسماء المنتخبات: خط عربي أوضح وأكبر، مع تصغير تلقائي إذا طال الاسم.
+    base_team_size = 38 if count <= 2 else (36 if count == 3 else (34 if count == 4 else (31 if count <= 6 else 27)))
 
     right_text_left = cx + time_w//2 + 18
     right_text_right = right_flag_box[0] - 16
@@ -7862,8 +7933,8 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     right_text_x = (right_text_left + right_text_right) // 2
     left_text_x = (left_text_left + left_text_right) // 2
 
-    font_a = _v31_fit_ar_font(draw, team_a, base_team_size, right_text_width, min_size=21 if count <= 6 else 19)
-    font_b = _v31_fit_ar_font(draw, team_b, base_team_size, left_text_width, min_size=21 if count <= 6 else 19)
+    font_a = _v31_fit_ar_font(draw, team_a, base_team_size, right_text_width, min_size=24 if count <= 6 else 20)
+    font_b = _v31_fit_ar_font(draw, team_b, base_team_size, left_text_width, min_size=24 if count <= 6 else 20)
     _v31_draw_team_name(draw, (right_text_x, cy), team_a, font_a, right_text_width)
     _v31_draw_team_name(draw, (left_text_x, cy), team_b, font_b, left_text_width)
 
@@ -7889,7 +7960,7 @@ def create_matches_today_v31_full_image(day_name, matches):
     _v31_draw_date_pill(draw, width, 350, day_name)
 
     row_h, gap, y = _v31_layout(count, clean=False)
-    x1, x2 = 255, 1035
+    x1, x2 = 225, 1045
     for idx, (a, b, t) in enumerate(matches, start=1):
         _v31_card(img, draw, (x1, y, x2, y+row_h), idx, a, b, t, count)
         y += row_h + gap
@@ -7912,7 +7983,7 @@ def create_matches_today_v31_clean_image(day_name, matches):
     _v31_draw_date_pill(draw, width, 285, day_name)
 
     row_h, gap, y = _v31_layout(count, clean=True)
-    x1, x2 = 255, 1035
+    x1, x2 = 225, 1045
     for idx, (a, b, t) in enumerate(matches, start=1):
         _v31_card(img, draw, (x1, y, x2, y+row_h), idx, a, b, t, count)
         y += row_h + gap
