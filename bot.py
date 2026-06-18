@@ -7857,10 +7857,10 @@ def _v31_layout(count, clean=False):
         return 152, 22, 425 if not clean else 430
     if count == 5:
         # مساحة أكبر للكروت حتى تظهر الأعلام أوضح بدون تغيير الهوية
-        return 140, 12, 400 if not clean else 400
+        return 140, 10, 410 if not clean else 410
     if count == 6:
-        # اعتمدنا تكبير الأعلام: نرفع ارتفاع الكرت ونقلل الفراغات بين الكروت
-        return 126, 8, 388 if not clean else 392
+        # ننزل كروت المباريات قليلًا لتقليل الفراغ السفلي وتوسيط التاريخ بصريًا
+        return 126, 8, 408 if not clean else 410
     return 100, 10, 390 if not clean else 390
 
 
@@ -7889,6 +7889,37 @@ def _v31_draw_team_name(draw, pos, name, font, max_width, fill="#FFFFFF"):
     draw_text(draw, (x, y), clean_name, font, fill=fill, max_width=max_width)
 
 
+def _v31_paste_flag(img, team_name, box):
+    """
+    لصق أعلام V31 بحجم واضح.
+    ملاحظة: دالة paste_flag الأصلية تستخدم thumbnail وقد لا تكبر الأعلام الصغيرة،
+    لذلك هنا نعمل resize صريح داخل مربع العلم مع الحفاظ على النسبة.
+    """
+    x1, y1, x2, y2 = [int(v) for v in box]
+    w = max(1, x2 - x1)
+    h = max(1, y2 - y1)
+    try:
+        path = flag_path_for(team_name)
+        if path and os.path.exists(path):
+            flag = Image.open(path).convert("RGBA")
+            fw, fh = flag.size
+            if fw > 0 and fh > 0:
+                scale = min(w / fw, h / fh)
+                nw = max(1, int(fw * scale))
+                nh = max(1, int(fh * scale))
+                flag = flag.resize((nw, nh), Image.LANCZOS)
+                px = x1 + (w - nw) // 2
+                py = y1 + (h - nh) // 2
+                img.paste(flag, (px, py), flag)
+                return
+    except Exception:
+        pass
+    try:
+        paste_flag(img, team_name, (x1, y1, x2, y2))
+    except Exception:
+        pass
+
+
 def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     x1, y1, x2, y2 = [int(v) for v in box]
     cy = (y1 + y2) // 2
@@ -7906,17 +7937,25 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     draw_text(draw, (x2-10-badge_size//2, y1+14+badge_size//2), str(idx), _v31_latin_font(18), fill="#061633", max_width=badge_size)
 
     # الأعلام أكبر وأوضح، مع بقائها داخل حدود الكرت.
-    # تكبير قوي للأعلام بعد اعتماد المستخدم: تقريبًا ضعف المساحة البصرية السابقة،
-    # مع تعديل الهوامش حتى لا تدخل على أسماء المنتخبات أو مربع الوقت.
-    flag_h = min(122 if count <= 4 else 116, max(82, row_h - 10))
-    flag_w = min(198 if count >= 5 else 210, int(flag_h * 1.72))
-    side_pad = 24 if count >= 5 else 28
+    # نستخدم resize صريح للأعلام حتى تكبر فعلًا حتى لو ملفات الأعلام الأصلية صغيرة.
+    if count >= 5:
+        flag_h = min(96, max(82, row_h - 28))
+        flag_w = int(flag_h * 1.68)
+        side_pad = 28
+    elif count == 4:
+        flag_h = min(112, row_h - 28)
+        flag_w = int(flag_h * 1.68)
+        side_pad = 30
+    else:
+        flag_h = min(122, row_h - 34)
+        flag_w = int(flag_h * 1.68)
+        side_pad = 34
 
     # الفريق الأول يمين، الفريق الثاني يسار
     right_flag_box = (x2-side_pad-flag_w, cy-flag_h//2, x2-side_pad, cy+flag_h//2)
     left_flag_box = (x1+side_pad, cy-flag_h//2, x1+side_pad+flag_w, cy+flag_h//2)
-    paste_flag(img, team_a, right_flag_box)
-    paste_flag(img, team_b, left_flag_box)
+    _v31_paste_flag(img, team_a, right_flag_box)
+    _v31_paste_flag(img, team_b, left_flag_box)
 
     # مربع الوقت بالنص: ثابت وواضح، ولا يأكل مساحة أسماء المنتخبات.
     time_w = 176 if count <= 3 else (158 if count <= 5 else 146)
@@ -7961,7 +8000,7 @@ def create_matches_today_v31_full_image(day_name, matches):
     img, draw = _v31_load_bg(V31_FULL_BG, width, height)
 
     # الخلفية فيها العنوان والتذييل ثابتين؛ نضيف التاريخ والكروت فقط.
-    _v31_draw_date_pill(draw, width, 350, day_name)
+    _v31_draw_date_pill(draw, width, 365, day_name)
 
     row_h, gap, y = _v31_layout(count, clean=False)
     x1, x2 = 212, 1058
@@ -7984,7 +8023,7 @@ def create_matches_today_v31_clean_image(day_name, matches):
     # النسخة النظيفة: العنوان كامل ديناميكي من البوت.
     draw_text(draw, (width//2, 70), "MONDIAL AL MASEEF 2026", _v31_latin_font(36), fill="#FFFFFF", max_width=760)
     draw_text(draw, (width//2, 165), "GAMES OF THE DAY", _v31_latin_font(86), fill="#FFFFFF", max_width=940)
-    _v31_draw_date_pill(draw, width, 285, day_name)
+    _v31_draw_date_pill(draw, width, 312, day_name)
 
     row_h, gap, y = _v31_layout(count, clean=True)
     x1, x2 = 212, 1058
