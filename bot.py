@@ -7228,14 +7228,81 @@ def _template_bg_path(style):
     return os.path.join("assets", "templates", name)
 
 
+def _style4_clean_background(width=1200, height=1500):
+    img = Image.new("RGB", (width, height), "#07153A")
+    draw = ImageDraw.Draw(img)
+
+    for y in range(height):
+        t = y / max(1, height - 1)
+        r = int(6 + 8 * t)
+        g = int(18 + 18 * t)
+        b = int(58 + 34 * t)
+        draw.line((0, y, width, y), fill=(r, g, b))
+
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+
+    # وهج علوي ودائري يمين
+    od.ellipse((110, -150, width - 130, 470), fill=(48, 95, 220, 70))
+    od.ellipse((width * 0.62, 350, width * 1.12, 840), fill=(45, 96, 220, 55))
+    od.ellipse((width * 0.70, 760, width * 1.18, 1280), fill=(32, 82, 205, 52))
+    od.rectangle((width * 0.74, 450, width * 0.94, 690), fill=(60, 110, 230, 42))
+    od.rectangle((width * 0.88, 550, width * 1.04, 890), fill=(48, 96, 210, 38))
+    od.ellipse((width - 40, 420, width + 240, 720), fill=(35, 95, 220, 48))
+
+    # لمسة خطوط/دوائر خفيفة يمين
+    for off in [0, 115, 230, 345]:
+        od.arc((830, 120 + off, 1160, 410 + off), 255, 105, fill=(89, 140, 255, 42), width=4)
+
+    # ظل تمثال حرية مبسط يسار (بدون أي مربعات/خانات ثابتة)
+    stat = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(stat)
+    sx = int(width * 0.12)
+    base_y = int(height * 0.78)
+    blue = (20, 72, 180, 108)
+    sd.polygon([
+        (sx - 145, base_y + 210), (sx + 200, base_y + 210),
+        (sx + 145, base_y - 210), (sx - 5, base_y - 255)
+    ], fill=blue)
+    sd.polygon([
+        (sx - 70, base_y - 190), (sx + 60, base_y - 190),
+        (sx + 35, base_y - 370), (sx - 45, base_y - 375)
+    ], fill=(22, 82, 195, 98))
+    sd.ellipse((sx - 45, base_y - 500, sx + 75, base_y - 375), fill=(22, 82, 195, 96))
+    for ang in [-72, -45, -20, 10, 38, 62]:
+        x2 = sx + 18 + int(120 * (ang / 72))
+        sd.line((sx + 18, base_y - 470, x2, base_y - 620), fill=(22, 82, 195, 90), width=10)
+    sd.line((sx - 105, base_y - 410, sx - 200, base_y - 705), fill=(22, 82, 195, 92), width=34)
+    sd.ellipse((sx - 238, base_y - 782, sx - 155, base_y - 690), fill=(22, 82, 195, 95))
+    sd.polygon([(sx - 198, base_y - 814), (sx - 235, base_y - 730), (sx - 160, base_y - 735)], fill=(22, 82, 195, 92))
+    stat = stat.filter(ImageFilter.GaussianBlur(1))
+    overlay = Image.alpha_composite(overlay, stat)
+
+    overlay = overlay.filter(ImageFilter.GaussianBlur(6))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    # أقواس علوية خفيفة مثل المرجع
+    for i in range(0, 55, 6):
+        draw.arc((80 + i * 2, 34 + i, width - 85 - i * 2, 520 + i), 198, 336, fill="#5FA3FF44", width=2)
+
+    return img, draw
+
+
 def _newlook_canvas(style, title, sub_title, width=1200, height=1500):
     style = int(style)
+
+    # ستايل 4 النهائي: لا نعتمد على الخلفية الجاهزة التي تحتوي خانات ثابتة أو تاريخ ثابت.
+    if style == 4:
+        img, draw = _style4_clean_background(width, height)
+        _draw_games_header(draw, width, title, sub_title)
+        return img, draw
+
     path = _template_bg_path(style)
     if os.path.exists(path):
         try:
             img = Image.open(path).convert("RGB").resize((width, height))
             draw = ImageDraw.Draw(img)
-            # غطاء خفيف عشان النصوص القديمة في الخلفية ما تتداخل
             overlay = Image.new("RGBA", (width, height), (0,0,0,0))
             od = ImageDraw.Draw(overlay)
             rounded_rect(od, (55, 45, width-55, 330), radius=30, fill="#06152F88")
