@@ -7791,34 +7791,81 @@ def _v31_layout(count, clean=False):
     return 92, 11, 390 if not clean else 390
 
 
+def _v31_fit_ar_font(draw, text, start_size, max_width, min_size=20):
+    """يكبر الخط العربي قدر الإمكان بدون خروجه من مساحة الفريق داخل كرت V31."""
+    text = _clean_display_name(text)
+    size = int(start_size)
+    while size > int(min_size):
+        try:
+            if text_width(draw, text, get_font(size)) <= max_width:
+                break
+        except Exception:
+            break
+        size -= 1
+    return get_font(max(size, int(min_size)))
+
+
+def _v31_draw_team_name(draw, pos, name, font, max_width, fill="#FFFFFF"):
+    """ظل خفيف + اسم واضح داخل المربع، بدون تغيير شكل التصميم."""
+    x, y = pos
+    clean_name = _clean_display_name(name)
+    try:
+        draw_text(draw, (x + 2, y + 2), clean_name, font, fill="#000814", max_width=max_width)
+    except Exception:
+        pass
+    draw_text(draw, (x, y), clean_name, font, fill=fill, max_width=max_width)
+
+
 def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     x1, y1, x2, y2 = [int(v) for v in box]
     cy = (y1 + y2) // 2
     row_h = y2 - y1
+    card_w = x2 - x1
 
-    # الكرت الأساسي
+    # الكرت الأساسي — نفس الهوية، فقط تنسيق داخلي أوضح.
     rounded_rect(draw, (x1, y1, x2, y2), radius=30, fill="#061633", outline="#2F80FF", width=3)
     draw.line((x1+32, y1+5, x2-32, y1+5), fill="#FBBF24", width=3)
     draw.line((x1+32, y2-5, x2-32, y2-5), fill="#1257D6", width=3)
 
     # رقم المباراة
-    rounded_rect(draw, (x2-38, y1+18, x2-10, y1+46), radius=10, fill="#FBBF24", outline="#FFFFFF33", width=1)
-    draw_text(draw, (x2-24, y1+32), str(idx), _v31_latin_font(18), fill="#061633", max_width=28)
+    badge_size = 30 if row_h >= 112 else 27
+    rounded_rect(draw, (x2-badge_size-10, y1+14, x2-10, y1+14+badge_size), radius=10, fill="#FBBF24", outline="#FFFFFF33", width=1)
+    draw_text(draw, (x2-10-badge_size//2, y1+14+badge_size//2), str(idx), _v31_latin_font(18), fill="#061633", max_width=badge_size)
 
-    flag_w = min(112, max(62, row_h - 30))
+    # الأعلام أكبر قليلًا، لكن تبقى داخل حدود الكرت.
+    flag_w = min(118, max(66, row_h - 24))
     flag_h = int(flag_w * 0.68)
+    side_pad = 48
 
     # الفريق الأول يمين، الفريق الثاني يسار
-    paste_flag(img, team_a, (x2-52-flag_w, cy-flag_h//2, x2-52, cy+flag_h//2))
-    paste_flag(img, team_b, (x1+52, cy-flag_h//2, x1+52+flag_w, cy+flag_h//2))
+    right_flag_box = (x2-side_pad-flag_w, cy-flag_h//2, x2-side_pad, cy+flag_h//2)
+    left_flag_box = (x1+side_pad, cy-flag_h//2, x1+side_pad+flag_w, cy+flag_h//2)
+    paste_flag(img, team_a, right_flag_box)
+    paste_flag(img, team_b, left_flag_box)
 
-    font_team = 25 if count <= 4 else 20
-    draw_text(draw, (x2-215, cy), _clean_display_name(team_a), get_font(font_team), fill="#FFFFFF", max_width=195)
-    draw_text(draw, (x1+215, cy), _clean_display_name(team_b), get_font(font_team), fill="#FFFFFF", max_width=195)
+    # مربع الوقت بالنص: ثابت وواضح، ولا يأكل مساحة أسماء المنتخبات.
+    time_w = 178 if count <= 3 else (162 if count <= 5 else 148)
+    time_h = 68 if row_h >= 115 else 60
+    cx = (x1 + x2) // 2
+    rounded_rect(draw, (cx-time_w//2, cy-time_h//2, cx+time_w//2, cy+time_h//2), radius=18, fill="#020A1B", outline="#FBBF24", width=2)
+    draw_text(draw, (cx, cy), _v31_time_label(time_text), _v31_latin_font(30 if count <= 4 else 25), fill="#FBBF24", max_width=time_w-16)
 
-    # الوقت بالنص
-    rounded_rect(draw, (x1+330, cy-34, x2-330, cy+34), radius=18, fill="#020A1B", outline="#FBBF24", width=2)
-    draw_text(draw, ((x1+x2)//2, cy), _v31_time_label(time_text), _v31_latin_font(30 if count <= 4 else 24), fill="#FBBF24", max_width=205)
+    # أسماء المنتخبات: تكبير محسوب حسب عدد المباريات، مع بقاء النص داخل مساحته.
+    base_team_size = 34 if count <= 2 else (32 if count == 3 else (29 if count == 4 else (26 if count <= 6 else 24)))
+
+    right_text_left = cx + time_w//2 + 18
+    right_text_right = right_flag_box[0] - 16
+    left_text_left = left_flag_box[2] + 16
+    left_text_right = cx - time_w//2 - 18
+    right_text_width = max(120, int(right_text_right - right_text_left))
+    left_text_width = max(120, int(left_text_right - left_text_left))
+    right_text_x = (right_text_left + right_text_right) // 2
+    left_text_x = (left_text_left + left_text_right) // 2
+
+    font_a = _v31_fit_ar_font(draw, team_a, base_team_size, right_text_width, min_size=21 if count <= 6 else 19)
+    font_b = _v31_fit_ar_font(draw, team_b, base_team_size, left_text_width, min_size=21 if count <= 6 else 19)
+    _v31_draw_team_name(draw, (right_text_x, cy), team_a, font_a, right_text_width)
+    _v31_draw_team_name(draw, (left_text_x, cy), team_b, font_b, left_text_width)
 
 
 def _v31_draw_date_pill(draw, width, y, day_name):
