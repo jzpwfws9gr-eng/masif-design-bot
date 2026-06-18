@@ -7902,6 +7902,14 @@ def _v31_paste_flag(img, team_name, box):
         path = flag_path_for(team_name)
         if path and os.path.exists(path):
             flag = Image.open(path).convert("RGBA")
+            # نقصّ الفراغ الشفاف حول العلم إن وجد، لأن بعض ملفات الأعلام فيها padding
+            # وهذا كان يخلي العلم يبان صغير حتى لو مربع العلم كبير.
+            try:
+                bbox = flag.getchannel("A").getbbox()
+                if bbox:
+                    flag = flag.crop(bbox)
+            except Exception:
+                pass
             fw, fh = flag.size
             if fw > 0 and fh > 0:
                 scale = min(w / fw, h / fh)
@@ -7936,20 +7944,23 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     rounded_rect(draw, (x2-badge_size-10, y1+14, x2-10, y1+14+badge_size), radius=10, fill="#FBBF24", outline="#FFFFFF33", width=1)
     draw_text(draw, (x2-10-badge_size//2, y1+14+badge_size//2), str(idx), _v31_latin_font(18), fill="#061633", max_width=badge_size)
 
-    # الأعلام أكبر وأوضح، مع بقائها داخل حدود الكرت.
-    # نستخدم resize صريح للأعلام حتى تكبر فعلًا حتى لو ملفات الأعلام الأصلية صغيرة.
+    # الأعلام أوضح بحوالي 70٪: نكبر مساحة العلم مع قصّ الفراغ الشفاف من ملف العلم.
+    # حافظنا على حدود الكرت والمساحة المخصصة للاسم عشان ما يدخل النص على العلم.
     if count >= 5:
-        flag_h = min(96, max(82, row_h - 28))
-        flag_w = int(flag_h * 1.68)
-        side_pad = 28
+        base_flag_h = min(96, max(82, row_h - 28))
+        flag_h = min(int(base_flag_h * 1.70), row_h - 10)
+        flag_w = int(flag_h * 1.62)
+        side_pad = 18
     elif count == 4:
-        flag_h = min(112, row_h - 28)
-        flag_w = int(flag_h * 1.68)
-        side_pad = 30
+        base_flag_h = min(112, row_h - 28)
+        flag_h = min(int(base_flag_h * 1.70), row_h - 12)
+        flag_w = int(flag_h * 1.62)
+        side_pad = 20
     else:
-        flag_h = min(122, row_h - 34)
-        flag_w = int(flag_h * 1.68)
-        side_pad = 34
+        base_flag_h = min(122, row_h - 34)
+        flag_h = min(int(base_flag_h * 1.70), row_h - 14)
+        flag_w = int(flag_h * 1.62)
+        side_pad = 22
 
     # الفريق الأول يمين، الفريق الثاني يسار
     right_flag_box = (x2-side_pad-flag_w, cy-flag_h//2, x2-side_pad, cy+flag_h//2)
@@ -8003,7 +8014,8 @@ def create_matches_today_v31_full_image(day_name, matches):
     _v31_draw_date_pill(draw, width, 365, day_name)
 
     row_h, gap, y = _v31_layout(count, clean=False)
-    x1, x2 = 212, 1058
+    # عرض أكبر قليلًا للكروت حتى تستوعب الأعلام الأكبر بدون ضغط أسماء المنتخبات.
+    x1, x2 = 185, 1085
     for idx, (a, b, t) in enumerate(matches, start=1):
         _v31_card(img, draw, (x1, y, x2, y+row_h), idx, a, b, t, count)
         y += row_h + gap
@@ -8026,7 +8038,8 @@ def create_matches_today_v31_clean_image(day_name, matches):
     _v31_draw_date_pill(draw, width, 312, day_name)
 
     row_h, gap, y = _v31_layout(count, clean=True)
-    x1, x2 = 212, 1058
+    # عرض أكبر قليلًا للكروت حتى تستوعب الأعلام الأكبر بدون ضغط أسماء المنتخبات.
+    x1, x2 = 185, 1085
     for idx, (a, b, t) in enumerate(matches, start=1):
         _v31_card(img, draw, (x1, y, x2, y+row_h), idx, a, b, t, count)
         y += row_h + gap
@@ -8386,25 +8399,3 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), admin_only(results_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), overall))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_نص"), ranking_text))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/?(?:احصائيات|إحصائيات)(?:\s|$)"), dashboard))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(الأيام|الايام)"), list_days))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فحص"), inspect_day))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مشاركين"), participants_day))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اسطورة"), legend_day))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مقارنة"), compare_days))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_الكل"), admin_only(clear_all)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_يوم"), admin_only(clear_day)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_نتائج"), admin_only(clear_results)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_آخر"), admin_only(restore_last)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
-
-    # V31 — مباريات اليوم بالتصميم الجديد
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم2(?:\s|$)"), admin_only(matches_today_v31_clean_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم(?:\s|$)"), admin_only(matches_today_v31_full_command)))
-
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
