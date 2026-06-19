@@ -5347,7 +5347,7 @@ async def design_matches_template_command(update: Update, context: ContextTypes.
         return
     try:
         path = create_matches_template_image(day_name, matches, use_template=True)
-        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
+        await send_photo_path(update, path, build_matches_today_v31_caption(day_name, matches))
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم المباريات بالقالب ❌\n{e}")
 
@@ -5358,7 +5358,7 @@ async def design_matches_auto_command(update: Update, context: ContextTypes.DEFA
         return
     try:
         path = create_matches_template_image(day_name, matches, use_template=False)
-        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
+        await send_photo_path(update, path, build_matches_today_v31_caption(day_name, matches))
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم المباريات التلقائي ❌\n{e}")
 
@@ -5759,6 +5759,24 @@ def build_design_matches_caption(day_name, matches):
     lines.append("")
     lines.append("المصيف ينقل لكم الحدث")
     return "\n".join(lines)
+
+
+def build_matches_today_v31_caption(day_name, matches):
+    """كابشن خاص لأوامر /مباريات_اليوم و /مباريات_اليوم2:
+    يرسل المباريات ثم نموذج المشاركة الرسمي في آخر الرسالة.
+    """
+    caption = build_design_matches_caption(day_name, matches)
+    form = [
+        "",
+        "📋 نموذج المشاركة الرسمي المعتمد",
+        "🏆 تشكيلة الفانتزي - اليوم (    )",
+        "🧤 الحارس:",
+        " اللاعب 1:",
+        " اللاعب 2:",
+        " اللاعب 3:",
+        "👑 الكابتن :",
+    ]
+    return caption + "\n" + "\n".join(form)
 
 
 async def design_matches_style2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -8138,7 +8156,7 @@ async def matches_today_v31_full_command(update: Update, context: ContextTypes.D
             )
             return
         path = create_matches_today_v31_full_image(day_name, matches)
-        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
+        await send_photo_path(update, path, build_matches_today_v31_caption(day_name, matches))
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم مباريات اليوم V31 ❌\n{e}")
 
@@ -8156,7 +8174,7 @@ async def matches_today_v31_clean_command(update: Update, context: ContextTypes.
             )
             return
         path = create_matches_today_v31_clean_image(day_name, matches)
-        await send_photo_path(update, path, build_design_matches_caption(day_name, matches))
+        await send_photo_path(update, path, build_matches_today_v31_caption(day_name, matches))
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم مباريات اليوم V31-2 ❌\n{e}")
 
