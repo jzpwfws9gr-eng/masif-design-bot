@@ -3322,7 +3322,7 @@ def has_arabic(text):
 
 
 def clean_draw_text(text):
-    """تنظيف نصوص الصور من الرموز التي تظهر كمربعات داخل التقرير."""
+    """تنظيف نصوص الصور من الرموز التي تظهر كمربعات أو فواصل مزعجة داخل التقرير."""
     s = "" if text is None else str(text)
     replacements = {
         "🏆": "",
@@ -3339,13 +3339,40 @@ def clean_draw_text(text):
         "🥉": "3",
         "\ufe0f": "",
         "□": "",
+        "■": "",
+        "▪": "",
+        "▫": "",
+        "▢": "",
+        "▣": "",
+        "▤": "",
+        "▥": "",
+        "▦": "",
+        "▧": "",
+        "▨": "",
+        "▩": "",
+        "◻": "",
+        "◼": "",
+        "◽": "",
+        "◾": "",
+        "◻️": "",
+        "◼️": "",
+        "☐": "",
+        "☑": "",
+        "☒": "",
+        "¦": "-",
+        "|": "-",
         "\u200f": "",
         "\u200e": "",
+        "\u2066": "",
+        "\u2067": "",
+        "\u2068": "",
+        "\u2069": "",
     }
     for a, b in replacements.items():
         s = s.replace(a, b)
+    s = re.sub(r"\s+([\-—])\s+", r" \1 ", s)
     s = re.sub(r"\s{2,}", " ", s)
-    return s.strip()
+    return s.strip(" -—")
 
 def draw_text(draw, xy, text, font, fill="white", anchor="mm", align="center", max_width=None, spacing=8):
     """
@@ -4655,6 +4682,7 @@ def create_participant_card_image(name, start_day=1, end_day=31):
     stats = collect_stats(start_day, end_day)
     if name not in PARTICIPANTS:
         raise ValueError("اسم المشارك غير موجود")
+
     rank = stats["ranking"].index(name) + 1 if name in stats["ranking"] else "-"
     total = stats["totals"].get(name, 0)
     day_scores = stats["scores_by_day"].get(name, {})
@@ -4668,29 +4696,38 @@ def create_participant_card_image(name, start_day=1, end_day=31):
     days_count = len(stats["days"])
     pct = f"{round(pc / days_count * 100, 1)}%" if days_count else "0%"
 
-    img, draw = make_canvas(1200, 900)
-    draw_text(draw, (600, 85), "بطاقة مشارك فانتزي المصيف", get_font(52), fill="#FFFFFF")
-    rounded_rect(draw, (90,145,1110,270), radius=38, fill="#7C3AEDDD", outline="#FFFFFF33", width=2)
-    draw_text(draw, (600, 205), name, get_font(64), fill="#FDE68A")
-    cards = [
-        (90,310,360,430,"المركز", f"#{rank}"),
-        (465,310,735,430,"النقاط", str(total)),
-        (840,310,1110,430,"أسطورة اليوم", str(stats["daily_wins"].get(name,0))),
-        (90,470,360,590,"أفضل يوم", f"{best_day} - {best_score}"),
-        (465,470,735,590,"أسوأ يوم", f"{worst_day} - {worst_score}"),
-        (840,470,1110,590,"نسبة المشاركة", pct),
-        (90,630,545,750,"أفضل كابتن", f"{best_cap} +{best_cap_pts}"),
-        (655,630,1110,750,"فوز المواجهات", str(wins)),
-    ]
-    for x1,y1,x2,y2,t,v in cards:
-        rounded_rect(draw,(x1,y1,x2,y2), radius=28, fill="#111827CC", outline="#FFFFFF25", width=2)
-        draw_text(draw, ((x1+x2)//2, y1+34), t, get_font(26), fill="#E5E7EB")
-        draw_text(draw, ((x1+x2)//2, y1+82), v, get_font(36), fill="#FFFFFF", max_width=x2-x1-24)
-    draw_text(draw, (600, 820), "فانتزي المصيف 2026", get_font(34), fill="#FDE68A")
+    img, draw = design_canvas(None, 1400, 980, "purple")
+    draw_design_header(draw, 1400, "بطاقة مشارك فانتزي المصيف", clean_draw_text(name), img)
+    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, 1400, 980, top=205, bottom_pad=94, accent="#A855F7")
+
+    def card(box, title, value, value_size=42, fill="#0B1020", outline="#FFFFFF40"):
+        x1, y1, x2, y2 = box
+        rounded_rect(draw, box, radius=28, fill=fill, outline=outline, width=2)
+        draw_text(draw, ((x1 + x2) // 2, y1 + 34), clean_draw_text(title), get_font(28), fill="#E5E7EB")
+        draw_text(draw, ((x1 + x2) // 2, (y1 + y2) // 2 + 14), clean_draw_text(value), get_font(value_size), fill="#FFFFFF", max_width=x2 - x1 - 36)
+
+    card((85, 255, 390, 410), "المركز", f"#{rank}", 52, "#08111F", "#FFFFFF50")
+    card((548, 255, 852, 410), "النقاط", f"{total}", 52, "#08111F", "#FFFFFF50")
+    card((1015, 255, 1320, 410), "أسطورة اليوم", f"{stats['daily_wins'].get(name, 0)}", 52, "#08111F", "#FFFFFF50")
+
+    best_text = f"اليوم {best_day}\n{best_score} نقطة" if best_day != "-" else "-"
+    worst_text = f"اليوم {worst_day}\n{worst_score} نقطة" if worst_day != "-" else "-"
+    cap_label = best_cap if best_cap and best_cap != "-" else "-"
+    cap_text = f"{cap_label}\n{best_cap_pts} نقطة" if cap_label != "-" else "-"
+    if best_cap_day not in (None, "-", "") and cap_label != "-":
+        cap_text = f"{cap_label}\nاليوم {best_cap_day} - {best_cap_pts} نقطة"
+
+    card((85, 455, 390, 610), "أفضل يوم", best_text, 34, "#0C1628", "#10B98155")
+    card((548, 455, 852, 610), "أسوأ يوم", worst_text, 34, "#0C1628", "#EF444455")
+    card((1015, 455, 1320, 610), "نسبة المشاركة", pct, 46, "#0C1628", "#3B82F655")
+
+    card((85, 655, 645, 840), "أفضل كابتن", cap_text, 33, "#0C1628", "#F59E0B55")
+    card((760, 655, 1320, 840), "انتصارات المواجهات اليومية", f"{wins}", 56, "#0C1628", "#06B6D455")
+
+    draw_text(draw, (700, 905), f"الفترة من اليوم {start_day} إلى {end_day}", get_font(28), fill="#FDE68A")
     path = os.path.join(GENERATED_DIR, f"participant_card_{_safe_filename(name)}.png")
     img.save(path, quality=95)
     return path
-
 
 async def participant_card_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
@@ -4796,46 +4833,55 @@ def create_period_report_image(start_day, end_day):
     days, totals, cap_points, keeper_points, player_impact, player_zero, active_counts = period_stats(start_day, end_day)
     if not days:
         raise ValueError("ما فيه أيام في الفترة")
+
     champion = totals.most_common(1)[0][0] if totals else "-"
-    best_participant = champion
-    best_cap = cap_points.most_common(1)[0] if cap_points else ("-",0)
-    best_keeper = keeper_points.most_common(1)[0] if keeper_points else ("-",0)
-    best_player = player_impact.most_common(1)[0] if player_impact else ("-",0)
-    disappointment = player_zero.most_common(1)[0] if player_zero else ("-",0)
+    best_cap = cap_points.most_common(1)[0] if cap_points else ("-", 0)
+    best_keeper = keeper_points.most_common(1)[0] if keeper_points else ("-", 0)
+    best_player = player_impact.most_common(1)[0] if player_impact else ("-", 0)
+    disappointment = player_zero.most_common(1)[0] if player_zero else ("-", 0)
     mw = matchup_wins_map(start_day, end_day).most_common(1)
-    king_matchups = mw[0] if mw else ("-",0)
+    king_matchups = mw[0] if mw else ("-", 0)
     cup = compute_fantasy_cup(start_day, end_day)
     cup_champ = cup.get("champion", "-")
 
-    img, draw = make_canvas(1400, 1050)
-    draw_text(draw, (700,80), f"تقرير الفترة من اليوم {start_day} إلى {end_day}", get_font(54), fill="#FFFFFF")
-    draw_text(draw, (700,140), "فانتزي المصيف 2026", get_font(38), fill="#FDE68A")
-    cards = [
-        (80,200,430,330,"🏆 بطل الفترة", f"{champion}\n{totals.get(champion,0)} نقطة"),
-        (525,200,875,330,"👑 أفضل كابتن", f"{best_cap[0]}\n+{best_cap[1]}"),
-        (970,200,1320,330,"🧤 أفضل حارس", f"{best_keeper[0]}\n{best_keeper[1]} نقطة"),
-        (80,380,430,510,"🔥 أكثر لاعب أفاد", f"{best_player[0]}\n{best_player[1]} نقطة"),
-        (525,380,875,510,"😅 خيبة الفترة", f"{disappointment[0]}\n{disappointment[1]} اختيارات صفر"),
-        (970,380,1320,510,"⚔️ ملك المواجهات", f"{king_matchups[0]}\n{king_matchups[1]} فوز"),
-        (80,560,1320,690,"🏆 بطل كأس الفانتزي", cup_champ),
-    ]
-    for x1,y1,x2,y2,t,v in cards:
-        rounded_rect(draw,(x1,y1,x2,y2), radius=30, fill="#111827CC", outline="#FFFFFF25", width=2)
-        draw_text(draw, ((x1+x2)//2, y1+38), t, get_font(27), fill="#E5E7EB")
-        draw_text(draw, ((x1+x2)//2, y1+88), v, get_font(38), fill="#FFFFFF", max_width=x2-x1-30)
+    img, draw = design_canvas(None, 1400, 1160, "purple")
+    draw_design_header(draw, 1400, f"تقرير الفترة من اليوم {start_day} إلى {end_day}", "فانتزي المصيف 2026", img)
+    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, 1400, 1160, top=205, bottom_pad=92, accent="#F59E0B")
 
-    y = 740
-    draw_text(draw, (700,y), "أفضل 5 في الفترة", get_font(36), fill="#FDE68A")
-    y += 55
-    for i,(name,pts) in enumerate(totals.most_common(5), start=1):
-        rounded_rect(draw,(170,y,1230,y+55), radius=18, fill="#FFFFFF16", outline="#FFFFFF20", width=1)
-        draw_text(draw,(1110,y+28), f"{i}. {name}", get_font(30), fill="#FFFFFF")
-        draw_text(draw,(300,y+28), f"{pts} نقطة", get_font(30), fill="#FDE68A")
-        y += 65
+    def info_card(box, title, value, accent="#FFFFFF35", value_size=33):
+        x1, y1, x2, y2 = box
+        rounded_rect(draw, box, radius=26, fill="#0B1020", outline=accent, width=2)
+        draw_text(draw, ((x1 + x2) // 2, y1 + 32), clean_draw_text(title), get_font(27), fill="#E5E7EB")
+        draw_text(draw, ((x1 + x2) // 2, (y1 + y2) // 2 + 10), clean_draw_text(value), get_font(value_size), fill="#FFFFFF", max_width=x2 - x1 - 36)
+
+    top_row = [
+        ((80, 255, 430, 405), "بطل الفترة", f"{champion}\n{totals.get(champion, 0)} نقطة", "#F59E0B66"),
+        ((525, 255, 875, 405), "أكثر اللاعبين صعودا", _period_biggest_rise_text(start_day, end_day), "#10B98166"),
+        ((970, 255, 1320, 405), "أكثر اللاعبين تراجعا", _period_biggest_drop_text(start_day, end_day), "#EF444466"),
+    ]
+    second_row = [
+        ((80, 450, 565, 600), "أعلى نقاط يومية في الفترة", _period_best_day_text(start_day, end_day), "#06B6D466"),
+        ((615, 450, 1320, 600), "أكثر من فاز بأسطورة اليوم", f"{_period_most_legend_name(start_day, end_day)}\n{_period_most_legend_count(start_day, end_day)} مرات", "#A855F766"),
+    ]
+    for box, title, value, accent in top_row + second_row:
+        info_card(box, title, value, accent, 31)
+
+    draw_text(draw, (700, 655), "أفضل 5 في الفترة", get_font(36), fill="#FDE68A")
+    y = 705
+    row_colors = ["#F59E0B", "#7C3AED", "#06B6D4", "#F59E0B", "#2563EB"]
+    for i, (name, pts) in enumerate(totals.most_common(5), start=1):
+        accent = row_colors[(i - 1) % len(row_colors)]
+        rounded_rect(draw, (165, y, 1235, y + 56), radius=18, fill="#0B1020", outline=accent, width=2)
+        draw_text(draw, (1110, y + 28), f"{i}. {name}", get_font(31), fill="#FFFFFF", max_width=540)
+        draw_text(draw, (280, y + 28), f"{pts} نقطة", get_font(31), fill="#FDE68A")
+        y += 68
+
+    info_card((80, 1060, 670, 1130), "أفضل كابتن", f"{best_cap[0]}\n{best_cap[1]} نقطة", "#F59E0B66", 29)
+    info_card((730, 1060, 1320, 1130), "أفضل حارس", f"{best_keeper[0]}\n{best_keeper[1]} نقطة", "#10B98166", 29)
+
     path = os.path.join(GENERATED_DIR, f"period_report_{start_day}_{end_day}.png")
     img.save(path, quality=95)
     return path
-
 
 async def period_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nums = get_numbers(update.message.text)
@@ -7761,7 +7807,7 @@ def _multi_days_ar_date_label(raw):
         return ""
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
     if not m:
-        return f"— {raw} —"
+        return f"( {raw} )"
     d, mo, y = map(int, m.groups())
     ar_days = {
         0: "الاثنين",
@@ -7774,128 +7820,153 @@ def _multi_days_ar_date_label(raw):
     }
     try:
         dt = datetime(y, mo, d)
-        return f"— {ar_days.get(dt.weekday(), '')} {d:02d}/{mo:02d} —"
+        return f"( {ar_days.get(dt.weekday(), '')} {d:02d}/{mo:02d} )"
     except Exception:
-        return f"— {d:02d}/{mo:02d} —"
+        return f"( {d:02d}/{mo:02d} )"
 
-
-def create_multi_days_matches_image(schedule_blocks, style=4):
+def create_multi_days_matches_image(schedule_blocks, style=4, max_blocks=6, wide_mode=False):
     ensure_generated_dir()
 
-    # تصميم عربي خاص بأمر /مباريات_الأيام فقط، وليس مباريات اليوم.
-    width = 1800
-    blocks = list(schedule_blocks or [])[:6]
+    blocks = list(schedule_blocks or [])[:max_blocks]
     if not blocks:
         raise ValueError("لا توجد مباريات")
 
-    cols = 2 if len(blocks) > 1 else 1
-    margin_x = 85 if cols == 2 else 210
-    gap_x = 45
-    card_w = (width - 2*margin_x - (cols-1)*gap_x) // cols
-    start_y = 325
-    gap_y = 34
+    if wide_mode:
+        width = 2100
+        cols = 2 if len(blocks) > 1 else 1
+        margin_x = 90 if cols == 2 else 260
+        gap_x = 54
+        start_y = 330
+        gap_y = 38
+        min_height = 1320
+        max_height = 3000
+        title_size = 82
+        sub_size = 44
+        date_size = 34
+        row_font = 27
+        row_h = 62
+        card_pad = 22
+        max_matches_per_day = 6
+    else:
+        width = 1800
+        cols = 2 if len(blocks) > 1 else 1
+        margin_x = 85 if cols == 2 else 210
+        gap_x = 45
+        start_y = 325
+        gap_y = 34
+        min_height = 1180
+        max_height = 2300
+        title_size = 76
+        sub_size = 42
+        date_size = 30
+        row_font = 25
+        row_h = 58
+        card_pad = 18
+        max_matches_per_day = 6
 
-    # ارتفاع كل كرت حسب عدد المباريات داخله حتى ما يطلع مربع كبير وفاضي.
+    card_w = (width - 2 * margin_x - (cols - 1) * gap_x) // cols
+
     card_heights = []
     for _date_txt, matches in blocks:
-        n = max(1, min(len(matches or []), 6))
-        ch = 96 + n * 68 + max(0, n-1) * 8 + 28
-        card_heights.append(max(265, min(610, ch)))
+        n = max(1, min(len(matches or []), max_matches_per_day))
+        ch = 100 + n * row_h + max(0, n - 1) * 8 + 34
+        card_heights.append(max(270, min(690 if wide_mode else 610, ch)))
 
-    row_heights = []
     rows_count = (len(blocks) + cols - 1) // cols
+    row_heights = []
     for r in range(rows_count):
-        row_cards = card_heights[r*cols:(r+1)*cols]
-        row_heights.append(max(row_cards) if row_cards else 265)
+        row_cards = card_heights[r * cols:(r + 1) * cols]
+        row_heights.append(max(row_cards) if row_cards else 270)
 
-    height = int(start_y + sum(row_heights) + gap_y * max(0, rows_count-1) + 130)
-    height = max(1180, min(2300, height))
+    height = int(start_y + sum(row_heights) + gap_y * max(0, rows_count - 1) + 140)
+    height = max(min_height, min(max_height, height))
 
     img, draw = _games_day_background(width, height)
-
-    # تغميق بسيط للقراءة
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay)
-    rounded_rect(od, (48, 48, width-48, height-48), radius=42, fill="#03112A55", outline="#FFFFFF22", width=2)
+    rounded_rect(od, (48, 48, width - 48, height - 48), radius=42, fill="#03112A55", outline="#FFFFFF22", width=2)
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(img)
 
-    draw_text(draw, (width//2, 95), "مباريات الأيام", get_font(76), fill="#FFFFFF", max_width=width-160)
-    draw_text(draw, (width//2, 178), "جدول مباريات عدة أيام", get_font(42), fill="#FBBF24", max_width=850)
-    draw.line((width//2-430, 235, width//2+430, 235), fill="#FFFFFF45", width=2)
+    draw_text(draw, (width // 2, 95), "مباريات الأيام", get_font(title_size), fill="#FFFFFF", max_width=width - 160)
+    draw_text(draw, (width // 2, 178), "جدول مباريات عدة أيام", get_font(sub_size), fill="#FBBF24", max_width=900)
+    draw.line((width // 2 - 430, 235, width // 2 + 430, 235), fill="#FFFFFF45", width=2)
 
+    x_positions = [margin_x] if cols == 1 else [width - margin_x - card_w, margin_x]
     y_cursor = start_y
     for idx, (date_txt, matches) in enumerate(blocks):
         c = idx % cols
         r = idx // cols
         if c == 0 and idx != 0:
-            y_cursor += row_heights[r-1] + gap_y
+            y_cursor += row_heights[r - 1] + gap_y
 
-        x = margin_x + c*(card_w + gap_x)
+        x = x_positions[c]
         y = y_cursor
         card_h = row_heights[r]
 
-        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=30, fill="#0638A5E8", outline="#14B8F5", width=3)
-        rounded_rect(draw, (x+18, y+18, x+card_w-18, y+80), radius=18, fill="#FBBF24", outline="#00000055", width=1)
-        draw_text(draw, (x+card_w//2, y+49), _multi_days_ar_date_label(date_txt), get_font(30), fill="#061633", max_width=card_w-44)
+        rounded_rect(draw, (x, y, x + card_w, y + card_h), radius=30, fill="#0638A5E8", outline="#14B8F5", width=3)
+        rounded_rect(draw, (x + card_pad, y + 18, x + card_w - card_pad, y + 80), radius=18, fill="#FBBF24", outline="#00000055", width=1)
+        draw_text(draw, (x + card_w // 2, y + 49), _multi_days_ar_date_label(date_txt), get_font(date_size), fill="#061633", max_width=card_w - 44)
 
         yy = y + 102
-        match_list = list(matches or [])[:6]
-        row_h = 68
-        row_gap = 8
+        match_list = list(matches or [])[:max_matches_per_day]
+        if not match_list:
+            rounded_rect(draw, (x + 28, yy, x + card_w - 28, yy + row_h), radius=14, fill="#0A1638E8", outline="#FFFFFF22", width=1)
+            draw_text(draw, (x + card_w // 2, yy + row_h // 2), "لا توجد مباريات", get_font(row_font), fill="#FFFFFF")
+        else:
+            for team1, team2, t in match_list:
+                rounded_rect(draw, (x + 28, yy, x + card_w - 28, yy + row_h), radius=14, fill="#0A1638E8", outline="#FFFFFF22", width=1)
+                tx = x + card_w // 2
+                tbox_w = 118 if wide_mode else 108
+                rounded_rect(draw, (tx - tbox_w // 2, yy + 10, tx + tbox_w // 2, yy + row_h - 10), radius=12, fill="#081123", outline="#FBBF24", width=2)
+                draw_text(draw, (tx, yy + row_h // 2), _display_time_ar(t), get_font(23 if wide_mode else 21), fill="#FBBF24")
 
-        for midx, (a, b, t) in enumerate(match_list, start=1):
-            rounded_rect(draw, (x+20, yy, x+card_w-20, yy+row_h), radius=16, fill="#061633B8", outline="#FFFFFF28", width=1)
-            cy = yy + row_h // 2
+                left_flag = flag_of(team1)
+                right_flag = flag_of(team2)
+                flag_boost = 1.12 if wide_mode else 1.08
+                flw = int((28 if wide_mode else 24) * flag_boost)
+                flh = int((18 if wide_mode else 16) * flag_boost)
+                if left_flag:
+                    try:
+                        fi = Image.open(left_flag).convert("RGBA").resize((flw, flh), Image.LANCZOS)
+                        img.paste(fi, (x + card_w - 82, yy + (row_h - flh)//2), fi)
+                    except Exception:
+                        pass
+                if right_flag:
+                    try:
+                        fi = Image.open(right_flag).convert("RGBA").resize((flw, flh), Image.LANCZOS)
+                        img.paste(fi, (x + 56, yy + (row_h - flh)//2), fi)
+                    except Exception:
+                        pass
+                draw_text(draw, (x + card_w - 145, yy + row_h // 2), normalize_name(team1), get_font(row_font), fill="#FFFFFF", max_width=185)
+                draw_text(draw, (x + 145, yy + row_h // 2), normalize_name(team2), get_font(row_font), fill="#FFFFFF", max_width=185)
+                yy += row_h + 8
 
-            flag_h = 46
-            flag_w = int(flag_h * 1.55)
-            paste_flag(img, a, (x+card_w-92-flag_w, cy-flag_h//2, x+card_w-92, cy+flag_h//2))
-            paste_flag(img, b, (x+92, cy-flag_h//2, x+92+flag_w, cy+flag_h//2))
-
-            name_font = get_font(23 if len(match_list) <= 4 else 21)
-            draw_text(draw, (x+card_w-210, cy), _clean_display_name(a), name_font, fill="#FFFFFF", max_width=160)
-            draw_text(draw, (x+210, cy), _clean_display_name(b), name_font, fill="#FFFFFF", max_width=160)
-
-            if t:
-                tm, period = _ampm_from_time(t)
-                mid = tm if not period else f"{tm} {period}"
-            else:
-                mid = "VS"
-            rounded_rect(draw, (x+card_w//2-80, cy-23, x+card_w//2+80, cy+23), radius=14, fill="#020A1B", outline="#FBBF24", width=2)
-            draw_text(draw, (x+card_w//2, cy), mid, _v31_latin_font(21) if "_v31_latin_font" in globals() else get_font(21), fill="#FBBF24", max_width=145)
-
-            yy += row_h + row_gap
-
-    draw_text(draw, (width//2, height-68), "المصيف ينقل لكم الحدث", get_font(38), fill="#FBBF24", max_width=700)
-    path = os.path.join(GENERATED_DIR, f"multi_days_schedule_ar_style{style}.png")
-    img.save(path, quality=95)
-    return path
-
+    draw_text(draw, (width // 2, height - 54), "المصيف ينقل لكم الحدث", get_font(32 if wide_mode else 30), fill="#FBBF24")
+    suffix = "_10" if wide_mode else ""
+    out = os.path.join(GENERATED_DIR, f"multi_days_schedule_ar{suffix}.png")
+    img.save(out, quality=95)
+    return out
 
 async def multi_days_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         style = command_style(update.message.text, 4)
         blocks = parse_multi_days_matches_text(update.message.text)
         if not blocks:
-            await update.message.reply_text("اكتبها كذا:\n/مباريات_الأيام 4\n24/06/2026\nالهلال * النصر * 8:00 م\nالهلال * الشباب * 10:00 م\n\n25/06/2026\nالأهلي * الاتحاد * 9:00 م")
+            await update.message.reply_text(
+                "اكتبها كذا:\n"
+                "/مباريات_الأيام 4\n"
+                "24/06/2026\n"
+                "الهلال * النصر * 8:00 م\n"
+                "الهلال * الشباب * 10:00 م\n\n"
+                "25/06/2026\n"
+                "الأهلي * الاتحاد * 9:00 م"
+            )
             return
-        path = create_multi_days_matches_image(blocks, style)
+        path = create_multi_days_matches_image(blocks, style, max_blocks=6, wide_mode=False)
         await send_photo_path(update, path, "✅ جدول مباريات عدة أيام")
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم مباريات الأيام ❌\n{e}")
-
-
-
-# ============================================================
-# V31 — Statue of Liberty Matches Today designs
-# الأوامر:
-# /مباريات_اليوم  : الخلفية الكاملة GAMES OF THE DAY + كروت المباريات
-# /مباريات_اليوم2 : خلفية التمثال النظيفة + عنوان/تاريخ/كروت ديناميكية
-# ============================================================
-
-V31_FULL_BG = "games_v31_full_bg.png"
-V31_CLEAN_BG = "games_v31_clean_bg.png"
 
 def _v31_latin_font(size):
     # خط إنجليزي احتياطي للعناوين والتاريخ حتى ما تطلع مربعات لو خط العربي ما يدعم Latin.
@@ -8434,9 +8505,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-# ============================================================
-# AGREED FINAL PATCH — صور الإحصائيات كاملة + PDF فخم
-# ============================================================
+
+
+async def multi_days_matches10_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        style = command_style(update.message.text, 4)
+        blocks = parse_multi_days_matches_text(update.message.text)
+        if not blocks:
+            await update.message.reply_text(
+                "اكتبها كذا:\n"
+                "/مباريات_الأيام10 4\n"
+                "24/06/2026\n"
+                "الهلال * النصر * 8:00 م\n"
+                "الهلال * الشباب * 10:00 م\n\n"
+                "25/06/2026\n"
+                "الأهلي * الاتحاد * 9:00 م"
+            )
+            return
+        path = create_multi_days_matches_image(blocks, style, max_blocks=10, wide_mode=True)
+        await send_photo_path(update, path, "✅ جدول مباريات عدة أيام — نسخة 10 أيام")
+    except Exception as e:
+        await update.message.reply_text(f"تعذر تصميم مباريات الأيام 10 ❌\n{e}")
 
 def _parse_range_from_text(text):
     nums = get_numbers(text or "")
@@ -8510,13 +8599,13 @@ def create_day_choices_image(day):
     rows = sorted(rows, key=lambda r: (-int(r.get("total", 0)), _clean_display_name(r.get("participant"))))
 
     width = 1600
-    row_h = 82
-    top = 330
-    bottom = 95
-    height = max(1320, top + len(rows) * (row_h + 10) + bottom)
+    row_h = 84
+    top = 345
+    bottom = 96
+    height = max(1360, top + len(rows) * (row_h + 10) + bottom)
     img, draw = design_canvas(None, width, height, "purple")
-    draw_design_header(draw, width, f"تفاصيل اختيارات اللاعبين اليوم {ordinal_day(day)}", "فانتزي المصيف 2026", img)
-    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=245, bottom_pad=95, accent="#06B6D4")
+    draw_design_header(draw, width, "تفاصيل اختيارات اللاعبين", f"فانتزي المصيف 2026 - اليوم {ordinal_day(day)}", img)
+    fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=255, bottom_pad=96, accent="#06B6D4")
 
     cols = [
         (1450, "المشارك", 240),
@@ -8527,16 +8616,16 @@ def create_day_choices_image(day):
         (390, "الكابتن", 145),
         (155, "المجموع", 95),
     ]
-    y = fy1 + 24
-    rounded_rect(draw, (65, y, width-65, y+58), radius=18, fill="#05070D", outline="#FFFFFF55", width=1)
+    y = fy1 + 26
+    rounded_rect(draw, (65, y, width - 65, y + 60), radius=18, fill="#05070D", outline="#FFFFFF55", width=1)
     for x, title, _mw in cols:
-        draw_text(draw, (x, y+29), title, get_font(22), fill="#FDE68A")
-    y += 74
+        draw_text(draw, (x, y + 30), title, get_font(22), fill="#FDE68A")
+    y += 76
 
     for idx, r in enumerate(rows, start=1):
         accent = "#F59E0B" if idx == 1 else ("#FFFFFF22" if idx % 2 else "#FFFFFF15")
         fill = "#1A1407" if idx == 1 else ("#0B1020" if idx % 2 else "#10172A")
-        rounded_rect(draw, (65, y, width-65, y+row_h), radius=18, fill=fill, outline=accent, width=2 if idx == 1 else 1)
+        rounded_rect(draw, (65, y, width - 65, y + row_h), radius=18, fill=fill, outline=accent, width=2 if idx == 1 else 1)
         cy = y + row_h // 2
         items = [
             (1450, _clean_display_name(r.get("participant")), 240, "#FFFFFF"),
@@ -8548,14 +8637,13 @@ def create_day_choices_image(day):
             (155, str(int(r.get("total", 0))), 95, "#FDE68A"),
         ]
         for x, txt, mw, color in items:
-            draw_text(draw, (x, cy), txt or "-", get_font(24 if x != 155 else 27), fill=color, max_width=mw)
+            draw_text(draw, (x, cy), txt or "-", get_font(23 if x != 155 else 26), fill=color, max_width=mw)
         y += row_h + 10
 
-    draw_text(draw, (width//2, height-44), "المصيف ينقل لكم الحدث", get_font(24), fill="#FFFFFF")
+    draw_text(draw, (width // 2, height - 44), "المصيف ينقل لكم الحدث", get_font(24), fill="#FFFFFF")
     path = os.path.join(GENERATED_DIR, f"day_choices_{day}.png")
     img.save(path, quality=95)
     return path
-
 
 def build_statistics_image_paths(start_day, end_day, include_cover=False):
     days = get_existing_days(start_day, end_day)
@@ -8759,6 +8847,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/هدافين_تلقائي(?:\s|$)"), admin_only(short_scorers_auto_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/كل_المجموعات_تلقائي(?:\s|$)"), admin_only(short_all_groups_auto_command)))
 
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الأيام10(?:\s|$)"), admin_only(multi_days_matches10_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الايام10(?:\s|$)"), admin_only(multi_days_matches10_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الأيام(?:\s|$)"), admin_only(multi_days_matches_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الايام(?:\s|$)"), admin_only(multi_days_matches_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات(?:\s|$)"), admin_only(short_matches_command)))
