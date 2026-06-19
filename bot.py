@@ -13605,6 +13605,769 @@ async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 # ==================== END V8 FINAL PATCH ====================
 
+
+# ==================== V10 FINAL PATCH: Google standings + live clean image/caption ====================
+# اعتماد V10:
+# - ترتيب المجموعات يبدأ باستعلام "ترتيبات كأس العالم" من Google Sports/SerpApi.
+# - المصدر لا يظهر داخل صورة /مباشر، ويظهر فقط بالكابشن.
+# - محاولة استخراج الهدافين ورابط الملخص من كرت قوقل، ثم 365/كورة كاحتياط.
+# - أسفل تصاميم المجموعات: المصيف يضعكم بالحدث.
+
+V10_GOOGLE_STANDINGS_QUERIES = [
+    "ترتيبات كأس العالم",
+    "ترتيب مجموعات كأس العالم 2026",
+    "FIFA World Cup 2026 standings",
+    "World Cup 2026 group standings",
+]
+
+
+def _v10_int_any(v, default=0):
+    try:
+        if isinstance(v, bool):
+            return default
+        if isinstance(v, (int, float)):
+            return int(v)
+        s = normalize_name(str(v or ""))
+        s = s.replace("+", "")
+        m = re.search(r"-?\d+", s)
+        return int(m.group(0)) if m else default
+    except Exception:
+        return default
+
+
+def _v10_group_letter(title):
+    t = normalize_name(title or "")
+    ar_map = {"أ":"A", "ا":"A", "ب":"B", "ج":"C", "د":"D", "هـ":"E", "ه":"E", "و":"F", "ز":"G", "ح":"H", "ط":"I", "ي":"J", "ك":"K", "ل":"L"}
+    m = re.search(r"(?:Group|المجموعة|مجموعة)\s*([A-Lأابجدهـوزحطيكل])", t, re.I)
+    if m:
+        ch = m.group(1).upper()
+        return ar_map.get(ch, ch)
+    # أحيانًا يكون العنوان فقط: المجموعة أ أو Group A داخل حقل name/title
+    for ar, en in ar_map.items():
+        if re.search(rf"(?:المجموعة|مجموعة)\s*{re.escape(ar)}\b", t):
+            return en
+    return ""
+
+
+def _v10_group_title(title, fallback=""):
+    letter = _v10_group_letter(title) or _v10_group_letter(fallback)
+    if letter:
+        # نخلي الحروف العربية في التصميم حسب الموجود في بقية البوت
+        arabic = {"A":"أ", "B":"ب", "C":"ج", "D":"د", "E":"هـ", "F":"و", "G":"ز", "H":"ح", "I":"ط", "J":"ي", "K":"ك", "L":"ل"}.get(letter, letter)
+        return f"المجموعة {arabic}"
+    return normalize_name(title or fallback or "المجموعة")
+
+
+def _v10_get_nested_team_name(node):
+    if not isinstance(node, dict):
+        return ""
+    direct_keys = ["name", "team", "title", "team_name", "participant", "competitor", "displayName", "shortName"]
+    for k in direct_keys:
+        v = node.get(k)
+        if isinstance(v, str) and normalize_name(v):
+            return normalize_name(v)
+        if isinstance(v, dict):
+            for kk in ["name", "displayName", "shortName", "title"]:
+                if isinstance(v.get(kk), str) and normalize_name(v.get(kk)):
+                    return normalize_name(v.get(kk))
+    for k in ["team", "competitor", "participant", "club", "country"]:
+        v = node.get(k)
+        if isinstance(v, dict):
+            nm = _v10_get_nested_team_name(v)
+            if nm:
+                return nm
+    return ""
+
+
+def _v10_stats_map_from_any(node):
+    """يحاول تحويل أي stats/list/labels من SerpApi/Google إلى قاموس بسيط."""
+    stats = {}
+    if not isinstance(node, dict):
+        return stats
+    # القيم المباشرة
+    for k, v in node.items():
+        lk = normalize_name(str(k)).lower()
+        if isinstance(v, (str, int, float)):
+            stats[lk] = v
+    # قوائم stats الشائعة
+    for key in ["stats", "statistics", "columns", "values", "details"]:
+        val = node.get(key)
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
+                    label = normalize_name(item.get("name") or item.get("label") or item.get("title") or item.get("displayName") or item.get("type") or "").lower()
+                    value = item.get("value") if "value" in item else item.get("displayValue") if "displayValue" in item else item.get("rank")
+                    if label:
+                        stats[label] = value
+                elif isinstance(item, str):
+                    pass
+        elif isinstance(val, dict):
+            for kk, vv in val.items():
+                stats[normalize_name(str(kk)).lower()] = vv
+    return stats
+
+
+def _v10_pick_stat(stats, keys, default=0):
+    # exact then fuzzy Arabic/English
+    for k in keys:
+        if k in stats:
+            return _v10_int_any(stats.get(k), default)
+    for sk, sv in stats.items():
+        for k in keys:
+            if k and (k in sk or sk in k):
+                return _v10_int_any(sv, default)
+    return default
+
+
+def _v10_parse_standing_row(node):
+    if not isinstance(node, dict):
+        return None
+    team_raw = _v10_get_nested_team_name(node)
+    team = canonical_team_name(team_raw) or normalize_name(team_raw)
+    if not team or team not in set(WORLD_CUP_TEAMS):
+        return None
+    stats = _v10_stats_map_from_any(node)
+    played = _v10_pick_stat(stats, [
+        "played", "matches played", "mp", "p", "games played", "لعب", "ل", "لعبت"
+    ], 0)
+    pts = _v10_pick_stat(stats, [
+        "points", "pts", "pt", "pnts", "نقاط", "النقاط", "نقطة"
+    ], 0)
+    gd = _v10_pick_stat(stats, [
+        "goal difference", "goal_difference", "gd", "+/-", "difference", "diff", "فارق", "فرق", "فارق الاهداف", "فارق الأهداف"
+    ], 0)
+    gf = _v10_pick_stat(stats, ["goals for", "gf", "له", "له اهداف", "أهداف له"], None)
+    ga = _v10_pick_stat(stats, ["goals against", "ga", "عليه", "أهداف عليه"], None)
+    try:
+        if (gd == 0 or gd is None) and gf is not None and ga is not None:
+            gd = int(gf) - int(ga)
+    except Exception:
+        pass
+    # بعض بنى Google تعطي القيم تحت مفاتيح قصيرة جدًا بالعربي، نحاول التقاطها من display text
+    if pts == 0:
+        blob = json.dumps(node, ensure_ascii=False)
+        m = re.search(r"(?:نقاط|points|pts)\D{0,12}(\d{1,2})", blob, re.I)
+        if m:
+            pts = _v10_int_any(m.group(1), 0)
+    return (team, int(played or 0), int(gd or 0), int(pts or 0))
+
+
+def _v10_rows_from_container(container):
+    rows = []
+    if isinstance(container, list):
+        iterable = container
+    elif isinstance(container, dict):
+        iterable = None
+        for key in ["teams", "rows", "entries", "standings", "table", "rankings", "ranking", "competitors", "items"]:
+            val = container.get(key)
+            if isinstance(val, list) and val:
+                # خذ أول قائمة تبدو كصفوف فرق
+                if any(_v10_parse_standing_row(x) for x in val if isinstance(x, dict)):
+                    iterable = val
+                    break
+        if iterable is None:
+            iterable = []
+    else:
+        iterable = []
+    for item in iterable:
+        row = _v10_parse_standing_row(item)
+        if row and row[0] not in [r[0] for r in rows]:
+            rows.append(row)
+    # ترتيب قوقل غالبًا موجود جاهز؛ إذا لا يوجد ترتيب واضح نرتب بالنقاط والفارق
+    if rows:
+        rows = sorted(rows, key=lambda r: (r[3], r[2], r[1]), reverse=True)
+    return rows
+
+
+def _v10_extract_groups_from_google_json(data):
+    allowed = set(WORLD_CUP_TEAMS)
+    found = []
+    seen_titles = set()
+
+    def add_group(title, rows):
+        rows = [r for r in rows or [] if r and r[0] in allowed]
+        if len(rows) < 2:
+            return
+        title = _v10_group_title(title)
+        # منع تكرار نفس المجموعة إذا رجعت من أكثر من مكان
+        key = title + "|" + ",".join([r[0] for r in rows[:4]])
+        if key in seen_titles:
+            return
+        seen_titles.add(key)
+        found.append((title, rows[:4]))
+
+    roots = []
+    if isinstance(data, dict):
+        sr = data.get("sports_results")
+        if isinstance(sr, dict):
+            roots.append(sr)
+            for k in ["standings", "tables", "table", "groups", "rankings", "ranking", "league", "tournament"]:
+                if isinstance(sr.get(k), (dict, list)):
+                    roots.append(sr.get(k))
+        roots.append(data)
+    else:
+        roots.append(data)
+
+    # 1) حاويات واضحة لمجموعة كاملة
+    for root in roots:
+        for node in _walk_json(root):
+            if not isinstance(node, dict):
+                continue
+            title = node.get("title") or node.get("name") or node.get("group") or node.get("label") or node.get("stage") or ""
+            if _v10_group_letter(title) or any(k in node for k in ["teams", "rows", "entries", "standings", "table", "rankings"]):
+                rows = _v10_rows_from_container(node)
+                if rows:
+                    add_group(title or node.get("group") or "المجموعة", rows)
+            # 2) مفاتيح groups/tables فيها قائمة مجموعات
+            for key in ["groups", "tables", "standings", "rankings", "table"]:
+                val = node.get(key)
+                if isinstance(val, list):
+                    for sub in val:
+                        if isinstance(sub, dict):
+                            title2 = sub.get("title") or sub.get("name") or sub.get("group") or title
+                            rows2 = _v10_rows_from_container(sub)
+                            if rows2:
+                                add_group(title2, rows2)
+
+    # 3) صفوف مسطحة فيها حقل group
+    flat = {}
+    for root in roots:
+        for node in _walk_json(root):
+            if not isinstance(node, dict):
+                continue
+            row = _v10_parse_standing_row(node)
+            if not row:
+                continue
+            g = node.get("group") or node.get("pool") or node.get("stage") or node.get("division") or ""
+            gtitle = _v10_group_title(g)
+            if gtitle:
+                flat.setdefault(gtitle, [])
+                if row[0] not in [r[0] for r in flat[gtitle]]:
+                    flat[gtitle].append(row)
+    for title, rows in flat.items():
+        if len(rows) >= 2:
+            add_group(title, rows)
+
+    # ترتيب المجموعات من أ إلى ل
+    order = {"أ":0,"ب":1,"ج":2,"د":3,"هـ":4,"ه":4,"و":5,"ز":6,"ح":7,"ط":8,"ي":9,"ك":10,"ل":11,
+             "A":0,"B":1,"C":2,"D":3,"E":4,"F":5,"G":6,"H":7,"I":8,"J":9,"K":10,"L":11}
+    def gkey(gr):
+        title = gr[0]
+        m = re.search(r"المجموعة\s*([أابجدهـوزحطيكلA-L])", title, re.I)
+        return order.get(m.group(1).upper() if m else "", 99)
+    found.sort(key=gkey)
+    return found
+
+
+def _v10_validate_google_groups(groups, allow_partial=True):
+    clean = []
+    seen_teams = set()
+    for title, rows in groups or []:
+        out_rows = []
+        for row in rows or []:
+            if not row or len(row) < 4:
+                continue
+            team = canonical_team_name(row[0]) or normalize_name(row[0])
+            if team not in set(WORLD_CUP_TEAMS):
+                continue
+            played, gd, pts = _v10_int_any(row[1]), _v10_int_any(row[2]), _v10_int_any(row[3])
+            out_rows.append((team, played, gd, pts))
+            seen_teams.add(team)
+        if len(out_rows) >= 2:
+            clean.append((_v10_group_title(title), out_rows[:4]))
+    if not clean:
+        return []
+    if allow_partial:
+        # إذا قوقل رجع مجموعتين أو 8 فرق على الأقل نعرضها كجزئي بدل الرفض.
+        if len(clean) >= 2 or len(seen_teams) >= 8:
+            return clean[:12]
+        return []
+    if len(clean) >= 8 and len(seen_teams) >= 24:
+        return clean[:12]
+    return []
+
+
+def fetch_standings_from_serpapi():
+    if not _serpapi_key():
+        return []
+    errors = []
+    for q in V10_GOOGLE_STANDINGS_QUERIES:
+        for hl, gl in [("ar", "sa"), ("en", "us")]:
+            try:
+                data = serpapi_search_json(q, hl=hl, gl=gl, timeout=9)
+                groups = _v10_extract_groups_from_google_json(data)
+                groups = _v10_validate_google_groups(groups, allow_partial=True)
+                if groups:
+                    return groups
+            except Exception as e:
+                errors.append(str(e)[:80])
+                continue
+    return []
+
+
+def fetch_current_groups(mode="latest"):
+    norm = _norm_source_mode(mode)
+    # بعد اعتماد الرابط: قوقل هو المصدر الأساسي للترتيب في كل الأوضاع، الرسمي/API احتياط فقط.
+    if norm in ["official", "api"]:
+        order = [(fetch_standings_from_serpapi, "Google Sports"), (fetch_standings_from_api_football, "API-Football")]
+    else:
+        order = [(fetch_standings_from_serpapi, "Google Sports"), (fetch_standings_from_api_football, "API-Football")]
+    for fn, label in order:
+        try:
+            groups = fn()
+            if label == "Google Sports":
+                groups = _v10_validate_google_groups(groups, allow_partial=True)
+            else:
+                groups = _validate_worldcup_groups(groups)
+            if groups:
+                return groups, label
+        except Exception:
+            continue
+    return [], ""
+
+
+def _v10_extract_highlight_link(root):
+    best = ""
+    best_score = -1
+    try:
+        for node in _walk_json(root):
+            if not isinstance(node, dict):
+                continue
+            blob = json.dumps(node, ensure_ascii=False).lower()
+            score = 0
+            if any(w in blob for w in ["highlight", "highlights", "ملخص", "فيديو", "video"]):
+                score += 5
+            if any(w in blob for w in ["youtube", "youtu.be", "fifa.com", "google"]):
+                score += 2
+            for k in ["link", "url", "source", "watch_link", "video_link", "href"]:
+                v = node.get(k)
+                if isinstance(v, str) and v.startswith("http"):
+                    if score > best_score:
+                        best, best_score = v, score
+            # أحيانًا الرابط داخل nested dict
+            for k in ["video", "highlight", "thumbnail", "content"]:
+                v = node.get(k)
+                if isinstance(v, dict):
+                    for kk in ["link", "url", "href"]:
+                        vv = v.get(kk)
+                        if isinstance(vv, str) and vv.startswith("http") and score >= best_score:
+                            best, best_score = vv, score
+    except Exception:
+        pass
+    return best if best_score >= 3 else ""
+
+
+def _v10_goal_candidate_strings(root):
+    vals = []
+    try:
+        for node in _walk_json(root):
+            if isinstance(node, dict):
+                # كائن هدف واضح
+                name = node.get("player") or node.get("scorer") or node.get("athlete") or node.get("name") or node.get("title")
+                minute = node.get("minute") or node.get("time") or node.get("elapsed") or node.get("displayTime")
+                detail = node.get("detail") or node.get("description") or node.get("type") or node.get("event") or ""
+                if name and minute:
+                    vals.append(f"{name} {minute} {detail}")
+                for k in ["text", "summary", "subtitle", "description", "detail", "title", "name"]:
+                    v = node.get(k)
+                    if isinstance(v, str):
+                        vals.append(v)
+            elif isinstance(node, str):
+                vals.append(node)
+    except Exception:
+        pass
+    return vals
+
+
+def _v10_extract_goal_lines_from_text(s):
+    s = normalize_name(s or "")
+    if not s:
+        return []
+    s = s.replace("’", "'").replace("′", "'")
+    out = []
+    # شكل: كاميرون بورغس 11' (هدف في مرماه)
+    for m in re.finditer(r"([A-Za-zÀ-ÿء-ي][A-Za-zÀ-ÿء-ي\s\-'.]{2,42}?)\s+(\d{1,3})\s*['’′](?:\s*\(([^)]{1,28})\))?", s):
+        name = normalize_name(m.group(1)).strip(" -—•،,.")
+        minute = m.group(2)
+        extra = normalize_name(m.group(3) or "")
+        if len(name.split()) > 5:
+            continue
+        line = f"{name} {minute}'" + (f" {extra}" if extra else "")
+        out.append(line)
+    # شكل: 11' كاميرون بورغس
+    for m in re.finditer(r"(\d{1,3})\s*['’′]\s+([A-Za-zÀ-ÿء-ي][A-Za-zÀ-ÿء-ي\s\-'.]{2,42})", s):
+        minute = m.group(1)
+        name = normalize_name(m.group(2)).strip(" -—•،,.")
+        if len(name.split()) <= 5:
+            out.append(f"{name} {minute}'")
+    return out
+
+
+def _v10_collect_goal_details_from_google_card(root):
+    collected = []
+    for s in _v10_goal_candidate_strings(root):
+        collected.extend(_v10_extract_goal_lines_from_text(s))
+    clean = _v9_sanitize_scorers(collected)
+    # تنقية أخيرة من السطور العامة
+    bad = ["نهاية", "المباراة", "ترتيب", "المجموعة", "كأس", "fifa", "world cup", "ملخص", "video"]
+    out = []
+    for line in clean:
+        low = line.lower()
+        if any(b in low for b in bad):
+            continue
+        if line not in out:
+            out.append(line)
+    return out[:8]
+
+
+def _v10_fetch_match_from_serp_source(team1, team2, date_hint=None, source="google"):
+    if not _serpapi_key():
+        return None
+    req1 = canonical_team_name(team1) or normalize_name(team1)
+    req2 = canonical_team_name(team2) or normalize_name(team2)
+    source_name = {"google": "Google Sports", "365": "365Scores عبر Google", "kooora": "Kooora عبر Google"}.get(source, "Google")
+    attempts = []
+    for q in _serpapi_query_candidates(req1, req2, date_hint, source=source):
+        if source == "google":
+            attempts.append((q, "ar", "sa"))
+            attempts.append((q, "en", "us"))
+        else:
+            attempts.append((q, "ar", "sa"))
+    seen_q = set()
+    final_attempts = []
+    for item in attempts:
+        key = item[0] + "|" + item[1] + "|" + item[2]
+        if key not in seen_q:
+            seen_q.add(key)
+            final_attempts.append(item)
+    for q, hl, gl in final_attempts[:5]:
+        try:
+            data = serpapi_search_json(q, hl=hl, gl=gl, timeout=8)
+        except Exception:
+            continue
+        roots = []
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        if isinstance(sr, dict):
+            roots.append(sr)
+            for k in ["game_spotlight", "games", "matches", "scoreboard", "players", "teams", "events", "timeline"]:
+                if isinstance(sr.get(k), (dict, list)):
+                    roots.append(sr.get(k))
+        roots.append(data)
+        for root in roots:
+            obj = None
+            try:
+                obj = _parse_serp_sports_node_v6(root, req1, req2, source_name=source_name)
+            except Exception:
+                obj = None
+            if obj and _v9_valid_score_obj(obj):
+                scorers = _v10_collect_goal_details_from_google_card(data)
+                if scorers:
+                    obj["scorers"] = scorers
+                    obj["goals_source"] = "Google Sports" if source == "google" else mode_label_ar(source)
+                else:
+                    obj["scorers"] = _v9_sanitize_scorers(obj.get("scorers") or [])
+                link = _v10_extract_highlight_link(data)
+                if link:
+                    obj["highlight_url"] = link
+                obj["source"] = source_name
+                return obj
+        blob = json.dumps(data, ensure_ascii=False)
+        if _blob_has_both_teams(blob, req1, req2):
+            s = _score_from_text_near_teams(blob, req1, req2) if '_score_from_text_near_teams' in globals() else None
+            if s:
+                obj = {
+                    "team1": req1, "team2": req2,
+                    "score1": s.get("score1"), "score2": s.get("score2"),
+                    "status": s.get("status") or _status_from_serp_v6(data), "minute": "",
+                    "scorers": _v10_collect_goal_details_from_google_card(data),
+                    "source": source_name,
+                }
+                if obj.get("scorers"):
+                    obj["goals_source"] = "Google Sports" if source == "google" else mode_label_ar(source)
+                link = _v10_extract_highlight_link(data)
+                if link:
+                    obj["highlight_url"] = link
+                if _v9_valid_score_obj(obj):
+                    return obj
+    return None
+
+
+def fetch_match_from_serpapi(team1, team2, date_hint=None):
+    return _v10_fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="google")
+
+
+def fetch_match_from_365(team1, team2, date_hint=None):
+    return _v10_fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="365")
+
+
+def fetch_match_from_kooora(team1, team2, date_hint=None):
+    return _v10_fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="kooora")
+
+
+def _v9_fetch_goal_details(team1, team2, date_hint=None, preferred_source="google"):
+    # V10: قوقل أولاً للهدافين، ثم 365/كورة، ثم ESPN احتياط أخير.
+    if preferred_source == "365":
+        sequence = ["365", "google", "kooora", "espn"]
+    elif preferred_source == "kooora":
+        sequence = ["kooora", "google", "365", "espn"]
+    else:
+        sequence = ["google", "365", "kooora", "espn"]
+    for src in sequence:
+        if src == "espn":
+            scorers = _v9_fetch_scorers_from_espn(team1, team2, date_hint)
+        else:
+            # نستفيد من كرت المباراة نفسه لو كان Google
+            try:
+                obj = _v10_fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source=("google" if src == "google" else src))
+                scorers = _v9_sanitize_scorers((obj or {}).get("scorers") or [])
+            except Exception:
+                scorers = []
+            if not scorers:
+                scorers = _v9_fetch_scorers_from_serp_source(team1, team2, date_hint, source=src)
+        scorers = _v9_sanitize_scorers(scorers)
+        if scorers:
+            return scorers, mode_label_ar(src) if src in ["365", "kooora"] else ("ESPN" if src == "espn" else "Google Sports")
+    return [], ""
+
+
+def fetch_live_match_data(team1, team2, mode="google", date_hint=None):
+    norm = _norm_source_mode(mode)
+    requested_label = mode_label_ar(norm)
+    if norm in ["365", "kooora"]:
+        seq = [norm, "google", "espn", "api"]
+    elif norm == "latest":
+        seq = ["google", "espn", "365", "kooora", "api"]
+    elif norm == "official":
+        # API-Football قد يكون موقوف؛ ESPN ثم Google
+        seq = ["espn", "google", "api"]
+    elif norm == "google":
+        seq = ["google", "espn"]
+    else:
+        seq = ["google", "espn", "api"]
+    seen = set()
+    for src in seq:
+        if src in seen:
+            continue
+        seen.add(src)
+        try:
+            obj = _v9_fetch_primary_from_source(team1, team2, src, date_hint=date_hint)
+        except Exception:
+            obj = None
+        if not obj or not _v9_valid_score_obj(obj):
+            continue
+        obj["source"] = _v9_clean_source_name(obj.get("source") or ("ESPN" if src == "espn" else mode_label_ar(src)))
+        obj["requested_source"] = requested_label
+        obj["actual_source"] = obj["source"]
+        if not obj.get("status"):
+            obj["status"] = "مباشر" if obj.get("minute") else "غير محدد"
+        scorers = _v9_sanitize_scorers(obj.get("scorers") or [])
+        details_source = obj.get("goals_source") or (obj.get("source") if scorers else "")
+        if not scorers:
+            pref = norm if norm in ["365", "kooora"] else src
+            scorers, details_source = _v9_fetch_goal_details(team1, team2, date_hint=date_hint, preferred_source=pref)
+        obj["scorers"] = scorers
+        obj["goals_source"] = details_source or "غير متوفر"
+        # إذا جاء رابط ملخص من Google احتفظ به حتى لو المصدر الفعلي ESPN.
+        if not obj.get("highlight_url") and src != "google" and _serpapi_key():
+            try:
+                gobj = _v10_fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="google")
+                if gobj and gobj.get("highlight_url"):
+                    obj["highlight_url"] = gobj.get("highlight_url")
+            except Exception:
+                pass
+        return obj
+    return None
+
+
+def render_live_match_card(match, mode_label="رسمي"):
+    ensure_generated_dir()
+    width, height = 1200, 1500
+    img, draw = _v9_live_bg(width, height)
+
+    draw_text(draw, (width//2, 88), "MONDIAL AL MASEEF 2026", _v31_latin_font(34), fill="#FFFFFF", max_width=760)
+    draw_text(draw, (width//2, 160), "LIVE MATCH", _v31_latin_font(74), fill="#FFFFFF", max_width=900)
+    draw_text(draw, (width//2, 222), "متابعة المباراة", get_font(34), fill="#FDE68A", max_width=720)
+
+    main = (70, 290, width-70, 1070)
+    try:
+        _draw_glow_card(draw, main, 42, "#061633E8", "#38BDF8", width=4)
+    except Exception:
+        rounded_rect(draw, main, radius=42, fill="#061633", outline="#38BDF8", width=4)
+
+    flag_y1, flag_y2 = 365, 485
+    left_flag = (130, flag_y1, 310, flag_y2)
+    right_flag = (width-310, flag_y1, width-130, flag_y2)
+    rounded_rect(draw, (left_flag[0]-12, left_flag[1]-10, left_flag[2]+12, left_flag[3]+10), radius=28, fill="#FFFFFFE8", outline="#FFFFFF55", width=2)
+    rounded_rect(draw, (right_flag[0]-12, right_flag[1]-10, right_flag[2]+12, right_flag[3]+10), radius=28, fill="#FFFFFFE8", outline="#FFFFFF55", width=2)
+    _v9_draw_flag_fit(img, match.get("team1", ""), left_flag)
+    _v9_draw_flag_fit(img, match.get("team2", ""), right_flag)
+    draw_text(draw, (220, 540), match.get("team1", ""), get_font(40), fill="#FFFFFF", max_width=330)
+    draw_text(draw, (width-220, 540), match.get("team2", ""), get_font(40), fill="#FFFFFF", max_width=330)
+
+    score = f"{match.get('score1','0')} - {match.get('score2','0')}"
+    draw_text(draw, (width//2, 463), score, _v31_latin_font(116), fill="#FFFFFF", max_width=360)
+
+    status = _v9_status_line(match)
+    rounded_rect(draw, (width//2-245, 590, width//2+245, 662), radius=24, fill="#FBBF24", outline="#FFFFFF55", width=2)
+    draw_text(draw, (width//2, 626), status, get_font(30), fill="#061633", max_width=450)
+
+    scorers = _v9_sanitize_scorers(match.get("scorers") or [])
+    details_top = 720
+    draw_text(draw, (width//2, details_top), "الهدافون", get_font(42), fill="#FDE68A", max_width=480)
+    y = details_top + 74
+    if scorers:
+        for s in scorers[:5]:
+            rounded_rect(draw, (120, y-30, width-120, y+42), radius=22, fill="#07132FEA", outline="#FFFFFF33", width=2)
+            draw_text(draw, (width//2, y+6), f"⚽ {s}", get_font(31), fill="#FFFFFF", max_width=900)
+            y += 82
+    else:
+        rounded_rect(draw, (150, y-30, width-150, y+42), radius=24, fill="#07132FEA", outline="#FFFFFF33", width=2)
+        draw_text(draw, (width//2, y+6), "تفاصيل الهدافين غير متوفرة حاليًا", get_font(30), fill="#FFFFFF", max_width=820)
+        y += 86
+
+    # لا نعرض المصدر داخل الصورة حسب اعتماد V10.
+    draw.line((230, height-160, width-230, height-160), fill="#FFFFFF66", width=2)
+    draw_text(draw, (width//2, height-120), "المصيف يضعكم بالحدث", get_font(34), fill="#FDE68A", max_width=650)
+
+    out = os.path.join(GENERATED_DIR, f"live_v10_{_safe_filename(match.get('team1','team1'))}_{_safe_filename(match.get('team2','team2'))}.png")
+    try:
+        img.save(out, quality=96)
+    except TypeError:
+        img.save(out)
+    return out
+
+
+def build_live_caption(match, mode_label="رسمي"):
+    lines = [f"{match.get('team1','')} {match.get('score1','0')} - {match.get('score2','0')} {match.get('team2','')}"]
+    st = _v9_status_line(match)
+    if st:
+        lines.append(st)
+    scorers = _v9_sanitize_scorers(match.get("scorers") or [])
+    lines.append("")
+    lines.append("⚽ الهدافون:")
+    if scorers:
+        lines.extend([f"- {s}" for s in scorers[:6]])
+    else:
+        lines.append("غير متوفرين حاليًا من المصادر")
+    actual = match.get("actual_source") or match.get("source") or mode_label
+    requested = match.get("requested_source") or mode_label
+    lines.append("")
+    lines.append(f"المصدر المطلوب: {requested}")
+    lines.append(f"المصدر الفعلي: {actual}")
+    if match.get("goals_source"):
+        lines.append(f"تفاصيل الأهداف: {match.get('goals_source')}")
+    link = match.get("highlight_url") or match.get("summary_url") or ""
+    if link:
+        lines.append(f"🎥 ملخص المباراة: {link}")
+    else:
+        lines.append("🎥 ملخص المباراة: غير متوفر حاليًا من قوقل")
+    return "\n".join(lines)
+
+
+def create_all_groups_newlook_image(groups, style=2):
+    ensure_generated_dir()
+    groups = list(groups or [])[:12]
+    width = 1800
+    cols = 3
+    margin_x, gap_x = 72, 34
+    card_w = (width - 2*margin_x - (cols-1)*gap_x) // cols
+    row_h = 62
+    row_gap = 8
+    grid_gap_y = 32
+    min_card_h = 285
+    header_h = 74
+    label_h = 34
+    bottom_pad = 24
+    row_heights = []
+    for r in range(4):
+        chunk = groups[r*cols:(r+1)*cols]
+        max_rows = max([min(len(rows), 4) for _title, rows in chunk] + [1])
+        ch = header_h + label_h + 18 + max_rows * row_h + max(0, max_rows-1) * row_gap + bottom_pad
+        row_heights.append(max(min_card_h, ch))
+    start_y = 300
+    footer_space = 110
+    height = int(start_y + sum(row_heights) + grid_gap_y*(len(row_heights)-1) + footer_space)
+    height = max(1640, min(height, 2320))
+    img, draw = _games_day_background(width, height)
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (45, 40, width-45, height-45), radius=40, fill="#06152F55", outline="#FFFFFF22", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    draw_text(draw, (width//2, 82), "MONDIAL AL MASEEF 2026", _v31_latin_font(42) if '_v31_latin_font' in globals() else get_font(40), fill="#FFFFFF", max_width=900)
+    draw_text(draw, (width//2, 160), "ALL GROUP STANDINGS", _v31_latin_font(74) if '_v31_latin_font' in globals() else get_font(72), fill="#FFFFFF", max_width=width-170)
+    draw_text(draw, (width//2, 230), "ترتيب جميع المجموعات", get_font(40), fill="#FBBF24", max_width=800)
+    y_cursor = start_y
+    for idx, (title, rows) in enumerate(groups):
+        c = idx % cols
+        r = idx // cols
+        if c == 0 and idx != 0:
+            y_cursor += row_heights[r-1] + grid_gap_y
+        x = margin_x + c*(card_w+gap_x)
+        y = y_cursor
+        card_h = row_heights[r]
+        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=28, fill="#0638A5E8", outline="#14B8F5", width=3)
+        rounded_rect(draw, (x+16, y+16, x+card_w-16, y+66), radius=16, fill="#FBBF24", outline="#00000055", width=1)
+        gt = clean_group_title_for_design(title)
+        if not str(gt).startswith("المجموعة"):
+            gt = f"المجموعة {gt}"
+        draw_text(draw, (x+card_w//2, y+41), gt, get_font(29), fill="#061633", max_width=card_w-44)
+        label_y = y + 88
+        draw_text(draw, (x+card_w-64, label_y), "#", get_font(18), fill="#FDE68A")
+        draw_text(draw, (x+card_w-205, label_y), "المنتخب", get_font(18), fill="#FDE68A", max_width=190)
+        draw_text(draw, (x+195, label_y), "لعب", get_font(18), fill="#FDE68A")
+        draw_text(draw, (x+118, label_y), "+/-", get_font(18), fill="#FDE68A")
+        draw_text(draw, (x+48, label_y), "نقاط", get_font(18), fill="#FDE68A")
+        yy = y + 108
+        for pos, row in enumerate(rows[:4], start=1):
+            team, played, diff, pts = row[0], _v10_int_any(row[1]), _v10_int_any(row[2]), _v10_int_any(row[3])
+            rounded_rect(draw, (x+16, yy, x+card_w-16, yy+row_h), radius=15, fill="#061633B8", outline="#FFFFFF30", width=1)
+            cy = yy + row_h//2
+            draw_text(draw, (x+card_w-34, cy), str(pos), get_font(23), fill="#FBBF24")
+            fw, fh = 56, 38
+            try:
+                paste_flag(img, team, (x+card_w-100, cy-fh//2, x+card_w-100+fw, cy+fh//2))
+            except Exception:
+                pass
+            team_name = _clean_display_name(team)
+            team_font = _fit_font_to_width(draw, team_name, 24, 190, min_size=17)
+            draw_text(draw, (x+card_w-230, cy), team_name, team_font, fill="#FFFFFF", max_width=205)
+            draw_text(draw, (x+195, cy), str(played), get_font(23), fill="#FFFFFF")
+            draw_text(draw, (x+118, cy), f"{int(diff):+d}", get_font(23), fill="#E5E7EB")
+            draw_text(draw, (x+48, cy), str(pts), get_font(29), fill="#FBBF24")
+            yy += row_h + row_gap
+    draw_text(draw, (width//2, height-50), "المصيف يضعكم بالحدث", get_font(38), fill="#FBBF24", max_width=700)
+    path = os.path.join(GENERATED_DIR, f"all_groups_style{style}.png")
+    img.save(path, quality=95)
+    return path
+
+
+async def current_groups_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    text = update.message.text if getattr(update, 'message', None) else ""
+    mode = mode_override
+    if not mode:
+        m = re.search(r"\*\s*(رسمي|سريع|الأحدث|الاحدث|official|fast|latest|google|قوقل|365|٣٦٥|كورة|كوره|kooora)\s*$", text or "", re.I)
+        mode = m.group(1) if m else "latest"
+    payload = {"kind": "standings"}
+    kb = source_keyboard(context, payload)
+    wait = await update.message.reply_text(f"⏳ جاري جلب ترتيب المجموعات من قوقل...")
+    try:
+        groups, source_label = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_current_groups, mode), timeout=24)
+    except Exception:
+        groups, source_label = [], ""
+    if not groups:
+        await wait.edit_text(_source_help_text("standings", mode) + "\n\nاختر مصدر آخر:", reply_markup=kb)
+        return
+    path = create_all_groups_image(groups)
+    caption = f"ترتيب المجموعات الآن ✅\nالمصدر: {source_label}\nالاستعلام المعتمد: ترتيبات كأس العالم"
+    try:
+        await wait.delete()
+    except Exception:
+        pass
+    await send_photo_path_markup(update.message, path, caption, kb)
+    await update.message.reply_text(build_groups_text(groups, source_label))
+
+# ==================== END V10 FINAL PATCH ====================
+
 if __name__ == "__main__":
     main()
-    
