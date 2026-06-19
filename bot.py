@@ -12691,5 +12691,424 @@ def main():
     app.run_polling()
 
 
+
+# ==================== V8 FINAL PATCH: validated live score + scorers details ====================
+# الهدف: منع قراءة التاريخ كأنه نتيجة، تثبيت نتيجة Google/رسمي فقط، ثم جلب الهدافين من التفاصيل.
+
+
+def _v8_score_int(x):
+    try:
+        s = str(x).strip()
+        # لا نقبل نصوص طويلة أو تواريخ داخل النتيجة
+        if not re.fullmatch(r"\d{1,2}", s):
+            return None
+        return int(s)
+    except Exception:
+        return None
+
+
+def _v8_valid_score_obj(obj):
+    if not isinstance(obj, dict):
+        return False
+    a = _v8_score_int(obj.get("score1"))
+    b = _v8_score_int(obj.get("score2"))
+    if a is None or b is None:
+        return False
+    # مباريات كرة القدم الطبيعية؛ نرفض أرقام التاريخ مثل 26-06
+    if a < 0 or b < 0 or a > 15 or b > 15:
+        return False
+    t1 = normalize_name(obj.get("team1") or "")
+    t2 = normalize_name(obj.get("team2") or "")
+    if not t1 or not t2:
+        return False
+    return True
+
+
+def _v8_clean_scorer_line(s):
+    s = normalize_name(s or "")
+    if not s:
+        return ""
+    # تقليل النصوص الطويلة أو snippets العامة
+    s = re.sub(r"\s+", " ", s).strip()
+    if len(s) > 85:
+        return ""
+    low = s.lower()
+    # تجاهل نصوص تاريخ/بطولة/عامّة
+    bad_words = ["fifa", "world cup", "كأس العالم", "المجموعة", "group", "video", "highlight", "ملخص", "reuters"]
+    if any(w in low for w in bad_words):
+        return ""
+    # المقبول: فيه دقيقة/هدف/Goal أو اسم قصير مع رقم دقيقة
+    if "'" in s or "هدف" in s or "goal" in low or re.search(r"\b\d{1,3}\b", s):
+        # نمنع السطور اللي هي أرقام فقط
+        if re.fullmatch(r"[\d\s\-/:]+", s):
+            return ""
+        return s
+    return ""
+
+
+def _v8_sanitize_scorers(items):
+    out = []
+    for item in items or []:
+        s = _v8_clean_scorer_line(item)
+        if s and s not in out:
+            out.append(s)
+    return out[:8]
+
+
+def _v8_enrich_scorers_from_serp(team1, team2, date_hint=None, source="google"):
+    if not _serpapi_key():
+        return []
+    req1 = canonical_team_name(team1) or normalize_name(team1)
+    req2 = canonical_team_name(team2) or normalize_name(team2)
+    queries = _serpapi_query_candidates(req1, req2, date_hint=None, source=source)
+    # نضيف بحث تفاصيل واضح مع التاريخ إن وجد
+    en1 = team_query_name(req1) if 'team_query_name' in globals() else req1
+    en2 = team_query_name(req2) if 'team_query_name' in globals() else req2
+    extra = [
+        f"تفاصيل مباراة {req1} {req2} من سجل",
+        f"{en1} {en2} goals scorers FIFA World Cup 2026",
+    ]
+    if date_hint:
+        extra.insert(0, f"تفاصيل مباراة {req1} {req2} {date_hint} من سجل")
+    queries = extra + queries
+    seen = set()
+    for q in queries[:4]:
+        q = normalize_name(q)
+        if not q or q in seen:
+            continue
+        seen.add(q)
+        try:
+            data = serpapi_search_json(q, hl="ar", gl="sa", timeout=7)
+        except Exception:
+            continue
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        roots = []
+        if isinstance(sr, dict):
+            roots.append(sr)
+            for key in ["game_spotlight", "timeline", "events", "scorers", "news_results", "organic_results"]:
+                if isinstance(sr.get(key), (dict, list)):
+                    roots.append(sr.get(key))
+        roots.append(data)
+        collected = []
+        for root in roots:
+            try:
+                collected.extend(_collect_scorers_from_serp_node(root))
+            except Exception:
+                pass
+        clean = _v8_sanitize_scorers(collected)
+        if clean:
+            return clean
+    return []
+
+
+def _v8_enrich_match_details(obj, team1, team2, date_hint=None, preferred_source=None):
+    """أضف الهدافين من Google/365/Kooora/ESPN بدون تعطيل النتيجة."""
+    if not isinstance(obj, dict):
+        return obj
+    obj["score1"] = str(_v8_score_int(obj.get("score1")) if _v8_score_int(obj.get("score1")) is not None else obj.get("score1"))
+    obj["score2"] = str(_v8_score_int(obj.get("score2")) if _v8_score_int(obj.get("score2")) is not None else obj.get("score2"))
+    existing = _v8_sanitize_scorers(obj.get("scorers") or [])
+    if existing:
+        obj["scorers"] = existing
+        obj["scorers_source"] = obj.get("source") or preferred_source or "المصدر"
+        return obj
+    order = []
+    if preferred_source in ["365", "kooora", "google"]:
+        order.append(preferred_source)
+    order += ["google", "365", "kooora"]
+    seen = set()
+    for source in order:
+        if source in seen:
+            continue
+        seen.add(source)
+        scorers = _v8_enrich_scorers_from_serp(team1, team2, date_hint=date_hint, source=source)
+        if scorers:
+            obj["scorers"] = scorers
+            obj["scorers_source"] = {"google":"Google Sports", "365":"365Scores", "kooora":"Kooora"}.get(source, source)
+            return obj
+    # ESPN غالبًا عنده details إذا المباراة موجودة
+    try:
+        espn_obj = fetch_match_from_espn(team1, team2, date_hint=date_hint)
+        scorers = _v8_sanitize_scorers((espn_obj or {}).get("scorers") or [])
+        if scorers:
+            obj["scorers"] = scorers
+            obj["scorers_source"] = "ESPN"
+            return obj
+    except Exception:
+        pass
+    obj["scorers"] = []
+    return obj
+
+
+def _v8_parse_serp_sports_root(root, req1, req2, source_name="Google Sports"):
+    """قراءة صارمة: لا تقبل أرقام تواريخ كأنها نتيجة."""
+    if not isinstance(root, (dict, list)):
+        return None
+    # 1) اجمع scores من team dicts
+    try:
+        pair = _collect_scores_by_team_v6(root, req1, req2)
+        if pair:
+            pair.update({
+                "status": _status_from_serp_v6(root),
+                "minute": "",
+                "scorers": _v8_sanitize_scorers(_collect_scorers_from_serp_node(root) if '_collect_scorers_from_serp_node' in globals() else []),
+                "source": source_name,
+            })
+            if _v8_valid_score_obj(pair):
+                return pair
+    except Exception:
+        pass
+    # 2) جرّب parser القديم لكن مع فلترة صارمة
+    try:
+        obj = _parse_serp_sports_node(root, req1, req2)
+        if obj:
+            obj["source"] = source_name
+            obj["scorers"] = _v8_sanitize_scorers(obj.get("scorers") or [])
+            if _v8_valid_score_obj(obj):
+                return obj
+    except Exception:
+        pass
+    # 3) snippets فقط لو النتيجة منطقية جدًا وبالقرب من الفريقين
+    try:
+        blob = json.dumps(root, ensure_ascii=False)
+        if _blob_has_both_teams(blob, req1, req2):
+            s = _score_from_text_near_teams(blob, req1, req2) if '_score_from_text_near_teams' in globals() else None
+            if s:
+                obj = {
+                    "team1": canonical_team_name(req1) or req1,
+                    "team2": canonical_team_name(req2) or req2,
+                    "score1": s.get("score1"),
+                    "score2": s.get("score2"),
+                    "status": s.get("status") or _status_from_serp_v6(root),
+                    "minute": "",
+                    "scorers": _v8_sanitize_scorers(_collect_scorers_from_serp_node(root) if '_collect_scorers_from_serp_node' in globals() else []),
+                    "source": source_name,
+                }
+                if _v8_valid_score_obj(obj):
+                    return obj
+    except Exception:
+        pass
+    return None
+
+
+def _serpapi_query_candidates(team1, team2, date_hint=None, source="google"):
+    """V8: نخلي البحث العام قبل التاريخ حتى لا يلتقط 26-06 كأهداف."""
+    ar1, ar2 = canonical_team_name(team1) or normalize_name(team1), canonical_team_name(team2) or normalize_name(team2)
+    en1 = team_query_name(ar1) if 'team_query_name' in globals() else ar1
+    en2 = team_query_name(ar2) if 'team_query_name' in globals() else ar2
+    if source == "365":
+        base = [
+            f"site:365scores.com {ar1} {ar2} كأس العالم 2026",
+            f"site:365scores.com {en1} {en2} FIFA World Cup 2026 score",
+            f"365Scores {ar1} {ar2} النتيجة من سجل",
+        ]
+    elif source == "kooora":
+        base = [
+            f"site:kooora.com {ar1} {ar2} كأس العالم 2026",
+            f"site:kooora.com {en1} {en2} FIFA World Cup 2026 score",
+            f"كورة {ar1} {ar2} النتيجة من سجل",
+        ]
+    else:
+        base = [
+            f"مباراة {ar1} {ar2}",
+            f"{en1} vs {en2} FIFA World Cup 2026",
+            f"{en1} {en2} score",
+        ]
+    queries = list(base)
+    if date_hint:
+        queries += [f"{q} {date_hint}" for q in base]
+    out = []
+    for q in queries:
+        q = normalize_name(q)
+        if q and q not in out:
+            out.append(q)
+    return out[:5]
+
+
+def _fetch_match_from_serp_source(team1, team2, date_hint=None, source="google"):
+    if not _serpapi_key():
+        return None
+    req1 = canonical_team_name(team1) or normalize_name(team1)
+    req2 = canonical_team_name(team2) or normalize_name(team2)
+    source_name = {"google": "Google Sports", "365": "365Scores عبر Google", "kooora": "Kooora عبر Google"}.get(source, "Google")
+    attempts = []
+    for q in _serpapi_query_candidates(req1, req2, date_hint, source=source):
+        if source == "google":
+            attempts.append((q, "ar", "sa"))
+            attempts.append((q, "en", "us"))
+        else:
+            attempts.append((q, "ar", "sa"))
+            attempts.append((q, "en", "us"))
+    seen = set()
+    for q, hl, gl in attempts[:6]:
+        key = (q, hl, gl)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            data = serpapi_search_json(q, hl=hl, gl=gl, timeout=7)
+        except Exception:
+            continue
+        roots = []
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        if isinstance(sr, dict):
+            roots.append(sr)
+            for k in ["game_spotlight", "games", "matches", "scoreboard"]:
+                if isinstance(sr.get(k), (dict, list)):
+                    roots.append(sr.get(k))
+        roots.append(data)
+        for root in roots:
+            obj = _v8_parse_serp_sports_root(root, req1, req2, source_name=source_name)
+            if obj and _v8_valid_score_obj(obj):
+                return _v8_enrich_match_details(obj, req1, req2, date_hint=date_hint, preferred_source=source)
+    return None
+
+
+def fetch_match_from_serpapi(team1, team2, date_hint=None):
+    return _fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="google")
+
+
+def fetch_match_from_365(team1, team2, date_hint=None):
+    return _fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="365")
+
+
+def fetch_match_from_kooora(team1, team2, date_hint=None):
+    return _fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="kooora")
+
+
+def fetch_live_match_data(team1, team2, mode="google", date_hint=None):
+    """V8: النتيجة المؤكدة أولًا، ثم التفاصيل والهدافين."""
+    norm = _norm_source_mode(mode)
+    # المصدر المختار 365/كورة: نجربه، لكن إذا أعطى نتيجة غير مؤكدة نعتمد قوقل/رسمي ونستخدمه للتفاصيل فقط.
+    sequence = _source_mode_sequence(norm)
+    fallback_primary = []
+    if norm in ["365", "kooora"]:
+        fallback_primary = ["google", "espn", "api"]
+    for src in sequence + fallback_primary:
+        try:
+            if src == "google":
+                obj = fetch_match_from_serpapi(team1, team2, date_hint=date_hint)
+            elif src == "365":
+                obj = fetch_match_from_365(team1, team2, date_hint=date_hint)
+            elif src == "kooora":
+                obj = fetch_match_from_kooora(team1, team2, date_hint=date_hint)
+            elif src == "api":
+                obj = fetch_match_from_api_football(team1, team2, date_hint=date_hint)
+            elif src == "fifa":
+                obj = fetch_match_from_fifa(team1, team2)
+            else:
+                obj = fetch_match_from_espn(team1, team2, date_hint=date_hint)
+            if obj and _v8_valid_score_obj(obj):
+                obj["source"] = obj.get("source") or mode_label_ar(src)
+                if not obj.get("status"):
+                    obj["status"] = "مباشر" if obj.get("minute") else "غير محدد"
+                # لو المصدر المختار 365/كورة لكن اعتمدنا مصدر آخر، اجلب التفاصيل منه
+                pref = norm if norm in ["365", "kooora"] else src
+                return _v8_enrich_match_details(obj, team1, team2, date_hint=date_hint, preferred_source=pref)
+        except Exception:
+            continue
+    return None
+
+
+def build_live_caption(match, mode_label="رسمي"):
+    lines = [f"{match['team1']} {match['score1']} - {match['score2']} {match['team2']}"]
+    status_line = match.get("minute") or match.get("status") or ""
+    if match.get("status") and match.get("minute") and match.get("status") not in status_line:
+        status_line = f"{match['status']} — {match['minute']}"
+    if status_line:
+        lines.append(status_line)
+    lines.append("")
+    lines.append("⚽ الهدافون:")
+    scorers = _v8_sanitize_scorers(match.get("scorers") or [])
+    if scorers:
+        for s in scorers[:8]:
+            lines.append(f"- {s}")
+        if match.get("scorers_source"):
+            lines.append(f"تفاصيل الأهداف: {match.get('scorers_source')}")
+    else:
+        lines.append("غير متوفرة حاليًا من المصادر")
+    lines.append("")
+    src = match.get("source") or mode_label
+    lines.append(f"المصدر: {mode_label} ({src})")
+    return "\n".join(lines)
+
+
+def render_live_match_card(match, mode_label="رسمي"):
+    ensure_generated_dir()
+    width, height = 1200, 1350
+    img = _style4_clean_background(width, height)
+    draw = ImageDraw.Draw(img)
+    draw_text(draw, (width//2, 100), "مباشر الآن", get_font(62), fill="#FFFFFF")
+    draw_text(draw, (width//2, 165), f"المصدر: {mode_label}", get_font(28), fill="#FDE68A")
+
+    rounded_rect(draw, (80, 235, width-80, 840), radius=40, fill="#07132FDD", outline="#38BDF855", width=2)
+    paste_flag(img, match["team1"], (155, 315, 315, 425))
+    paste_flag(img, match["team2"], (width-315, 315, width-155, 425))
+    draw_text(draw, (250, 485), match["team1"], get_font(38), fill="#FFFFFF", max_width=300)
+    draw_text(draw, (width-250, 485), match["team2"], get_font(38), fill="#FFFFFF", max_width=300)
+    draw_text(draw, (width//2, 430), f"{match['score1']} - {match['score2']}", get_font(104), fill="#FFFFFF")
+    rounded_rect(draw, (width//2-190, 530, width//2+190, 602), radius=22, fill="#FBBF24", outline="#FFFFFF33", width=1)
+    status_line = match.get("minute") or match.get("status") or ""
+    if match.get("status") and match.get("minute") and match.get("status") not in status_line:
+        status_line = f"{match['status']} — {match['minute']}"
+    draw_text(draw, (width//2, 566), status_line or "متابعة مباشرة", get_font(30), fill="#061633", max_width=330)
+
+    scorers = _v8_sanitize_scorers(match.get("scorers") or [])
+    draw_text(draw, (width//2, 655), "الهدافون", get_font(36), fill="#FDE68A")
+    y = 710
+    if scorers:
+        for item in scorers[:6]:
+            rounded_rect(draw, (120, y-24, width-120, y+34), radius=18, fill="#0B1E46", outline="#FFFFFF22", width=1)
+            draw_text(draw, (width//2, y+5), item, get_font(27), fill="#FFFFFF", max_width=880)
+            y += 68
+    else:
+        rounded_rect(draw, (160, y-25, width-160, y+40), radius=20, fill="#0B1E46", outline="#FFFFFF22", width=1)
+        draw_text(draw, (width//2, y+7), "تفاصيل الهدافين غير متوفرة حاليًا", get_font(28), fill="#FFFFFF", max_width=820)
+
+    footer_event(draw, width, height)
+    out = os.path.join(GENERATED_DIR, f"live_{_safe_filename(match['team1'])}_{_safe_filename(match['team2'])}.png")
+    img.save(out, quality=95)
+    return out
+
+
+async def google_search_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = parse_command_body_lines(update.message.text)
+    query = " ".join(body).strip() or "مباراة المكسيك كوريا الجنوبية"
+    msg = await update.message.reply_text(f"⏳ أفحص قوقل: {query}")
+    try:
+        data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(serpapi_search_json, query, "ar", "sa", 8), timeout=12)
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        lines = ["نتيجة فحص قوقل:", f"query: {query}"]
+        if isinstance(sr, dict):
+            lines.append("✅ sports_results موجود")
+            lines.append("مفاتيح: " + "، ".join(list(sr.keys())[:12]))
+            # نحاول قراءة المباراة بين أول فريقين معروفين في النص، وإلا المكسيك/كوريا للتجربة.
+            req1, req2 = "المكسيك", "كوريا الجنوبية"
+            txt = normalize_name(query)
+            found = []
+            for tm in WORLD_CUP_TEAMS:
+                if _blob_contains_team(txt, tm):
+                    found.append(tm)
+                if len(found) >= 2:
+                    break
+            if len(found) >= 2:
+                req1, req2 = found[0], found[1]
+            obj = _v8_parse_serp_sports_root(sr, req1, req2, source_name="Google Sports")
+            if obj:
+                lines.append(f"✅ قرأت المباراة: {obj['team1']} {obj['score1']} - {obj['score2']} {obj['team2']}")
+                lines.append(f"الحالة: {obj.get('status','')}")
+                sc = _v8_sanitize_scorers(obj.get("scorers") or [])
+                if sc:
+                    lines.append("الهدافون: " + "، ".join(sc[:4]))
+            else:
+                lines.append("⚠️ وصلنا لقوقل لكن لم أقرأ نتيجة مؤكدة من البنية الحالية")
+        else:
+            lines.append("⚠️ لم يظهر sports_results")
+        await msg.edit_text("\n".join(lines[:14]))
+    except Exception as e:
+        await msg.edit_text(f"❌ فشل فحص قوقل: {str(e)[:220]}")
+
+# ==================== END V8 FINAL PATCH ====================
+
 if __name__ == "__main__":
     main()
