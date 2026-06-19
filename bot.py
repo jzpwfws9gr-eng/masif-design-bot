@@ -7855,8 +7855,23 @@ def _multi_days_ar_date_label(raw):
     if not raw:
         return ""
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
+    ar_months = {
+        1: "يناير",
+        2: "فبراير",
+        3: "مارس",
+        4: "أبريل",
+        5: "مايو",
+        6: "يونيو",
+        7: "يوليو",
+        8: "أغسطس",
+        9: "سبتمبر",
+        10: "أكتوبر",
+        11: "نوفمبر",
+        12: "ديسمبر",
+    }
     if not m:
-        return raw
+        # بدون / أو رموز زخرفية عشان ما تظهر مربعات
+        return raw.replace("/", " ")
     d, mo, y = map(int, m.groups())
     ar_days = {
         0: "الاثنين",
@@ -7869,9 +7884,9 @@ def _multi_days_ar_date_label(raw):
     }
     try:
         dt = datetime(y, mo, d)
-        return f"{ar_days.get(dt.weekday(), '')} {d:02d}/{mo:02d}"
+        return f"{ar_days.get(dt.weekday(), '')} {d:02d} {ar_months.get(mo, str(mo).zfill(2))}"
     except Exception:
-        return f"{d:02d}/{mo:02d}"
+        return f"{d:02d} {ar_months.get(mo, str(mo).zfill(2))}"
 
 def create_multi_days_matches_image(schedule_blocks, style=4, max_blocks=6, wide_mode=False):
     ensure_generated_dir()
