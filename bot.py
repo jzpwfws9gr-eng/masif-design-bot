@@ -5858,7 +5858,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الاساطير"), legends_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), dashboard_sheet_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), all_dashboard_images_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملف_الاحصائيات(?:\\s|$)"), statistics_pdf_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:ملف_الاحصائيات|ملف_الإحصائيات|ملف_احصائيات|ملف_إحصائيات|pdf_الاحصائيات|PDF_الاحصائيات)(?:\\s|$)"), statistics_pdf_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بطاقة"), participant_card_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تقرير_الفترة"), period_report_command))
 
@@ -7947,20 +7947,20 @@ def _v31_card(img, draw, box, idx, team_a, team_b, time_text, count):
     rounded_rect(draw, (x2-badge_size-10, y1+14, x2-10, y1+14+badge_size), radius=10, fill="#FBBF24", outline="#FFFFFF33", width=1)
     draw_text(draw, (x2-10-badge_size//2, y1+14+badge_size//2), str(idx), _v31_latin_font(18), fill="#061633", max_width=badge_size)
 
-    # الأعلام بعد المراجعة الأخيرة صغّرناها 25٪ عن النسخة المكبّرة؛
-    # تبقى واضحة داخل الكرت بدون ما تزاحم أسماء المنتخبات.
+    # ضبط نهائي: تصغير الأعلام 15٪ من الوضع الحالي.
+    # تبقى واضحة وكبيرة، لكن بدون ما تزاحم أسماء المنتخبات أو رقم المباراة.
     if count >= 5:
-        flag_h = min(82, row_h - 14)
-        flag_w = int(flag_h * 1.55)
-        side_pad = 18
-    elif count == 4:
-        flag_h = min(92, row_h - 16)
-        flag_w = int(flag_h * 1.55)
-        side_pad = 20
-    else:
-        flag_h = min(100, row_h - 18)
+        flag_h = min(70, row_h - 16)
         flag_w = int(flag_h * 1.55)
         side_pad = 22
+    elif count == 4:
+        flag_h = min(78, row_h - 18)
+        flag_w = int(flag_h * 1.55)
+        side_pad = 23
+    else:
+        flag_h = min(85, row_h - 20)
+        flag_w = int(flag_h * 1.55)
+        side_pad = 24
 
     # الفريق الأول يمين، الفريق الثاني يسار
     right_flag_box = (x2-side_pad-flag_w, cy-flag_h//2, x2-side_pad, cy+flag_h//2)
@@ -8528,7 +8528,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/اضافه 5\n/نتائج 5\n/اعتماد_نتائج 5\n/احصائيات\n/احصائيات 1 6\n/الترتيب_العام\n/الترتيب_العام 1 6\n/ترتيب_نص\n\n"
         "أوامر الصور والتقارير:\n"
         "/صورة_اليوم 6\n/صورة_الترتيب 1 6\n/صورة_الاساطير 1 6\n/صورة_احصائيات 1 6 لوحة عامة\n"
-        "/صور_الاحصائيات\n/صور_الاحصائيات 1 6\n/ملف_الاحصائيات\n/ملف_الاحصائيات 1 6\n"
+        "/صور_الاحصائيات\n/صور_الاحصائيات 1 6\n/ملف_الاحصائيات\n/ملف_الإحصائيات\n/ملف_الاحصائيات 1 6\n"
         "/بطاقة فارس سالم\n/تقرير_الفترة 1 4\n/تفعيل_الصور_التلقائية\n/إيقاف_الصور_التلقائية\n\n"
         "أوامر المباريات:\n"
         "/مباريات_اليوم\n/مباريات_اليوم2\n/مباريات_الأيام\n/مباريات_الايام\n/كل_المجموعات\n\n"
