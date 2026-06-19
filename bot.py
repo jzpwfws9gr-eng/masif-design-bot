@@ -2,6 +2,7 @@ import os
 import re
 import json
 import shutil
+import asyncio
 from datetime import datetime
 from collections import Counter, defaultdict
 
@@ -8554,7 +8555,8 @@ def build_statistics_image_paths(start_day, end_day, include_cover=False):
     return paths
 
 
-def _pdf_ready_image(path, max_w=1280):
+def _pdf_ready_image(path, max_w=900):
+    """تحويل الصورة لصفحة PDF خفيفة عشان تيليقرام/Railway ما يعلقون."""
     img = Image.open(path)
     if img.mode not in ("RGB", "L"):
         if "A" in img.getbands():
@@ -8572,21 +8574,50 @@ def _pdf_ready_image(path, max_w=1280):
     return img
 
 
+def _save_images_as_pdf(paths, out_path, max_w=900, quality=65):
+    images = [_pdf_ready_image(p, max_w=max_w) for p in paths]
+    try:
+        images[0].save(
+            out_path,
+            "PDF",
+            save_all=True,
+            append_images=images[1:],
+            resolution=80.0,
+            quality=quality,
+            optimize=True,
+        )
+    finally:
+        for im in images:
+            try:
+                im.close()
+            except Exception:
+                pass
+
+
 def create_statistics_pdf(start_day, end_day):
     ensure_generated_dir()
     paths = build_statistics_image_paths(start_day, end_day, include_cover=True)
-    images = [_pdf_ready_image(p) for p in paths]
+    if not paths:
+        raise ValueError("لا توجد صفحات PDF للتجهيز")
 
-    out_path = os.path.join(GENERATED_DIR, f"fantasy_stats_{start_day}_{end_day}.pdf")
-    images[0].save(out_path, "PDF", save_all=True, append_images=images[1:], resolution=120.0)
+    # نحاول أكثر من ضغط؛ الهدف أن الملف ينرسل من تيليقرام بدون تعليق.
+    attempts = [
+        (900, 65, "normal"),
+        (760, 60, "small"),
+        (620, 55, "mini"),
+    ]
 
-    for im in images:
-        try:
-            im.close()
-        except Exception:
-            pass
+    last_path = None
+    for max_w, quality, label in attempts:
+        out_path = os.path.join(GENERATED_DIR, f"fantasy_stats_{start_day}_{end_day}_{label}.pdf")
+        _save_images_as_pdf(paths, out_path, max_w=max_w, quality=quality)
+        last_path = out_path
+        size_mb = os.path.getsize(out_path) / (1024 * 1024)
+        if size_mb <= 45 or label == "mini":
+            return out_path, len(paths), size_mb
 
-    return out_path, len(paths)
+    size_mb = os.path.getsize(last_path) / (1024 * 1024)
+    return last_path, len(paths), size_mb
 
 
 async def all_dashboard_images_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -8604,16 +8635,48 @@ async def all_dashboard_images_command(update: Update, context: ContextTypes.DEF
 async def statistics_pdf_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         start_day, end_day = _parse_range_from_text(update.message.text)
-        await update.message.reply_text(f"جاري تجهيز ملف PDF من اليوم {start_day} إلى {end_day} ✅")
-        pdf_path, page_count = create_statistics_pdf(start_day, end_day)
+        await update.message.reply_text(f"جاري تجهيز ملف الإحصائيات PDF من اليوم {start_day} إلى {end_day} ⏳")
+
+        pdf_path, page_count, size_mb = await asyncio.to_thread(create_statistics_pdf, start_day, end_day)
+
+        if not os.path.exists(pdf_path):
+            await update.message.reply_text("تعذر تجهيز ملف الإحصائيات ❌\nملف PDF لم يتم إنشاؤه.")
+            return
+
         with open(pdf_path, "rb") as f:
             await update.message.reply_document(
                 document=f,
                 filename=f"فانتزي_المصيف_2026_{start_day}_{end_day}.pdf",
-                caption=f"✅ ملف الإحصائيات جاهز — {page_count} صفحة تقريبًا"
+                caption=f"✅ ملف الإحصائيات جاهز\nعدد الصفحات: {page_count}\nالحجم: {size_mb:.1f} MB",
+                read_timeout=240,
+                write_timeout=240,
+                connect_timeout=30,
+                pool_timeout=30,
             )
     except Exception as e:
         await update.message.reply_text(f"تعذر تجهيز ملف الإحصائيات ❌\n{e}")
+
+
+async def test_pdf_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اختبار سريع لإرسال PDF بدون الاعتماد على بيانات الإكسل."""
+    try:
+        ensure_generated_dir()
+        img = Image.new("RGB", (900, 1200), "#071426")
+        draw = ImageDraw.Draw(img)
+        draw_text(draw, (450, 390), "اختبار ملف PDF", get_font(58), fill="#FFFFFF", max_width=760)
+        draw_text(draw, (450, 500), "إذا وصلك هذا الملف فإرسال PDF شغال", get_font(34), fill="#FBBF24", max_width=760)
+        path = os.path.join(GENERATED_DIR, "test_pdf_send.pdf")
+        img.save(path, "PDF", resolution=80.0, quality=65, optimize=True)
+        with open(path, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename="اختبار_PDF.pdf",
+                caption="✅ اختبار إرسال PDF شغال",
+                read_timeout=120,
+                write_timeout=120,
+            )
+    except Exception as e:
+        await update.message.reply_text(f"تعذر اختبار PDF ❌\n{e}")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -8653,6 +8716,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), dashboard_sheet_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), all_dashboard_images_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:ملف_الاحصائيات|ملف_الإحصائيات|ملف_احصائيات|ملف_إحصائيات|pdf_الاحصائيات|PDF_الاحصائيات)(?:\\s|$)"), statistics_pdf_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اختبار_pdf|اختبار_PDF|اختبار_ملف)(?:\\s|$)"), test_pdf_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بطاقة"), participant_card_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تقرير_الفترة"), period_report_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعلان_اليوم"), announcement_day_command))
