@@ -3,7 +3,7 @@ import re
 import json
 import shutil
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 import difflib
 
@@ -8972,6 +8972,23 @@ TEAM_ALIASES = {
     "الكونغو": "الكونغو الديمقراطية",
 }
 
+
+# أسماء إنجليزية شائعة للمصادر الخارجية مثل ESPN / FIFA
+TEAM_ALIASES.update({
+    "Mexico": "المكسيك", "South Africa": "جنوب أفريقيا", "Korea Republic": "كوريا الجنوبية", "South Korea": "كوريا الجنوبية", "Czechia": "التشيك",
+    "Canada": "كندا", "Bosnia and Herzegovina": "البوسنة والهرسك", "Bosnia-Herzegovina": "البوسنة والهرسك", "Qatar": "قطر", "Switzerland": "سويسرا",
+    "Brazil": "البرازيل", "Morocco": "المغرب", "Haiti": "هايتي", "Scotland": "اسكتلندا",
+    "United States": "الولايات المتحدة", "USA": "الولايات المتحدة", "Paraguay": "باراغواي", "Australia": "أستراليا", "Turkey": "تركيا", "Türkiye": "تركيا",
+    "Germany": "ألمانيا", "Curacao": "كوراساو", "Curaçao": "كوراساو", "Ivory Coast": "ساحل العاج", "Cote d'Ivoire": "ساحل العاج", "Ecuador": "الإكوادور",
+    "Netherlands": "هولندا", "Japan": "اليابان", "Sweden": "السويد", "Tunisia": "تونس",
+    "Belgium": "بلجيكا", "Egypt": "مصر", "Iran": "إيران", "IR Iran": "إيران", "New Zealand": "نيوزيلندا",
+    "Spain": "إسبانيا", "Cape Verde": "الرأس الأخضر", "Cabo Verde": "الرأس الأخضر", "Saudi Arabia": "السعودية", "Uruguay": "أوروجواي",
+    "France": "فرنسا", "Senegal": "السنغال", "Iraq": "العراق", "Norway": "النرويج",
+    "Argentina": "الأرجنتين", "Algeria": "الجزائر", "Austria": "النمسا", "Jordan": "الأردن",
+    "Portugal": "البرتغال", "DR Congo": "الكونغو الديمقراطية", "Congo DR": "الكونغو الديمقراطية", "Uzbekistan": "أوزبكستان", "Colombia": "كولومبيا",
+    "England": "إنجلترا", "Croatia": "كرواتيا", "Ghana": "غانا", "Panama": "بنما",
+})
+
 TEAM_THEME_MAP = {
     "السعودية": ("#0F5132", "#22C55E", "#FFFFFF"),
     "المكسيك": ("#0B5130", "#CE1126", "#FFFFFF"),
@@ -9100,83 +9117,57 @@ def save_qualified32_state(teams):
 
 
 def render_qualified32_board(teams):
+    """لوحة المتأهلين المعتمدة: قالب أبيض 8×4، يبدأ من أعلى اليمين."""
     ensure_generated_dir()
-    # قالب أبيض فاخر مطابق لمرجع لوحة دور الـ32
-    width, height = 1600, 2134
+    width, height = 1086, 1448
     img = Image.new("RGB", (width, height), "#F8FAFC")
     draw = ImageDraw.Draw(img)
-
     for y in range(height):
         t = y / max(height - 1, 1)
-        r = int(248 * (1 - t) + 226 * t)
-        g = int(250 * (1 - t) + 232 * t)
-        b = int(252 * (1 - t) + 240 * t)
-        draw.line((0, y, width, y), fill=(r, g, b))
-
+        v = int(250 - 18 * t)
+        draw.line((0, y, width, y), fill=(v, v + 1 if v < 254 else v, 255))
     ov = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     od = ImageDraw.Draw(ov)
-    od.pieslice((-260, -240, 520, 520), 0, 360, fill=(6, 22, 51, 255))
-    od.pieslice((-205, -190, 440, 455), 0, 360, fill=(248, 250, 252, 255))
-    od.arc((-235, -215, 485, 505), 0, 360, fill=(245, 158, 11, 220), width=18)
-
-    od.pieslice((width-510, height-520, width+260, height+245), 0, 360, fill=(6, 22, 51, 255))
-    od.pieslice((width-435, height-445, width+190, height+175), 0, 360, fill=(248, 250, 252, 255))
-    od.arc((width-485, height-500, width+235, height+220), 0, 360, fill=(245, 158, 11, 220), width=18)
-
-    for i in range(9):
-        y = 260 + i * 38
-        od.arc((120+i*20, y, width-120-i*20, y+420), 180, 360, fill=(15, 23, 42, 18), width=2)
-    for i in range(12):
-        x = 110 + i * 125
-        od.line((x, 260, x+60, 560), fill=(15, 23, 42, 11), width=2)
-
+    gold = "#D99A18"
     try:
-        glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        gd = ImageDraw.Draw(glow)
-        gd.ellipse((width//2-260, 42, width//2+260, 405), fill=(245, 158, 11, 32))
-        glow = glow.filter(ImageFilter.GaussianBlur(18))
-        ov = Image.alpha_composite(ov, glow)
+        od.pieslice((-260, -300, 470, 430), 105, 210, fill="#061633")
+        od.arc((-240, -280, 500, 460), 103, 210, fill=gold, width=10)
+        od.pieslice((width-260, height-320, width+260, height+180), 180, 290, fill="#061633")
+        od.arc((width-320, height-380, width+310, height+240), 180, 290, fill=gold, width=10)
+        for i in range(10):
+            od.arc((80+i*42, 40+i*4, width-80+i*42, 360+i*4), 180, 355, fill=(15, 23, 42, 22), width=2)
+        od.rectangle((0, height-135, width, height), fill=(226, 232, 240, 90))
     except Exception:
         pass
-
     img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
     draw = ImageDraw.Draw(img)
-
-    rounded_rect(draw, (width//2-78, 48, width//2+78, 168), radius=32, fill="#F59E0B", outline="#92400E", width=3)
-    draw_text(draw, (width//2, 108), "2026", get_font(34), fill="#061633")
-    draw_text(draw, (width//2, 230), "كأس العالم 2026", get_font(72), fill="#061633")
-    draw_text(draw, (width//2, 302), "المنتخبات المتأهلة إلى دور الـ 32", get_font(42), fill="#111827")
-    draw.line((width//2-290, 350, width//2-45, 350), fill="#D97706", width=4)
-    draw.line((width//2+45, 350, width//2+290, 350), fill="#D97706", width=4)
-    rounded_rect(draw, (width//2-28, 337, width//2+28, 363), radius=12, fill="#F59E0B", outline=None)
-
-    cols, rows = 4, 8
-    margin_x, gap_x = 86, 34
-    start_y, gap_y = 405, 24
-    box_w = (width - 2 * margin_x - (cols - 1) * gap_x) // cols
-    box_h = 178
-
-    idx = 0
-    for r in range(rows):
-        for c in range(cols):
-            # c=0 يعني أقصى اليمين
-            x = width - margin_x - box_w - c * (box_w + gap_x)
-            y = start_y + r * (box_h + gap_y)
-
-            rounded_rect(draw, (x, y, x+box_w, y+box_h), radius=24, fill="#FFFFFF", outline="#CBD5E1", width=2)
-            rounded_rect(draw, (x+5, y+5, x+box_w-5, y+box_h-5), radius=20, fill="#FFFFFF", outline="#EEF2F7", width=1)
-            rounded_rect(draw, (x, y+box_h-44, x+box_w, y+box_h), radius=22, fill="#061633", outline=None)
-            draw.rectangle((x, y+box_h-44, x+box_w, y+box_h-20), fill="#061633")
-
-            if idx < len(teams):
-                team = teams[idx]
-                paste_flag(img, team, (x+box_w//2-74, y+23, x+box_w//2+74, y+101))
-                draw_text(draw, (x+box_w//2, y+box_h-23), team, get_font(27), fill="#FFFFFF", max_width=box_w-18)
-            else:
-                rounded_rect(draw, (x+box_w//2-76, y+30, x+box_w//2+76, y+105), radius=18, fill="#F8FAFC", outline="#E2E8F0", width=2)
-            idx += 1
-
-    draw_text(draw, (width//2, height-58), "المصيف يضعكم بالحدث", get_font(34), fill="#061633")
+    rounded_rect(draw, (width//2-50, 58, width//2+50, 110), radius=16, fill="#F59E0B", outline="#92400E", width=2)
+    draw_text(draw, (width//2, 84), "2026", get_font(25), fill="#061633")
+    draw_text(draw, (width//2, 175), "كأس العالم 2026", get_font(62), fill="#061633")
+    draw_text(draw, (width//2, 232), "المنتخبات المتأهلة إلى دور الـ 32", get_font(34), fill="#061633")
+    draw.line((width//2-185, 278, width//2-45, 278), fill=gold, width=3)
+    rounded_rect(draw, (width//2-24, 268, width//2+24, 288), radius=9, fill=gold)
+    draw.line((width//2+45, 278, width//2+185, 278), fill=gold, width=3)
+    cols, rows = 8, 4
+    margin_x, gap_x = 31, 14
+    start_y, gap_y = 344, 42
+    card_w = (width - 2 * margin_x - (cols - 1) * gap_x) // cols
+    card_h = 168
+    footer_h = 36
+    for idx in range(32):
+        r = idx // cols
+        col_from_right = idx % cols
+        c = cols - 1 - col_from_right
+        x = margin_x + c * (card_w + gap_x)
+        y = start_y + r * (card_h + gap_y)
+        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=13, fill="#FFFFFF", outline="#94A3B8", width=2)
+        rounded_rect(draw, (x, y+card_h-footer_h, x+card_w, y+card_h), radius=10, fill="#061633")
+        draw.rectangle((x, y+card_h-footer_h, x+card_w, y+card_h-footer_h+10), fill="#061633")
+        if idx < len(teams):
+            team = teams[idx]
+            paste_flag(img, team, (x+18, y+20, x+card_w-18, y+95))
+            draw_text(draw, (x+card_w//2, y+card_h-footer_h//2+1), team, get_font(18), fill="#FDE68A", max_width=card_w-8)
+    draw_text(draw, (width//2, height-46), "المصيف يضعكم بالحدث", get_font(24), fill="#061633")
     out = os.path.join(GENERATED_DIR, "qualified32_board.png")
     img.save(out, quality=96)
     return out
@@ -9232,100 +9223,69 @@ def news_header_title(kind):
 
 
 def render_news_card(kind, team, body):
+    """تصميم خبري فخم: المنتخب إن وجد، وإلا قالب عام بعنوان كأس العالم 2026."""
     ensure_generated_dir()
     width, height = 1200, 1350
     base, accent, txt2 = team_theme(team, kind)
-
-    # إذا ما فيه منتخب، القالب العام يكون كأس العالم 2026
-    if not team:
-        base, accent, txt2 = "#061633", "#F59E0B", "#FFFFFF"
-
     img = Image.new("RGB", (width, height), base)
     draw = ImageDraw.Draw(img)
-
     try:
         rgb1 = tuple(int(base.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
     except Exception:
-        rgb1 = (6, 22, 51)
-    rgb2 = (3, 7, 18)
+        rgb1 = (15, 23, 42)
     for y in range(height):
         t = y / max(height - 1, 1)
-        rr = int(rgb1[0] * (1 - t) + rgb2[0] * t)
-        gg = int(rgb1[1] * (1 - t) + rgb2[1] * t)
-        bb = int(rgb1[2] * (1 - t) + rgb2[2] * t)
+        rgb2 = (3, 7, 18)
+        rr = int(rgb1[0]*(1-t)+rgb2[0]*t)
+        gg = int(rgb1[1]*(1-t)+rgb2[1]*t)
+        bb = int(rgb1[2]*(1-t)+rgb2[2]*t)
         draw.line((0, y, width, y), fill=(rr, gg, bb))
-
-    ov = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    ov = Image.new("RGBA", (width, height), (0,0,0,0))
     od = ImageDraw.Draw(ov)
     try:
-        def hx(c):
-            c = c.lstrip("#")
-            return tuple(int(c[i:i+2], 16) for i in (0, 2, 4))
-        ar, ag, ab = hx(accent)
-        od.ellipse((width-500, 40, width+130, 610), fill=(ar, ag, ab, 70))
-        od.ellipse((-260, 690, 320, 1280), fill=(255, 255, 255, 28))
-        od.ellipse((180, -130, width-180, 300), fill=(255, 255, 255, 22))
-        for off in [0, 95, 190, 285]:
-            od.arc((790, 120 + off, 1150, 450 + off), 245, 100, fill=(255, 255, 255, 36), width=4)
-        ov = ov.filter(ImageFilter.GaussianBlur(8))
+        od.ellipse((width-455, 120, width+90, 640), fill=(255,255,255,30))
+        od.ellipse((-230, 700, 360, 1280), fill=(255,255,255,18))
+        od.rectangle((0, 0, width, 190), fill=(0,0,0,70))
+        for i in range(5):
+            od.arc((80+i*25, 40+i*18, width-80+i*25, 430+i*18), 185, 355, fill=(255,255,255,18), width=3)
+        ov = ov.filter(ImageFilter.GaussianBlur(7))
     except Exception:
         pass
     img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
     draw = ImageDraw.Draw(img)
-
-    rounded_rect(draw, (48, 48, width-48, height-48), radius=48, fill="#00000022", outline="#FFFFFF35", width=2)
-    rounded_rect(draw, (64, 64, width-64, height-64), radius=42, fill="#00000010", outline=accent, width=3)
-
-    title = news_header_title(kind)
-    title_fill = "#FFFFFF"
-    pill_fill = accent if kind in ["عاجل", "تأهل"] else "#081123"
-    pill_outline = "#FDE68A" if kind in ["عاجل", "تأهل"] else accent
-    rounded_rect(draw, (width//2-185, 86, width//2+185, 162), radius=28, fill=pill_fill, outline=pill_outline, width=3)
-    draw_text(draw, (width//2, 124), title, get_font(48), fill=title_fill)
-
+    rounded_rect(draw, (45, 55, width-45, height-80), radius=46, fill="#020617AA", outline="#FFFFFF55", width=3)
+    rounded_rect(draw, (61, 71, width-61, height-96), radius=40, fill="#02061755", outline=accent, width=4)
+    label = news_header_title(kind)
+    label_fill = accent
+    if kind == "عاجل":
+        label_fill = "#DC2626"
+    elif kind == "تأهل":
+        label_fill = "#16A34A"
+    elif kind == "إقصاء":
+        label_fill = "#991B1B"
+    rounded_rect(draw, (width//2-175, 105, width//2+175, 172), radius=22, fill=label_fill, outline="#FDE68A", width=2)
+    draw_text(draw, (width//2, 138), label, get_font(39), fill="#FFFFFF")
     if team:
-        rounded_rect(draw, (width//2-190, 198, width//2+190, 405), radius=36, fill="#FFFFFF18", outline="#FFFFFF35", width=2)
-        paste_flag(img, team, (width//2-132, 225, width//2+132, 345))
-        draw_text(draw, (width//2, 438), team, get_font(58), fill="#FFFFFF", max_width=980)
-        body_top = 520
+        rounded_rect(draw, (width//2-150, 220, width//2+150, 390), radius=28, fill="#FFFFFFE8", outline="#FFFFFF66", width=2)
+        paste_flag(img, team, (width//2-118, 248, width//2+118, 340))
+        draw_text(draw, (width//2, 435), team, get_font(50), fill="#FFFFFF", max_width=900)
+        comp_title_y = 520
     else:
-        draw_text(draw, (width//2, 255), "كأس العالم 2026", get_font(62), fill="#FFFFFF", max_width=980)
-        draw.line((width//2-250, 318, width//2-45, 318), fill=accent, width=4)
-        draw.line((width//2+45, 318, width//2+250, 318), fill=accent, width=4)
-        rounded_rect(draw, (width//2-28, 305, width//2+28, 331), radius=12, fill=accent, outline=None)
-        body_top = 415
-
-    card = (92, body_top, width-92, height-185)
-    shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(shadow)
-    rounded_rect(sd, (card[0]+12, card[1]+16, card[2]+12, card[3]+16), radius=44, fill="#00000075", outline=None)
-    try:
-        shadow = shadow.filter(ImageFilter.GaussianBlur(12))
-    except Exception:
-        pass
-    img = Image.alpha_composite(img.convert("RGBA"), shadow).convert("RGB")
-    draw = ImageDraw.Draw(img)
-
-    rounded_rect(draw, card, radius=44, fill="#061633E8", outline=accent, width=4)
-    rounded_rect(draw, (card[0]+14, card[1]+14, card[2]-14, card[3]-14), radius=36, fill="#0B1633B8", outline="#FFFFFF22", width=2)
-    draw.line((card[0]+75, card[1]+58, card[2]-75, card[1]+58), fill="#FFFFFF2E", width=2)
-    rounded_rect(draw, (width//2-90, card[1]+38, width//2+90, card[1]+78), radius=18, fill=accent, outline="#FFFFFF22", width=1)
-
-    font_size_main = 54 if len(body) < 95 else 48 if len(body) < 150 else 42
-    draw_text(
-        draw,
-        (width//2, (card[1]+card[3])//2 + 20),
-        body,
-        get_font(font_size_main),
-        fill="#FFFFFF",
-        max_width=850,
-        spacing=18
-    )
-
-    draw.line((240, height-124, width-240, height-124), fill="#FFFFFF45", width=2)
-    draw_text(draw, (width//2, height-86), "المصيف يضعكم بالحدث", get_font(34), fill="#FDE68A")
-
-    out = os.path.join(GENERATED_DIR, f"news_{_safe_filename(kind)}_{_safe_filename(team or 'worldcup')}.png")
+        draw_text(draw, (width//2, 272), "كأس العالم 2026", get_font(62), fill="#FFFFFF")
+        draw_text(draw, (width//2, 332), "مونديال المصيف", get_font(33), fill="#FDE68A")
+        comp_title_y = 445
+    card_top = comp_title_y + 80
+    card_bottom = height - 205
+    rounded_rect(draw, (90, card_top, width-90, card_bottom), radius=42, fill="#071633F2", outline=accent, width=4)
+    rounded_rect(draw, (105, card_top+15, width-105, card_bottom-15), radius=35, fill="#0B1738B8", outline="#FFFFFF35", width=2)
+    draw.line((150, card_top+45, width//2-75, card_top+45), fill="#FFFFFF66", width=2)
+    rounded_rect(draw, (width//2-70, card_top+25, width//2+70, card_top+65), radius=15, fill=label_fill, outline="#FFFFFF44", width=1)
+    draw.line((width//2+75, card_top+45, width-150, card_top+45), fill="#FFFFFF66", width=2)
+    body_font = 50 if len(body) <= 70 else 42 if len(body) <= 125 else 34
+    draw_text(draw, (width//2, (card_top+card_bottom)//2 + 15), body, get_font(body_font), fill="#FFFFFF", max_width=900, spacing=18)
+    draw.line((250, height-158, width-250, height-158), fill="#FFFFFF55", width=2)
+    draw_text(draw, (width//2, height-120), "المصيف يضعكم بالحدث", get_font(30), fill="#FDE68A")
+    out = os.path.join(GENERATED_DIR, f"news_{_safe_filename(kind)}_{_safe_filename(team or 'general')}.png")
     img.save(out, quality=96)
     return out
 
@@ -9484,14 +9444,24 @@ def _teams_match(event_team1, event_team2, req1, req2):
 
 
 def fetch_match_from_espn(team1, team2):
-    urls = [
-        "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
-        "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world_cup/scoreboard",
-    ]
+    """مصدر سريع: ESPN soccer/all. نجرب اليوم وحوله حتى لا يرجع 400 من league غير صحيح."""
+    date_values = [None]
+    try:
+        today = datetime.utcnow().date()
+        for off in range(-2, 8):
+            date_values.append((today + timedelta(days=off)).strftime("%Y%m%d"))
+    except Exception:
+        pass
     last_err = None
-    for url in urls:
+    for d in date_values:
+        url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?limit=1000"
+        if d:
+            url += f"&dates={d}"
         try:
             r = _requests_get(url)
+            if getattr(r, "status_code", 200) >= 400:
+                last_err = RuntimeError(f"HTTP {getattr(r, 'status_code', '')}")
+                continue
             data = r.json()
             for event in data.get("events", []) or []:
                 obj = _parse_espn_match_from_event(event)
@@ -9503,7 +9473,6 @@ def fetch_match_from_espn(team1, team2):
     if last_err:
         raise last_err
     return None
-
 
 def _parse_fifa_match_candidates(obj, req1, req2):
     for node in _iter_dict_nodes(obj):
@@ -9976,22 +9945,16 @@ async def current_groups_now_command(update: Update, context: ContextTypes.DEFAU
     try:
         groups, source_label = fetch_current_groups(mode)
         if not groups:
-            await update.message.reply_text(
-                "تعذر جلب ترتيب المجموعات من المصدر الحالي ❌\nاختر مصدر آخر:",
-                reply_markup=kb
-            )
+            await update.message.reply_text("تعذر جلب ترتيب المجموعات من المصدر الحالي.\n\nاختر مصدر آخر:", reply_markup=kb)
             return
         path = create_all_groups_image(groups)
         caption = f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)}"
         await send_photo_path_markup(update.message, path, caption, kb)
         await update.message.reply_text(build_groups_text(groups, mode_label_ar(mode)))
-    except Exception as e:
+    except Exception:
         await update.message.reply_text(
-            f"تعذر جلب ترتيب المجموعات من المصدر الحالي ❌\n"
-            f"المصدر الحالي: {mode_label_ar(mode)}\n"
-            f"السبب: {e}\n\n"
-            "اختر مصدر آخر:",
-            reply_markup=kb
+            f"تعذر جلب ترتيب المجموعات من مصدر {mode_label_ar(mode)} ❌\n\nاختر مصدر آخر:",
+            reply_markup=kb,
         )
 
 async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
@@ -10007,22 +9970,16 @@ async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE,
         data = fetch_live_match_data(team1, team2, mode)
         if not data:
             await update.message.reply_text(
-                f"ما لقيت مباراة {team1} ضد {team2} من المصدر الحالي ❌\n"
-                f"المصدر الحالي: {mode_label_ar(mode)}\n\n"
-                "اختر مصدر آخر:",
-                reply_markup=kb
+                f"ما لقيت مباراة {team1} ضد {team2} من المصدر الحالي.\n\nاختر مصدر آخر:",
+                reply_markup=kb,
             )
             return
         path = render_live_match_card(data, mode_label_ar(mode))
         await send_photo_path_markup(update.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
-    except Exception as e:
+    except Exception:
         await update.message.reply_text(
-            f"تعذر جلب المباراة من المصدر الحالي ❌\n"
-            f"المباراة: {team1} × {team2}\n"
-            f"المصدر الحالي: {mode_label_ar(mode)}\n"
-            f"السبب: {e}\n\n"
-            "اختر مصدر آخر:",
-            reply_markup=kb
+            f"تعذر جلب المباراة من المصدر الحالي ❌\nمباراة: {team1} × {team2}\nالمصدر الحالي: {mode_label_ar(mode)}\n\nاختر مصدر آخر:",
+            reply_markup=kb,
         )
 
 async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -10042,17 +9999,13 @@ async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_T
     if not payload:
         await query.message.reply_text("انتهت صلاحية الخيار، أعد تنفيذ الأمر من جديد.")
         return
-
-    kb = source_keyboard(context, payload)
     kind = payload.get("kind")
     try:
         if kind == "standings":
             groups, _src = fetch_current_groups(mode)
+            kb = source_keyboard(context, payload)
             if not groups:
-                await query.message.reply_text(
-                    f"تعذر جلب ترتيب المجموعات من مصدر {mode_label_ar(mode)} ❌\nاختر مصدر آخر:",
-                    reply_markup=kb
-                )
+                await query.message.reply_text(f"تعذر جلب ترتيب المجموعات من مصدر {mode_label_ar(mode)}.\n\nاختر مصدر آخر:", reply_markup=kb)
                 return
             path = create_all_groups_image(groups)
             await send_photo_path_markup(query.message, path, f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)}", kb)
@@ -10060,24 +10013,22 @@ async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_T
         elif kind == "live":
             team1 = payload.get("team1")
             team2 = payload.get("team2")
+            kb = source_keyboard(context, payload)
             data = fetch_live_match_data(team1, team2, mode)
             if not data:
-                await query.message.reply_text(
-                    f"ما لقيت مباراة {team1} ضد {team2} من مصدر {mode_label_ar(mode)} ❌\nاختر مصدر آخر:",
-                    reply_markup=kb
-                )
+                await query.message.reply_text(f"ما لقيت مباراة {team1} ضد {team2} من مصدر {mode_label_ar(mode)}.\n\nاختر مصدر آخر:", reply_markup=kb)
                 return
             path = render_live_match_card(data, mode_label_ar(mode))
             await send_photo_path_markup(query.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
         else:
             await query.message.reply_text("تعذر تحديد نوع الطلب.")
-    except Exception as e:
-        await query.message.reply_text(
-            f"تعذر جلب البيانات من مصدر {mode_label_ar(mode)} ❌\n"
-            f"السبب: {e}\n\n"
-            "اختر مصدر آخر:",
-            reply_markup=kb
-        )
+    except Exception:
+        if kind == "live":
+            await query.message.reply_text(f"تعذر جلب البيانات من مصدر {mode_label_ar(mode)} ❌\n\nاختر مصدر آخر:", reply_markup=source_keyboard(context, payload))
+        elif kind == "standings":
+            await query.message.reply_text(f"تعذر جلب ترتيب المجموعات من مصدر {mode_label_ar(mode)} ❌\n\nاختر مصدر آخر:", reply_markup=source_keyboard(context, payload))
+        else:
+            await query.message.reply_text("تعذر جلب البيانات الآن.")
 
 def main():
     if not TOKEN:
