@@ -6652,7 +6652,7 @@ def create_daily_result_image(day, goals_count=None, clean_sheets=None):
     legends = " و ".join(_clean_display_name(w) for w in data["winners"]) if data["winners"] else "لا يوجد"
     rounded_rect(draw, (90, fy1 + 18, 1010, fy1 + 145), radius=32, fill="#7C3AEDDD", outline="#FFFFFF40", width=2)
     draw_text(draw, (550, fy1 + 55), "أسطورة اليوم", get_font(27), fill="#FFFFFF")
-    draw_text(draw, (550, fy1 + 106), f"{legends} - {data['max_score']} نقطة", get_font(39), fill="#FFF6D6", max_width=850)
+    draw_text(draw, (550, fy1 + 106), f"{legends}\n{data['max_score']} نقطة", get_font(36), fill="#FFF6D6", max_width=850)
     rounded_rect(draw, (1040, fy1 + 18, 1310, fy1 + 145), radius=26, fill="#F59E0BDD", outline="#FFFFFF33", width=2)
     draw_text(draw, (1175, fy1 + 55), "المشاركون", get_font(24), fill="#FFFFFF")
     draw_text(draw, (1175, fy1 + 106), f"{len(data['participants'])}", get_font(44), fill="#FFFFFF")
@@ -7137,6 +7137,19 @@ def _display_time_en(t):
     tm = re.sub(r'(فجرًا|فجراً|فجرا|فجر|صباحًا|صباحا|ص|مساءً|مساء|م|AM|PM|am|pm)', '', s).strip()
     return f"{tm} {period}".strip()
 
+
+
+def _display_time_ar(t):
+    s = normalize_name(str(t or '').strip())
+    upper = s.upper()
+    if 'فجر' in s or 'ص' in s or 'AM' in upper:
+        period = 'ص'
+    elif 'م' in s or 'مساء' in s or 'PM' in upper:
+        period = 'م'
+    else:
+        period = ''
+    tm = re.sub(r'(فجرًا|فجراً|فجرا|فجر|صباحًا|صباحا|ص|مساءً|مساء|م|AM|PM|am|pm)', '', s).strip()
+    return f"{tm} {period}".strip()
 # -------------------- Parsers V27 --------------------
 
 def parse_matches_text(text):
@@ -7807,7 +7820,7 @@ def _multi_days_ar_date_label(raw):
         return ""
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
     if not m:
-        return f"( {raw} )"
+        return f"— {raw} —"
     d, mo, y = map(int, m.groups())
     ar_days = {
         0: "الاثنين",
@@ -7820,9 +7833,9 @@ def _multi_days_ar_date_label(raw):
     }
     try:
         dt = datetime(y, mo, d)
-        return f"( {ar_days.get(dt.weekday(), '')} {d:02d}/{mo:02d} )"
+        return f"— {ar_days.get(dt.weekday(), '')} {d:02d}/{mo:02d} —"
     except Exception:
-        return f"( {d:02d}/{mo:02d} )"
+        return f"— {d:02d}/{mo:02d} —"
 
 def create_multi_days_matches_image(schedule_blocks, style=4, max_blocks=6, wide_mode=False):
     ensure_generated_dir()
@@ -8604,7 +8617,7 @@ def create_day_choices_image(day):
     bottom = 96
     height = max(1360, top + len(rows) * (row_h + 10) + bottom)
     img, draw = design_canvas(None, width, height, "purple")
-    draw_design_header(draw, width, "تفاصيل اختيارات اللاعبين", f"فانتزي المصيف 2026 - اليوم {ordinal_day(day)}", img)
+    draw_design_header(draw, width, "تفاصيل اختيارات اللاعبين", f"فانتزي المصيف 2026\nاليوم {ordinal_day(day)}", img)
     fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=255, bottom_pad=96, accent="#06B6D4")
 
     cols = [
