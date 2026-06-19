@@ -6468,6 +6468,7 @@ def main():
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
     ensure_flags_assets()
     ensure_design_assets()
+    load_participants_state()
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/start"), start))
@@ -11539,6 +11540,554 @@ async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.message.reply_text("تعذر تحديد نوع الطلب.")
 
 
+
+# ==================== V5 FINAL PATCH: live sources + participants + news card polish ====================
+
+def _env_value(name, default=""):
+    try:
+        return (os.getenv(name) or default or "").strip()
+    except Exception:
+        return default or ""
+
+
+def serpapi_search_json(query, hl="ar", gl="sa", timeout=8, **kwargs):
+    """SerpApi Google JSON. يقبل timeout حتى لا يتعطل /بحث_قوقل و/مباشر."""
+    key = _serpapi_key() if '_serpapi_key' in globals() else _env_value('SERPAPI_KEY')
+    if not key:
+        raise RuntimeError("SERPAPI_KEY غير موجود في Railway")
+    params = {"engine": "google", "q": query, "hl": hl, "gl": gl, "api_key": key}
+    params.update(kwargs or {})
+    return _http_json_get("https://serpapi.com/search.json", params=params, timeout=timeout)
+
+
+def _norm_source_mode(mode):
+    m = normalize_name(mode or "").lower().strip()
+    table = {
+        "سريع": "google", "fast": "google", "google": "google", "قوقل": "google", "جوجل": "google",
+        "365": "365", "٣٦٥": "365", "365scores": "365", "365score": "365",
+        "كورة": "kooora", "كوره": "kooora", "kooora": "kooora", "koora": "kooora",
+        "رسمي": "official", "official": "official", "api": "official", "api-football": "official",
+        "الأحدث": "latest", "الاحدث": "latest", "latest": "latest",
+    }
+    return table.get(m, m or "official")
+
+
+def mode_label_ar(mode):
+    m = _norm_source_mode(mode)
+    return {
+        "google": "قوقل",
+        "365": "365",
+        "kooora": "كورة",
+        "official": "رسمي",
+        "latest": "الأحدث",
+    }.get(m, normalize_name(mode or "رسمي"))
+
+
+def source_keyboard(context, payload):
+    token = store_source_request(context, payload)
+    rows = [
+        [
+            InlineKeyboardButton("قوقل", callback_data=f"sportsrc|{token}|google"),
+            InlineKeyboardButton("365", callback_data=f"sportsrc|{token}|365"),
+            InlineKeyboardButton("كورة", callback_data=f"sportsrc|{token}|kooora"),
+        ],
+        [
+            InlineKeyboardButton("رسمي", callback_data=f"sportsrc|{token}|official"),
+            InlineKeyboardButton("الأحدث", callback_data=f"sportsrc|{token}|latest"),
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def parse_live_command_text(text):
+    body = parse_command_body_lines(text)
+    raw = " ".join(body)
+    parts = [normalize_name(x) for x in raw.split("*") if normalize_name(x)]
+    mode = "google"
+    date_hint = _parse_live_date_from_text(raw) if '_parse_live_date_from_text' in globals() else None
+    source_words = {"رسمي", "سريع", "الأحدث", "الاحدث", "official", "fast", "latest", "google", "قوقل", "جوجل", "365", "٣٦٥", "365scores", "كورة", "كوره", "kooora", "koora", "api"}
+    while len(parts) >= 3:
+        last = normalize_name(parts[-1])
+        if last.lower() in [x.lower() for x in source_words] or last in source_words:
+            mode = last
+            parts = parts[:-1]
+            continue
+        d = _parse_live_date_from_text(last) if '_parse_live_date_from_text' in globals() else None
+        if d:
+            date_hint = d
+            parts = parts[:-1]
+            continue
+        break
+    if len(parts) < 2:
+        return None, None, _norm_source_mode(mode), date_hint
+    return canonical_team_name(parts[0]) or normalize_name(parts[0]), canonical_team_name(parts[1]) or normalize_name(parts[1]), _norm_source_mode(mode), date_hint
+
+
+def _team_variants_for_text(team):
+    can = canonical_team_name(team) or normalize_name(team)
+    vals = [can]
+    try:
+        vals += TEAM_SEARCH_EN.get(can, []) or []
+    except Exception:
+        pass
+    vals += [simple_key(v) for v in list(vals)]
+    out = []
+    for v in vals:
+        v = normalize_name(v)
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def _blob_has_both_teams(blob, team1, team2):
+    low = str(blob).lower()
+    simp = simple_key(str(blob))
+    def has(team):
+        for v in _team_variants_for_text(team):
+            if v.lower() in low or simple_key(v) in simp:
+                return True
+        return False
+    return has(team1) and has(team2)
+
+
+def _score_from_text_near_teams(text_blob, team1, team2):
+    """Fallback: يلقط نتيجة مثل Mexico 1-0 Korea أو المكسيك 1 - 0 كوريا."""
+    blob = str(text_blob)
+    if not _blob_has_both_teams(blob, team1, team2):
+        return None
+    patterns = [
+        r"(\d{1,2})\s*[-–:]\s*(\d{1,2})",
+        r"(\d{1,2})\s+vs\s+(\d{1,2})",
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, blob, flags=re.I):
+            a, b = m.group(1), m.group(2)
+            if a is not None and b is not None:
+                status = "انتهت المباراة" if re.search(r"final|full.?time|نهاية|انته", blob, re.I) else "حسب المصدر"
+                return {"score1": a, "score2": b, "status": status}
+    return None
+
+
+def _parse_serp_sports_node_v5(node, req1, req2, source_name="Google Sports"):
+    try:
+        obj = _parse_serp_sports_node(node, req1, req2)
+        if obj:
+            obj["source"] = source_name if obj.get("source") in (None, "Google Sports", "Google Search") else obj.get("source")
+            return obj
+    except Exception:
+        pass
+    if not isinstance(node, dict):
+        return None
+    # More Google variants: game_spotlight sometimes has team_comparison / game_status and team scores nested.
+    names, scores = [], []
+    for n in _walk_json(node):
+        if isinstance(n, dict):
+            nm = _team_name_from_any(n) if '_team_name_from_any' in globals() else ""
+            if nm and any(_blob_has_both_teams(nm, nm, req) for req in [req1, req2]):
+                if nm not in names:
+                    names.append(nm)
+                    scores.append(_score_from_any(n) if '_score_from_any' in globals() else "0")
+    if len(names) >= 2 and _match_pair_names(names[0], names[1], req1, req2):
+        return {
+            "team1": canonical_team_name(names[0]) or names[0], "team2": canonical_team_name(names[1]) or names[1],
+            "score1": scores[0] if scores else "0", "score2": scores[1] if len(scores) > 1 else "0",
+            "status": _status_from_serp_node(node) if '_status_from_serp_node' in globals() else "حسب المصدر",
+            "minute": "", "scorers": _collect_scorers_from_serp_node(node) if '_collect_scorers_from_serp_node' in globals() else [],
+            "source": source_name,
+        }
+    return None
+
+
+def _serpapi_query_candidates(team1, team2, date_hint=None, source="google"):
+    ar1, ar2 = canonical_team_name(team1) or normalize_name(team1), canonical_team_name(team2) or normalize_name(team2)
+    en1 = team_query_name(ar1) if 'team_query_name' in globals() else ar1
+    en2 = team_query_name(ar2) if 'team_query_name' in globals() else ar2
+    qs = []
+    if source == "365":
+        base = [
+            f"site:365scores.com {ar1} {ar2} كأس العالم 2026",
+            f"site:365scores.com {en1} {en2} FIFA World Cup 2026 score",
+        ]
+    elif source == "kooora":
+        base = [
+            f"site:kooora.com {ar1} {ar2} كأس العالم 2026",
+            f"site:kooora.com {en1} {en2} FIFA World Cup 2026 score",
+        ]
+    else:
+        base = [
+            f"مباراة {ar1} {ar2}",
+            f"{en1} vs {en2} FIFA World Cup 2026",
+            f"{en1} {en2} score",
+        ]
+    if date_hint:
+        qs.extend([f"{q} {date_hint}" for q in base])
+    qs.extend(base)
+    out, seen = [], set()
+    for q in qs:
+        q = normalize_name(q)
+        if q and q not in seen:
+            seen.add(q); out.append(q)
+    return out
+
+
+def _fetch_match_from_serp_source(team1, team2, date_hint=None, source="google"):
+    if not _serpapi_key():
+        return None
+    req1 = canonical_team_name(team1) or normalize_name(team1)
+    req2 = canonical_team_name(team2) or normalize_name(team2)
+    source_name = {"google": "Google Sports", "365": "365Scores عبر Google", "kooora": "Kooora عبر Google"}.get(source, "Google")
+    for q in _serpapi_query_candidates(req1, req2, date_hint, source=source):
+        for hl, gl in [("ar", "sa"), ("en", "us")]:
+            data = serpapi_search_json(q, hl=hl, gl=gl, timeout=8)
+            roots = []
+            sr = data.get("sports_results") if isinstance(data, dict) else None
+            if isinstance(sr, dict):
+                roots.append(sr)
+                for k in ["game_spotlight", "games", "matches", "scoreboard", "team_standings"]:
+                    if isinstance(sr.get(k), (dict, list)):
+                        roots.append(sr.get(k))
+            roots.append(data)
+            for root in roots:
+                for node in _walk_json(root):
+                    obj = _parse_serp_sports_node_v5(node, req1, req2, source_name=source_name)
+                    if obj:
+                        return obj
+            # Snippets fallback from organic results / answer box
+            blob = json.dumps(data, ensure_ascii=False)
+            s = _score_from_text_near_teams(blob, req1, req2)
+            if s:
+                return {
+                    "team1": req1, "team2": req2, "score1": s["score1"], "score2": s["score2"],
+                    "status": s.get("status") or "حسب المصدر", "minute": "", "scorers": [], "source": source_name,
+                }
+    return None
+
+
+def fetch_match_from_serpapi(team1, team2, date_hint=None):
+    return _fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="google")
+
+
+def fetch_match_from_365(team1, team2, date_hint=None):
+    return _fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="365")
+
+
+def fetch_match_from_kooora(team1, team2, date_hint=None):
+    return _fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="kooora")
+
+
+def _source_mode_sequence(mode):
+    m = _norm_source_mode(mode)
+    if m == "google":
+        return ["google"]
+    if m == "365":
+        return ["365"]
+    if m == "kooora":
+        return ["kooora"]
+    if m == "official":
+        return ["api", "fifa", "espn", "google"]
+    if m == "latest":
+        return ["google", "365", "kooora", "api", "fifa", "espn"]
+    return ["google", "365", "kooora", "api"]
+
+
+def fetch_live_match_data(team1, team2, mode="google", date_hint=None):
+    errors = []
+    for src in _source_mode_sequence(mode):
+        try:
+            if src == "google":
+                obj = fetch_match_from_serpapi(team1, team2, date_hint=date_hint)
+            elif src == "365":
+                obj = fetch_match_from_365(team1, team2, date_hint=date_hint)
+            elif src == "kooora":
+                obj = fetch_match_from_kooora(team1, team2, date_hint=date_hint)
+            elif src == "api":
+                obj = fetch_match_from_api_football(team1, team2, date_hint=date_hint)
+            elif src == "espn":
+                obj = fetch_match_from_espn(team1, team2, date_hint=date_hint)
+            else:
+                obj = fetch_match_from_fifa(team1, team2)
+            if obj:
+                obj.setdefault("status", "حسب المصدر")
+                obj.setdefault("source", mode_label_ar(src))
+                return obj
+        except Exception as e:
+            errors.append(f"{src}: {str(e)[:90]}")
+            continue
+    return None
+
+
+async def google_search_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = parse_command_body_lines(update.message.text)
+    query = " ".join(q).strip() or "مباراة المكسيك كوريا الجنوبية"
+    try:
+        data = serpapi_search_json(query, timeout=8)
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        lines = [f"✅ وصلنا إلى قوقل عبر SerpApi", f"البحث: {query}"]
+        if isinstance(sr, dict):
+            lines.append("✅ sports_results موجود")
+            title = sr.get("title") or sr.get("league") or sr.get("game") or ""
+            if title:
+                lines.append(f"العنوان: {title}")
+            blob = json.dumps(sr, ensure_ascii=False)
+            m = re.search(r"(.{0,60}\d{1,2}\s*[-–:]\s*\d{1,2}.{0,60})", blob)
+            if m:
+                lines.append(f"لقطة نتيجة: {m.group(1)}")
+        else:
+            lines.append("⚠️ لم يظهر sports_results في هذا البحث")
+        await update.message.reply_text("\n".join(lines[:12]))
+    except Exception as e:
+        await update.message.reply_text(f"❌ فشل فحص قوقل: {str(e)[:200]}")
+
+
+async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    team1, team2, mode, date_hint = parse_live_command_text(update.message.text if getattr(update, 'message', None) else "")
+    if mode_override:
+        mode = _norm_source_mode(mode_override)
+    if not team1 or not team2:
+        await update.message.reply_text("اكتبها كذا:\n/مباشر السعودية * إسبانيا\nأو\n/مباشر المكسيك * كوريا الجنوبية * سريع\nأو بتاريخ محدد:\n/مباشر المكسيك * كوريا الجنوبية * 18/06/2026 * سريع")
+        return
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
+    kb = source_keyboard(context, payload)
+    wait_msg = await update.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}" + (f"\nالتاريخ: {date_hint}" if date_hint else ""))
+    data = fetch_live_match_data(team1, team2, mode, date_hint=date_hint)
+    if not data:
+        await wait_msg.edit_text(
+            f"تعذر جلب المباراة من مصدر {mode_label_ar(mode)} ❌\nمباراة: {team1} × {team2}\n" + (f"التاريخ: {date_hint}\n" if date_hint else "") + "\nاختر مصدر آخر:",
+            reply_markup=kb,
+        )
+        return
+    try:
+        await wait_msg.delete()
+    except Exception:
+        pass
+    path = render_live_match_card(data, mode_label_ar(mode))
+    await send_photo_path_markup(update.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+
+
+async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    if not is_admin_user(update):
+        await query.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+    parts = (query.data or "").split("|")
+    if len(parts) != 3:
+        await query.message.reply_text("تعذر قراءة الخيار.")
+        return
+    _tag, token, mode = parts
+    mode = _norm_source_mode(mode)
+    payload = context.bot_data.get("sports_source_requests", {}).get(token)
+    if not payload:
+        await query.message.reply_text("انتهت صلاحية الخيار، أعد تنفيذ الأمر من جديد.")
+        return
+    kind = payload.get("kind")
+    kb = source_keyboard(context, payload)
+    if kind == "standings":
+        groups, src = fetch_current_groups(mode)
+        if not groups:
+            await query.message.reply_text(_source_help_text("standings", mode) + "\n\nاختر مصدر آخر:", reply_markup=kb)
+            return
+        path = create_all_groups_image(groups)
+        await send_photo_path_markup(query.message, path, f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)} ({src})", kb)
+        await query.message.reply_text(build_groups_text(groups, f"{mode_label_ar(mode)} ({src})"))
+        return
+    if kind == "live":
+        team1, team2 = payload.get("team1"), payload.get("team2")
+        msg = await query.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}")
+        data = fetch_live_match_data(team1, team2, mode, date_hint=payload.get("date_hint"))
+        if not data:
+            await msg.edit_text(f"تعذر جلب مباراة {team1} × {team2} من مصدر {mode_label_ar(mode)} ❌\n\nاختر مصدر آخر:", reply_markup=kb)
+            return
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        path = render_live_match_card(data, mode_label_ar(mode))
+        await send_photo_path_markup(query.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+        return
+    await query.message.reply_text("تعذر تحديد نوع الطلب.")
+
+
+async def current_groups_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    text = update.message.text if getattr(update, 'message', None) else ""
+    mode = mode_override
+    if not mode:
+        m = re.search(r"\*\s*(رسمي|سريع|الأحدث|الاحدث|official|fast|latest|google|قوقل|365|٣٦٥|كورة|كوره|kooora)\s*$", text or "", re.I)
+        mode = m.group(1) if m else "latest"
+    payload = {"kind": "standings"}
+    kb = source_keyboard(context, payload)
+    groups, source_label = fetch_current_groups(mode)
+    if not groups:
+        await update.message.reply_text(_source_help_text("standings", mode) + "\n\nاختر مصدر آخر:", reply_markup=kb)
+        return
+    path = create_all_groups_image(groups)
+    caption = f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)} ({source_label})"
+    await send_photo_path_markup(update.message, path, caption, kb)
+    await update.message.reply_text(build_groups_text(groups, f"{mode_label_ar(mode)} ({source_label})"))
+
+
+def _paste_flag_cover(base, team_name, box, radius=24):
+    path = flag_path_for(team_name)
+    x1, y1, x2, y2 = [int(v) for v in box]
+    w, h = x2-x1, y2-y1
+    if path and os.path.exists(path):
+        try:
+            flag = Image.open(path).convert("RGBA")
+            flag = _crop_alpha_content(flag) if '_crop_alpha_content' in globals() else flag
+            scale = max(w / max(flag.width,1), h / max(flag.height,1))
+            nw, nh = int(flag.width * scale + .5), int(flag.height * scale + .5)
+            flag = flag.resize((nw, nh), Image.LANCZOS)
+            left, top = max(0, (nw-w)//2), max(0, (nh-h)//2)
+            flag = flag.crop((left, top, left+w, top+h))
+            mask = _rounded_mask(w, h, radius) if '_rounded_mask' in globals() else None
+            base.paste(flag, (x1, y1), mask or flag)
+            return
+        except Exception:
+            pass
+    d = ImageDraw.Draw(base)
+    rounded_rect(d, box, radius=radius, fill="#FFFFFF", outline="#FFFFFFAA", width=2)
+    draw_text(d, ((x1+x2)//2, (y1+y2)//2), normalize_name(team_name)[:2], get_font(44), fill="#0B1635")
+
+
+def render_news_card(kind, team, body):
+    """V5: خبر/عاجل — العلم يملأ الخانة والصندوق يتناسب مع طول الخبر."""
+    ensure_generated_dir()
+    width, height = 1200, 1350
+    base, accent, _ = team_theme(team, kind)
+    label = news_header_title(kind)
+    if kind == "عاجل":
+        badge, accent2 = "#DC2626", "#F59E0B"
+    elif kind in ["تأهل", "رسميًا"]:
+        badge, accent2 = "#16A34A", "#F59E0B"
+    elif kind in ["إقصاء", "اقصاء"]:
+        badge, accent2 = "#B91C1C", "#FB923C"
+    else:
+        badge, accent2 = "#2563EB", "#38BDF8"
+
+    img = _style4_clean_background(width, height)
+    overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
+    # tint by team/accent
+    try:
+        rgb = tuple(int((base or '#123456').lstrip('#')[i:i+2],16) for i in (0,2,4))
+    except Exception:
+        rgb = (8, 31, 22)
+    od.rectangle((0,0,width,height), fill=rgb+(116,))
+    # subtle spotlight
+    for r, alpha in [(540,42),(390,34),(250,26)]:
+        od.ellipse((width-r-80, 80, width+180, 80+r+260), fill=(255,255,255,alpha))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay)
+    draw = ImageDraw.Draw(img)
+
+    # top badge
+    rounded_rect(draw, (width//2-170, 95, width//2+170, 170), radius=26, fill=badge, outline=accent2, width=2)
+    draw_text(draw, (width//2, 133), label, get_font(42), fill="#FFFFFF")
+
+    title = canonical_team_name(team) if team else None
+    if title:
+        flag_box = (width//2-175, 230, width//2+175, 375)
+        rounded_rect(draw, flag_box, radius=28, fill="#FFFFFF", outline="#FFFFFF", width=2)
+        _paste_flag_cover(img, title, flag_box, radius=28)
+        draw_text(draw, (width//2, 445), title, get_font(52), fill="#FFFFFF", max_width=700)
+    else:
+        draw_text(draw, (width//2, 330), "كأس العالم 2026", get_font(62), fill="#FFFFFF", max_width=850)
+
+    # smart story card size
+    body = clean_draw_text(body or "")
+    maxw = 840
+    size = 58 if len(body) <= 25 else 52 if len(body) <= 55 else 44 if len(body) <= 95 else 38
+    font = get_font(size)
+    temp_draw = ImageDraw.Draw(img)
+    lines = wrap_text(temp_draw, body, font, maxw) if 'wrap_text' in globals() else [body]
+    line_h = int(size * 1.42)
+    content_h = max(1, len(lines)) * line_h
+    card_h = min(430, max(210, content_h + 120))
+    card_y1 = 565 if title else 520
+    card_y2 = card_y1 + card_h
+    rounded_rect(draw, (90, card_y1, width-90, card_y2), radius=34, fill="#07132FEE", outline=accent2, width=4)
+    rounded_rect(draw, (110, card_y1+18, width-110, card_y2-18), radius=26, fill=None, outline="#FFFFFF77", width=2)
+    # small top ornament
+    rounded_rect(draw, (width//2-75, card_y1-16, width//2+75, card_y1+18), radius=14, fill=badge, outline=accent2, width=1)
+    draw.line((150, card_y1+48, width//2-90, card_y1+48), fill="#FFFFFF77", width=2)
+    draw.line((width//2+90, card_y1+48, width-150, card_y1+48), fill="#FFFFFF77", width=2)
+    start_y = (card_y1 + card_y2)//2 - content_h//2 + line_h//2 - 5
+    for i, line in enumerate(lines):
+        draw_text(draw, (width//2, start_y + i*line_h), line, font, fill="#FFFFFF", max_width=maxw)
+
+    fy = min(height-118, card_y2 + 95)
+    draw.line((220, fy, width-220, fy), fill="#FFFFFFBB", width=2)
+    draw_text(draw, (width//2, fy+42), "المصيف يضعكم بالحدث", get_font(26), fill="#FDE68A")
+    path = os.path.join(GENERATED_DIR, f"news_{_safe_filename(kind)}_{_safe_filename(title or 'worldcup')}.png")
+    img.convert("RGB").save(path, quality=96)
+    return path
+
+
+PARTICIPANTS_STATE_FILE = "participants_state.json"
+
+
+def _save_participants_state():
+    try:
+        with open(PARTICIPANTS_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"participants": PARTICIPANTS}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_participants_state():
+    try:
+        if os.path.exists(PARTICIPANTS_STATE_FILE):
+            with open(PARTICIPANTS_STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            arr = [normalize_name(x) for x in data.get("participants", []) if normalize_name(x)]
+            if arr:
+                PARTICIPANTS[:] = arr
+                return
+    except Exception:
+        pass
+    _save_participants_state()
+
+
+async def add_participant_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = normalize_name(parse_command_body(update.message.text)) if 'parse_command_body' in globals() else normalize_name(re.sub(r"^/\S+", "", update.message.text or ""))
+    if not name:
+        await update.message.reply_text("اكتبها كذا:\n/إضافة_متسابق عبدالله محمد")
+        return
+    if name in PARTICIPANTS:
+        await update.message.reply_text(f"✅ {name} موجود مسبقًا في قائمة المتسابقين")
+        return
+    PARTICIPANTS.append(name)
+    _save_participants_state()
+    await update.message.reply_text(f"✅ تمت إضافة المتسابق: {name}\nالمجموع الحالي: {len(PARTICIPANTS)}")
+
+
+async def remove_participant_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = normalize_name(parse_command_body(update.message.text)) if 'parse_command_body' in globals() else normalize_name(re.sub(r"^/\S+", "", update.message.text or ""))
+    if not name:
+        await update.message.reply_text("اكتبها كذا:\n/حذف_متسابق عبدالله محمد")
+        return
+    # exact or close
+    target = name if name in PARTICIPANTS else None
+    if not target:
+        close = difflib.get_close_matches(name, PARTICIPANTS, n=1, cutoff=0.75)
+        target = close[0] if close else None
+    if not target:
+        await update.message.reply_text(f"ما لقيت المتسابق: {name} ❌")
+        return
+    PARTICIPANTS.remove(target)
+    _save_participants_state()
+    await update.message.reply_text(f"✅ تم حذف المتسابق: {target}\nالمجموع الحالي: {len(PARTICIPANTS)}")
+
+
+async def participants_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lines = [f"👥 المتسابقون ({len(PARTICIPANTS)}):"]
+    for i, name in enumerate(PARTICIPANTS, start=1):
+        lines.append(f"{i}- {name}")
+    await update.message.reply_text("\n".join(lines))
+
+# ==================== END V5 FINAL PATCH ====================
+
 def main():
     if not TOKEN:
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
@@ -11627,6 +12176,11 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_الكاس(?:\s|$)"), admin_only(cancel_cup_command)))
 
     # فانتزي أساسي
+    # إدارة المتسابقين
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:إضافة_متسابق|اضافة_متسابق)(?:\s|$)"), admin_only(add_participant_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:حذف_متسابق|ازالة_متسابق|إزالة_متسابق)(?:\s|$)"), admin_only(remove_participant_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المتسابقين(?:\s|$)"), admin_only(participants_list_command)))
+
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه"), admin_only(add_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_نتائج(?:\s|$)"), admin_only(approve_results_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), admin_only(results_day)))
