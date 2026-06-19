@@ -3503,6 +3503,28 @@ def load_flags_map():
                 data[normalize_name(k).lower()] = v
         except Exception:
             pass
+
+    # Aliases إضافية عشان الأعلام تطلع حتى لو كتبنا الاسم بصيغة مختلفة.
+    alias_groups = [
+        ["الولايات المتحدة", "الولايات المتحدة الأمريكية", "امريكا", "أمريكا", "اميركا", "أميركا", "USA", "US", "United States", "United States of America"],
+        ["باراغواي", "الباراغواي", "بارجواي", "Paraguay"],
+        ["اسكتلندا", "إسكتلندا", "سكوتلندا", "Scotland"],
+        ["ساحل العاج", "كوت ديفوار", "Ivory Coast", "Cote dIvoire", "Côte d’Ivoire"],
+        ["كوريا الجنوبية", "كوريا الجنوبيه", "South Korea", "Korea Republic"],
+    ]
+    for group in alias_groups:
+        filename = None
+        for key in group:
+            nk = normalize_name(key)
+            filename = data.get(nk) or data.get(nk.lower())
+            if filename:
+                break
+        if filename:
+            for key in group:
+                nk = normalize_name(key)
+                data[nk] = filename
+                data[nk.lower()] = filename
+
     return data
 
 
@@ -7834,7 +7856,7 @@ def _multi_days_ar_date_label(raw):
         return ""
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
     if not m:
-        return f"— {raw} —"
+        return raw
     d, mo, y = map(int, m.groups())
     ar_days = {
         0: "الاثنين",
@@ -7847,9 +7869,9 @@ def _multi_days_ar_date_label(raw):
     }
     try:
         dt = datetime(y, mo, d)
-        return f"— {ar_days.get(dt.weekday(), '')} {d:02d}/{mo:02d} —"
+        return f"{ar_days.get(dt.weekday(), '')} {d:02d}/{mo:02d}"
     except Exception:
-        return f"— {d:02d}/{mo:02d} —"
+        return f"{d:02d}/{mo:02d}"
 
 def create_multi_days_matches_image(schedule_blocks, style=4, max_blocks=6, wide_mode=False):
     ensure_generated_dir()
@@ -7859,66 +7881,85 @@ def create_multi_days_matches_image(schedule_blocks, style=4, max_blocks=6, wide
         raise ValueError("لا توجد مباريات")
 
     if wide_mode:
-        width = 2100
+        # نسخة 10 أيام: أكبر وأفخم بصريًا، لكنها تبقى صورة واحدة.
+        width = 2200
         cols = 2 if len(blocks) > 1 else 1
-        margin_x = 90 if cols == 2 else 260
-        gap_x = 54
-        start_y = 330
-        gap_y = 38
-        min_height = 1320
-        max_height = 3000
-        title_size = 82
-        sub_size = 44
-        date_size = 34
-        row_font = 27
-        row_h = 62
-        card_pad = 22
+        margin_x = 105 if cols == 2 else 280
+        gap_x = 62
+        start_y = 380
+        gap_y = 48
+        min_height = 1500
+        max_height = 3600
+        title_size = 92
+        sub_size = 48
+        date_size = 38
+        row_font = 31
+        row_h = 74
+        card_pad = 26
         max_matches_per_day = 6
+        flag_w, flag_h = 64, 42
+        team_gap = 190
+        time_font = 26
     else:
         width = 1800
         cols = 2 if len(blocks) > 1 else 1
         margin_x = 85 if cols == 2 else 210
         gap_x = 45
-        start_y = 325
-        gap_y = 34
+        start_y = 330
+        gap_y = 36
         min_height = 1180
-        max_height = 2300
+        max_height = 2400
         title_size = 76
         sub_size = 42
-        date_size = 30
-        row_font = 25
-        row_h = 58
-        card_pad = 18
+        date_size = 32
+        row_font = 26
+        row_h = 61
+        card_pad = 20
         max_matches_per_day = 6
+        flag_w, flag_h = 48, 31
+        team_gap = 158
+        time_font = 22
 
     card_w = (width - 2 * margin_x - (cols - 1) * gap_x) // cols
 
     card_heights = []
     for _date_txt, matches in blocks:
         n = max(1, min(len(matches or []), max_matches_per_day))
-        ch = 100 + n * row_h + max(0, n - 1) * 8 + 34
-        card_heights.append(max(270, min(690 if wide_mode else 610, ch)))
+        ch = 108 + n * row_h + max(0, n - 1) * 9 + 40
+        card_heights.append(max(292, min(760 if wide_mode else 640, ch)))
 
     rows_count = (len(blocks) + cols - 1) // cols
     row_heights = []
     for r in range(rows_count):
         row_cards = card_heights[r * cols:(r + 1) * cols]
-        row_heights.append(max(row_cards) if row_cards else 270)
+        row_heights.append(max(row_cards) if row_cards else 292)
 
-    height = int(start_y + sum(row_heights) + gap_y * max(0, rows_count - 1) + 140)
+    height = int(start_y + sum(row_heights) + gap_y * max(0, rows_count - 1) + 165)
     height = max(min_height, min(max_height, height))
 
     img, draw = _games_day_background(width, height)
+
+    # طبقة فخامة/تعتيم ناعمة فوق الخلفية
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay)
-    rounded_rect(od, (48, 48, width - 48, height - 48), radius=42, fill="#03112A55", outline="#FFFFFF22", width=2)
+    rounded_rect(od, (46, 46, width - 46, height - 46), radius=50, fill="#03112A77", outline="#FFFFFF28", width=2)
+    rounded_rect(od, (60, 60, width - 60, height - 60), radius=44, fill="#061B4938", outline="#14B8F555", width=2)
+    try:
+        od.ellipse((width-420, 90, width+150, 620), fill="#0EA5E950")
+        od.ellipse((-260, 220, 300, 830), fill="#1D4ED850")
+        overlay = overlay.filter(ImageFilter.GaussianBlur(12))
+    except Exception:
+        pass
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(img)
 
-    draw_text(draw, (width // 2, 95), "مباريات الأيام", get_font(title_size), fill="#FFFFFF", max_width=width - 160)
-    draw_text(draw, (width // 2, 178), "جدول مباريات عدة أيام", get_font(sub_size), fill="#FBBF24", max_width=900)
-    draw.line((width // 2 - 430, 235, width // 2 + 430, 235), fill="#FFFFFF45", width=2)
+    # عنوان أفخم
+    rounded_rect(draw, (width//2 - 560, 64, width//2 + 560, 222), radius=42, fill="#061633CC", outline="#FFFFFF22", width=2)
+    draw_text(draw, (width // 2, 112), "مباريات الأيام", get_font(title_size), fill="#FFFFFF", max_width=width - 180)
+    draw_text(draw, (width // 2, 192), "جدول مباريات عدة أيام", get_font(sub_size), fill="#FBBF24", max_width=980)
+    draw.line((width // 2 - 470, 260, width // 2 + 470, 260), fill="#FBBF2477", width=3)
 
+    # يبدأ من اليمين لليسار
     x_positions = [margin_x] if cols == 1 else [width - margin_x - card_w, margin_x]
     y_cursor = start_y
     for idx, (date_txt, matches) in enumerate(blocks):
@@ -7931,49 +7972,58 @@ def create_multi_days_matches_image(schedule_blocks, style=4, max_blocks=6, wide
         y = y_cursor
         card_h = row_heights[r]
 
-        rounded_rect(draw, (x, y, x + card_w, y + card_h), radius=30, fill="#0638A5E8", outline="#14B8F5", width=3)
-        rounded_rect(draw, (x + card_pad, y + 18, x + card_w - card_pad, y + 80), radius=18, fill="#FBBF24", outline="#00000055", width=1)
-        draw_text(draw, (x + card_w // 2, y + 49), _multi_days_ar_date_label(date_txt), get_font(date_size), fill="#061633", max_width=card_w - 44)
+        # كرت اليوم
+        rounded_rect(draw, (x, y, x + card_w, y + card_h), radius=34, fill="#052C83EE", outline="#38BDF8", width=4)
+        rounded_rect(draw, (x + 6, y + 6, x + card_w - 6, y + card_h - 6), radius=30, fill="#06163355", outline="#1D4ED880", width=2)
 
-        yy = y + 102
+        # شريط التاريخ بدون رموز تسبب مربعات
+        rounded_rect(draw, (x + card_pad, y + 18, x + card_w - card_pad, y + 88), radius=20, fill="#FBBF24", outline="#FFFFFF55", width=2)
+        draw.line((x + card_pad + 28, y + 82, x + card_w - card_pad - 28, y + 82), fill="#7C2D1288", width=2)
+        draw_text(draw, (x + card_w // 2, y + 53), _multi_days_ar_date_label(date_txt), get_font(date_size), fill="#061633", max_width=card_w - 70)
+
+        yy = y + 112
         match_list = list(matches or [])[:max_matches_per_day]
         if not match_list:
-            rounded_rect(draw, (x + 28, yy, x + card_w - 28, yy + row_h), radius=14, fill="#0A1638E8", outline="#FFFFFF22", width=1)
+            rounded_rect(draw, (x + 30, yy, x + card_w - 30, yy + row_h), radius=16, fill="#07132FEE", outline="#FFFFFF28", width=1)
             draw_text(draw, (x + card_w // 2, yy + row_h // 2), "لا توجد مباريات", get_font(row_font), fill="#FFFFFF")
         else:
-            for team1, team2, t in match_list:
-                rounded_rect(draw, (x + 28, yy, x + card_w - 28, yy + row_h), radius=14, fill="#0A1638E8", outline="#FFFFFF22", width=1)
+            for row_index, (team1, team2, t) in enumerate(match_list):
+                row_fill = "#07132FEE" if row_index % 2 == 0 else "#0A1D44EE"
+                rounded_rect(draw, (x + 30, yy, x + card_w - 30, yy + row_h), radius=16, fill=row_fill, outline="#38BDF840", width=2)
+
                 tx = x + card_w // 2
-                tbox_w = 118 if wide_mode else 108
-                rounded_rect(draw, (tx - tbox_w // 2, yy + 10, tx + tbox_w // 2, yy + row_h - 10), radius=12, fill="#081123", outline="#FBBF24", width=2)
-                draw_text(draw, (tx, yy + row_h // 2), _display_time_ar(t), get_font(23 if wide_mode else 21), fill="#FBBF24")
+                tbox_w = 140 if wide_mode else 116
+                rounded_rect(draw, (tx - tbox_w // 2, yy + 11, tx + tbox_w // 2, yy + row_h - 11), radius=14, fill="#081123", outline="#FBBF24", width=2)
+                draw_text(draw, (tx, yy + row_h // 2), _display_time_ar(t), get_font(time_font), fill="#FBBF24", max_width=tbox_w-12)
 
-                left_flag = flag_of(team1)
-                right_flag = flag_of(team2)
-                flag_boost = 1.12 if wide_mode else 1.08
-                flw = int((28 if wide_mode else 24) * flag_boost)
-                flh = int((18 if wide_mode else 16) * flag_boost)
-                if left_flag:
+                # أعلام أكبر وأوضح مع fallback إذا العلم ناقص
+                try:
+                    _v31_paste_flag(img, team1, (x + card_w - 104, yy + (row_h-flag_h)//2, x + card_w - 104 + flag_w, yy + (row_h-flag_h)//2 + flag_h))
+                except Exception:
                     try:
-                        fi = Image.open(left_flag).convert("RGBA").resize((flw, flh), Image.LANCZOS)
-                        img.paste(fi, (x + card_w - 82, yy + (row_h - flh)//2), fi)
+                        paste_flag(img, team1, (x + card_w - 104, yy + (row_h-flag_h)//2, x + card_w - 104 + flag_w, yy + (row_h-flag_h)//2 + flag_h))
                     except Exception:
                         pass
-                if right_flag:
+                try:
+                    _v31_paste_flag(img, team2, (x + 40, yy + (row_h-flag_h)//2, x + 40 + flag_w, yy + (row_h-flag_h)//2 + flag_h))
+                except Exception:
                     try:
-                        fi = Image.open(right_flag).convert("RGBA").resize((flw, flh), Image.LANCZOS)
-                        img.paste(fi, (x + 56, yy + (row_h - flh)//2), fi)
+                        paste_flag(img, team2, (x + 40, yy + (row_h-flag_h)//2, x + 40 + flag_w, yy + (row_h-flag_h)//2 + flag_h))
                     except Exception:
                         pass
-                draw_text(draw, (x + card_w - 145, yy + row_h // 2), normalize_name(team1), get_font(row_font), fill="#FFFFFF", max_width=185)
-                draw_text(draw, (x + 145, yy + row_h // 2), normalize_name(team2), get_font(row_font), fill="#FFFFFF", max_width=185)
-                yy += row_h + 8
 
-    draw_text(draw, (width // 2, height - 54), "المصيف ينقل لكم الحدث", get_font(32 if wide_mode else 30), fill="#FBBF24")
+                draw_text(draw, (x + card_w - team_gap, yy + row_h // 2), normalize_name(team1), get_font(row_font), fill="#FFFFFF", max_width=240 if wide_mode else 190)
+                draw_text(draw, (x + team_gap, yy + row_h // 2), normalize_name(team2), get_font(row_font), fill="#FFFFFF", max_width=240 if wide_mode else 190)
+                yy += row_h + 9
+
+    draw.line((width//2 - 240, height - 86, width//2 - 90, height - 86), fill="#FBBF2455", width=3)
+    draw.line((width//2 + 90, height - 86, width//2 + 240, height - 86), fill="#FBBF2455", width=3)
+    draw_text(draw, (width // 2, height - 60), "المصيف ينقل لكم الحدث", get_font(34 if wide_mode else 30), fill="#FBBF24")
     suffix = "_10" if wide_mode else ""
     out = os.path.join(GENERATED_DIR, f"multi_days_schedule_ar{suffix}.png")
-    img.save(out, quality=95)
+    img.save(out, quality=96)
     return out
+
 
 async def multi_days_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
