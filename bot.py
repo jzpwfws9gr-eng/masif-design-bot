@@ -7709,24 +7709,35 @@ def create_all_groups_frame_style_image(groups):
 
 
 
+def _multi_days_ar_date_label(raw):
+    raw = normalize_name(str(raw or "").strip())
+    if not raw:
+        return ""
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
+    if not m:
+        return f"( {raw} )"
+    d, mo, y = map(int, m.groups())
+    ar_days = {
+        0: "الاثنين",
+        1: "الثلاثاء",
+        2: "الأربعاء",
+        3: "الخميس",
+        4: "الجمعة",
+        5: "السبت",
+        6: "الأحد",
+    }
+    try:
+        dt = datetime(y, mo, d)
+        return f"( {ar_days.get(dt.weekday(), '')} {d:02d}/{mo:02d} )"
+    except Exception:
+        return f"( {d:02d}/{mo:02d} )"
+
+
 def create_multi_days_matches_image(schedule_blocks, style=4):
     ensure_generated_dir()
 
-    # تصميم واضح أنه جدول عدة أيام وليس مباريات اليوم
-    width, height = 1800, 2400
-    img, draw = _games_day_background(width, height)
-
-    # تغميق بسيط للقراءة
-    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    od = ImageDraw.Draw(overlay)
-    rounded_rect(od, (48, 48, width-48, height-48), radius=42, fill="#03112A55", outline="#FFFFFF22", width=2)
-    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
-    draw = ImageDraw.Draw(img)
-
-    draw_text(draw, (width//2, 80), "MONDIAL AL MASEEF 2026", _v31_latin_font(42) if "_v31_latin_font" in globals() else get_font(40), fill="#FFFFFF", max_width=900)
-    draw_text(draw, (width//2, 165), "MULTI-DAY MATCH SCHEDULE", _v31_latin_font(64) if "_v31_latin_font" in globals() else get_font(60), fill="#FFFFFF", max_width=width-150)
-    draw_text(draw, (width//2, 235), "جدول مباريات عدة أيام", get_font(42), fill="#FBBF24", max_width=800)
-
+    # تصميم عربي خاص بأمر /مباريات_الأيام فقط، وليس مباريات اليوم.
+    width = 1800
     blocks = list(schedule_blocks or [])[:6]
     if not blocks:
         raise ValueError("لا توجد مباريات")
@@ -7736,54 +7747,82 @@ def create_multi_days_matches_image(schedule_blocks, style=4):
     gap_x = 45
     card_w = (width - 2*margin_x - (cols-1)*gap_x) // cols
     start_y = 325
-    gap_y = 36
+    gap_y = 34
 
-    # ارتفاع الكرت ديناميكي حسب عدد أيام/مباريات، مع الحفاظ على صورة واحدة.
+    # ارتفاع كل كرت حسب عدد المباريات داخله حتى ما يطلع مربع كبير وفاضي.
+    card_heights = []
+    for _date_txt, matches in blocks:
+        n = max(1, min(len(matches or []), 6))
+        ch = 96 + n * 68 + max(0, n-1) * 8 + 28
+        card_heights.append(max(265, min(610, ch)))
+
+    row_heights = []
     rows_count = (len(blocks) + cols - 1) // cols
-    available_h = height - start_y - 145 - (rows_count-1)*gap_y
-    card_h = max(445, min(650, available_h // max(1, rows_count)))
+    for r in range(rows_count):
+        row_cards = card_heights[r*cols:(r+1)*cols]
+        row_heights.append(max(row_cards) if row_cards else 265)
 
+    height = int(start_y + sum(row_heights) + gap_y * max(0, rows_count-1) + 130)
+    height = max(1180, min(2300, height))
+
+    img, draw = _games_day_background(width, height)
+
+    # تغميق بسيط للقراءة
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (48, 48, width-48, height-48), radius=42, fill="#03112A55", outline="#FFFFFF22", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    draw_text(draw, (width//2, 95), "مباريات الأيام", get_font(76), fill="#FFFFFF", max_width=width-160)
+    draw_text(draw, (width//2, 178), "جدول مباريات عدة أيام", get_font(42), fill="#FBBF24", max_width=850)
+    draw.line((width//2-430, 235, width//2+430, 235), fill="#FFFFFF45", width=2)
+
+    y_cursor = start_y
     for idx, (date_txt, matches) in enumerate(blocks):
         c = idx % cols
         r = idx // cols
+        if c == 0 and idx != 0:
+            y_cursor += row_heights[r-1] + gap_y
+
         x = margin_x + c*(card_w + gap_x)
-        y = start_y + r*(card_h + gap_y)
+        y = y_cursor
+        card_h = row_heights[r]
 
         rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=30, fill="#0638A5E8", outline="#14B8F5", width=3)
-        rounded_rect(draw, (x+18, y+18, x+card_w-18, y+82), radius=18, fill="#FBBF24", outline="#00000055", width=1)
-        draw_text(draw, (x+card_w//2, y+50), _format_design_date_text(date_txt), _v31_latin_font(28) if "_v31_latin_font" in globals() else get_font(28), fill="#061633", max_width=card_w-44)
+        rounded_rect(draw, (x+18, y+18, x+card_w-18, y+80), radius=18, fill="#FBBF24", outline="#00000055", width=1)
+        draw_text(draw, (x+card_w//2, y+49), _multi_days_ar_date_label(date_txt), get_font(30), fill="#061633", max_width=card_w-44)
 
-        yy = y + 105
+        yy = y + 102
         match_list = list(matches or [])[:6]
-        row_h = max(58, min(76, (card_h - 130) // max(1, len(match_list))))
+        row_h = 68
         row_gap = 8
 
         for midx, (a, b, t) in enumerate(match_list, start=1):
             rounded_rect(draw, (x+20, yy, x+card_w-20, yy+row_h), radius=16, fill="#061633B8", outline="#FFFFFF28", width=1)
             cy = yy + row_h // 2
 
-            # أعلام واضحة لكن مناسبة للكرت
-            flag_h = min(44, row_h-14)
+            flag_h = 40
             flag_w = int(flag_h * 1.55)
             paste_flag(img, a, (x+card_w-92-flag_w, cy-flag_h//2, x+card_w-92, cy+flag_h//2))
             paste_flag(img, b, (x+92, cy-flag_h//2, x+92+flag_w, cy+flag_h//2))
 
-            name_font = get_font(22 if len(match_list) <= 4 else 20)
-            draw_text(draw, (x+card_w-205, cy), _clean_display_name(a), name_font, fill="#FFFFFF", max_width=150)
-            draw_text(draw, (x+205, cy), _clean_display_name(b), name_font, fill="#FFFFFF", max_width=150)
+            name_font = get_font(23 if len(match_list) <= 4 else 21)
+            draw_text(draw, (x+card_w-210, cy), _clean_display_name(a), name_font, fill="#FFFFFF", max_width=160)
+            draw_text(draw, (x+210, cy), _clean_display_name(b), name_font, fill="#FFFFFF", max_width=160)
 
             if t:
                 tm, period = _ampm_from_time(t)
                 mid = tm if not period else f"{tm} {period}"
             else:
                 mid = "VS"
-            rounded_rect(draw, (x+card_w//2-78, cy-23, x+card_w//2+78, cy+23), radius=14, fill="#020A1B", outline="#FBBF24", width=2)
+            rounded_rect(draw, (x+card_w//2-80, cy-23, x+card_w//2+80, cy+23), radius=14, fill="#020A1B", outline="#FBBF24", width=2)
             draw_text(draw, (x+card_w//2, cy), mid, _v31_latin_font(21) if "_v31_latin_font" in globals() else get_font(21), fill="#FBBF24", max_width=145)
 
             yy += row_h + row_gap
 
-    draw_text(draw, (width//2, height-72), "المصيف ينقل لكم الحدث", get_font(38), fill="#FBBF24", max_width=700)
-    path = os.path.join(GENERATED_DIR, f"multi_days_schedule_style{style}.png")
+    draw_text(draw, (width//2, height-68), "المصيف ينقل لكم الحدث", get_font(38), fill="#FBBF24", max_width=700)
+    path = os.path.join(GENERATED_DIR, f"multi_days_schedule_ar_style{style}.png")
     img.save(path, quality=95)
     return path
 
