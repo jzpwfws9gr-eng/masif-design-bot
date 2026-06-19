@@ -10527,7 +10527,11 @@ async def news_generic_command(update: Update, context: ContextTypes.DEFAULT_TYP
             sample += f"\n\nأو بدون منتخب:\n/{kind}\nتأجيل مباراة اليوم 30 دقيقة"
         await update.message.reply_text(f"اكتبها كذا:\n{sample}")
         return
-    path = render_news_card(kind, team, body)
+    try:
+        path = render_news_card(kind, team, body)
+    except Exception as e:
+        await update.message.reply_text(f"تعذر إنشاء تصميم {kind} ❌\nالسبب: {str(e)[:160]}")
+        return
     caption = f"{kind} ✅"
     if team:
         caption += f"\n{team}"
@@ -11966,7 +11970,8 @@ def render_news_card(kind, team, body):
     else:
         badge, accent2 = "#2563EB", "#38BDF8"
 
-    img = _style4_clean_background(width, height)
+    _bg = _style4_clean_background(width, height)
+    img = _bg[0] if isinstance(_bg, tuple) else _bg
     overlay = Image.new("RGBA", (width, height), (0,0,0,0))
     od = ImageDraw.Draw(overlay)
     # tint by team/accent
