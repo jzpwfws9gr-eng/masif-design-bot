@@ -9116,61 +9116,97 @@ def save_qualified32_state(teams):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def _qualified32_template_path():
+    candidates = [
+        os.path.join("assets", "templates", "qualified32_template.png"),
+        os.path.join("assets", "templates", "qualified32_template.jpg"),
+        "qualified32_template.png",
+        "/mnt/data/qualified32_template.png",
+        "/mnt/data/كأس_العالم_2026_الفرق_المتأهلة.png",
+    ]
+    for p in candidates:
+        try:
+            if p and os.path.exists(p):
+                return p
+        except Exception:
+            pass
+    return None
+
+
+def _paste_flag_stretched(base, team_name, box, radius=8):
+    """خاص بلوحة المتأهلين: العلم يملأ المربع الأبيض بشكل عامودي مثل المرجع."""
+    path = flag_path_for(team_name)
+    x1, y1, x2, y2 = [int(v) for v in box]
+    w, h = max(1, x2-x1), max(1, y2-y1)
+    if path and os.path.exists(path):
+        try:
+            flag = Image.open(path).convert("RGBA").resize((w, h), Image.LANCZOS)
+            mask = Image.new("L", (w, h), 0)
+            md = ImageDraw.Draw(mask)
+            try:
+                md.rounded_rectangle((0, 0, w, h), radius=radius, fill=255)
+            except Exception:
+                md.rectangle((0, 0, w, h), fill=255)
+            base.paste(flag, (x1, y1), mask)
+            return
+        except Exception:
+            pass
+    d = ImageDraw.Draw(base)
+    rounded_rect(d, (x1, y1, x2, y2), radius=radius, fill="#F8FAFC", outline="#CBD5E1", width=1)
+    draw_text(d, ((x1+x2)//2, (y1+y2)//2), (normalize_name(team_name) or "?")[:2], get_font(20), fill="#061633")
+
+
+def _fit_font_for_box(draw, text, max_w, start_size=17, min_size=10):
+    for size in range(start_size, min_size-1, -1):
+        f = get_font(size)
+        try:
+            if text_width(draw, text, f) <= max_w:
+                return f
+        except Exception:
+            pass
+    return get_font(min_size)
+
+
 def render_qualified32_board(teams):
-    """لوحة المتأهلين المعتمدة: قالب أبيض 8×4، يبدأ من أعلى اليمين."""
+    """لوحة المتأهلين الرسمية: تستخدم PNG ثابت مثل المرجع، وتبدأ من أعلى اليمين."""
     ensure_generated_dir()
-    width, height = 1086, 1448
-    img = Image.new("RGB", (width, height), "#F8FAFC")
+    tpl = _qualified32_template_path()
+    if tpl:
+        img = Image.open(tpl).convert("RGB")
+        if img.size != (1086, 1448):
+            img = img.resize((1086, 1448), Image.LANCZOS)
+    else:
+        width, height = 1086, 1448
+        img = Image.new("RGB", (width, height), "#F8FAFC")
+        d = ImageDraw.Draw(img)
+        draw_text(d, (width//2, 180), "كأس العالم 2026", get_font(62), fill="#061633")
+        draw_text(d, (width//2, 238), "المنتخبات المتأهلة إلى دور الـ 32", get_font(34), fill="#061633")
+        for r in range(4):
+            for c in range(8):
+                x = 31 + c*130
+                y = 531 + r*198
+                rounded_rect(d, (x, y, x+112, y+182), radius=13, fill="#FFFFFF", outline="#94A3B8", width=2)
+                rounded_rect(d, (x, y+145, x+112, y+182), radius=10, fill="#061633")
     draw = ImageDraw.Draw(img)
-    for y in range(height):
-        t = y / max(height - 1, 1)
-        v = int(250 - 18 * t)
-        draw.line((0, y, width, y), fill=(v, v + 1 if v < 254 else v, 255))
-    ov = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    od = ImageDraw.Draw(ov)
-    gold = "#D99A18"
-    try:
-        od.pieslice((-260, -300, 470, 430), 105, 210, fill="#061633")
-        od.arc((-240, -280, 500, 460), 103, 210, fill=gold, width=10)
-        od.pieslice((width-260, height-320, width+260, height+180), 180, 290, fill="#061633")
-        od.arc((width-320, height-380, width+310, height+240), 180, 290, fill=gold, width=10)
-        for i in range(10):
-            od.arc((80+i*42, 40+i*4, width-80+i*42, 360+i*4), 180, 355, fill=(15, 23, 42, 22), width=2)
-        od.rectangle((0, height-135, width, height), fill=(226, 232, 240, 90))
-    except Exception:
-        pass
-    img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
-    draw = ImageDraw.Draw(img)
-    rounded_rect(draw, (width//2-50, 58, width//2+50, 110), radius=16, fill="#F59E0B", outline="#92400E", width=2)
-    draw_text(draw, (width//2, 84), "2026", get_font(25), fill="#061633")
-    draw_text(draw, (width//2, 175), "كأس العالم 2026", get_font(62), fill="#061633")
-    draw_text(draw, (width//2, 232), "المنتخبات المتأهلة إلى دور الـ 32", get_font(34), fill="#061633")
-    draw.line((width//2-185, 278, width//2-45, 278), fill=gold, width=3)
-    rounded_rect(draw, (width//2-24, 268, width//2+24, 288), radius=9, fill=gold)
-    draw.line((width//2+45, 278, width//2+185, 278), fill=gold, width=3)
-    cols, rows = 8, 4
-    margin_x, gap_x = 31, 14
-    start_y, gap_y = 344, 42
-    card_w = (width - 2 * margin_x - (cols - 1) * gap_x) // cols
-    card_h = 168
-    footer_h = 36
-    for idx in range(32):
-        r = idx // cols
-        col_from_right = idx % cols
-        c = cols - 1 - col_from_right
-        x = margin_x + c * (card_w + gap_x)
-        y = start_y + r * (card_h + gap_y)
-        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=13, fill="#FFFFFF", outline="#94A3B8", width=2)
-        rounded_rect(draw, (x, y+card_h-footer_h, x+card_w, y+card_h), radius=10, fill="#061633")
-        draw.rectangle((x, y+card_h-footer_h, x+card_w, y+card_h-footer_h+10), fill="#061633")
-        if idx < len(teams):
-            team = teams[idx]
-            paste_flag(img, team, (x+18, y+20, x+card_w-18, y+95))
-            draw_text(draw, (x+card_w//2, y+card_h-footer_h//2+1), team, get_font(18), fill="#FDE68A", max_width=card_w-8)
-    draw_text(draw, (width//2, height-46), "المصيف يضعكم بالحدث", get_font(24), fill="#061633")
+    x_ranges = [(31,142), (159,270), (287,400), (417,531), (547,661), (679,792), (809,922), (939,1053)]
+    footer_starts = [677, 875, 1072, 1269]
+    white_tops = [531, 729, 926, 1123]
+    footer_h = 37
+    order = []
+    for r in range(4):
+        for x1, x2 in reversed(x_ranges):
+            order.append((x1, x2, white_tops[r], footer_starts[r]))
+    for idx, team in enumerate((teams or [])[:32]):
+        x1, x2, yt, yf = order[idx]
+        flag_box = (x1+5, yt+7, x2-5, yf-4)
+        _paste_flag_stretched(img, team, flag_box, radius=8)
+        name = normalize_name(team)
+        font = _fit_font_for_box(draw, name, (x2-x1)-8, start_size=17, min_size=10)
+        draw_text(draw, ((x1+x2)//2, yf + footer_h//2), name, font, fill="#FDE68A", max_width=(x2-x1)-8)
     out = os.path.join(GENERATED_DIR, "qualified32_board.png")
     img.save(out, quality=96)
     return out
+
 
 def parse_command_body_lines(text):
     lines = (text or "").splitlines()
@@ -9222,72 +9258,98 @@ def news_header_title(kind):
     }.get(kind, "خبر")
 
 
+def _draw_glow_card(draw, box, radius, fill, outline, width=3):
+    x1, y1, x2, y2 = box
+    try:
+        for i in range(3):
+            pad = 8 + i*8
+            rounded_rect(draw, (x1-pad, y1-pad, x2+pad, y2+pad), radius=radius+pad, fill=None, outline=outline, width=2)
+    except Exception:
+        pass
+    rounded_rect(draw, box, radius=radius, fill=fill, outline=outline, width=width)
+
+
+def _dynamic_news_font(draw, text, max_w, max_lines=4, start=58, minimum=32):
+    text = normalize_name(text)
+    for size in range(start, minimum-1, -2):
+        f = get_font(size)
+        lines = wrap_text(draw, text, f, max_w)
+        if len(lines) <= max_lines:
+            return f, lines
+    f = get_font(minimum)
+    return f, wrap_text(draw, text, f, max_w)
+
+
 def render_news_card(kind, team, body):
-    """تصميم خبري فخم: المنتخب إن وجد، وإلا قالب عام بعنوان كأس العالم 2026."""
+    """تصميم خبر/عاجل فخم جدًا، مربع الخبر هو بطل التصميم."""
     ensure_generated_dir()
     width, height = 1200, 1350
     base, accent, txt2 = team_theme(team, kind)
-    img = Image.new("RGB", (width, height), base)
-    draw = ImageDraw.Draw(img)
+    label = news_header_title(kind)
+    if kind == "عاجل":
+        badge = "#DC2626"; accent2 = "#F59E0B"
+    elif kind == "تأهل":
+        badge = "#16A34A"; accent2 = "#FBBF24"
+    elif kind == "إقصاء":
+        badge = "#991B1B"; accent2 = "#FB923C"
+    else:
+        badge = "#0EA5E9"; accent2 = "#FDE68A"
     try:
         rgb1 = tuple(int(base.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
     except Exception:
         rgb1 = (15, 23, 42)
+    img = Image.new("RGB", (width, height), base)
+    draw = ImageDraw.Draw(img)
     for y in range(height):
         t = y / max(height - 1, 1)
-        rgb2 = (3, 7, 18)
+        rgb2 = (2, 6, 18)
         rr = int(rgb1[0]*(1-t)+rgb2[0]*t)
         gg = int(rgb1[1]*(1-t)+rgb2[1]*t)
         bb = int(rgb1[2]*(1-t)+rgb2[2]*t)
         draw.line((0, y, width, y), fill=(rr, gg, bb))
-    ov = Image.new("RGBA", (width, height), (0,0,0,0))
-    od = ImageDraw.Draw(ov)
+    overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
     try:
-        od.ellipse((width-455, 120, width+90, 640), fill=(255,255,255,30))
-        od.ellipse((-230, 700, 360, 1280), fill=(255,255,255,18))
-        od.rectangle((0, 0, width, 190), fill=(0,0,0,70))
-        for i in range(5):
-            od.arc((80+i*25, 40+i*18, width-80+i*25, 430+i*18), 185, 355, fill=(255,255,255,18), width=3)
-        ov = ov.filter(ImageFilter.GaussianBlur(7))
+        od.ellipse((width-500, 90, width+120, 710), fill=(255,255,255,30))
+        od.ellipse((-260, 690, 380, 1320), fill=(255,255,255,18))
+        od.rectangle((0, 0, width, 210), fill=(0,0,0,80))
+        for i in range(7):
+            od.arc((70+i*30, 55+i*22, width-70+i*30, 520+i*22), 185, 352, fill=(255,255,255,16), width=3)
+        overlay = overlay.filter(ImageFilter.GaussianBlur(8))
     except Exception:
         pass
-    img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(img)
-    rounded_rect(draw, (45, 55, width-45, height-80), radius=46, fill="#020617AA", outline="#FFFFFF55", width=3)
-    rounded_rect(draw, (61, 71, width-61, height-96), radius=40, fill="#02061755", outline=accent, width=4)
-    label = news_header_title(kind)
-    label_fill = accent
-    if kind == "عاجل":
-        label_fill = "#DC2626"
-    elif kind == "تأهل":
-        label_fill = "#16A34A"
-    elif kind == "إقصاء":
-        label_fill = "#991B1B"
-    rounded_rect(draw, (width//2-175, 105, width//2+175, 172), radius=22, fill=label_fill, outline="#FDE68A", width=2)
-    draw_text(draw, (width//2, 138), label, get_font(39), fill="#FFFFFF")
+    rounded_rect(draw, (44, 52, width-44, height-76), radius=48, fill="#020617B8", outline="#FFFFFF66", width=3)
+    rounded_rect(draw, (62, 70, width-62, height-94), radius=42, fill="#02061766", outline=accent, width=4)
+    rounded_rect(draw, (width//2-190, 105, width//2+190, 180), radius=24, fill=badge, outline=accent2, width=2)
+    draw_text(draw, (width//2, 142), label, get_font(43), fill="#FFFFFF")
     if team:
-        rounded_rect(draw, (width//2-150, 220, width//2+150, 390), radius=28, fill="#FFFFFFE8", outline="#FFFFFF66", width=2)
-        paste_flag(img, team, (width//2-118, 248, width//2+118, 340))
-        draw_text(draw, (width//2, 435), team, get_font(50), fill="#FFFFFF", max_width=900)
-        comp_title_y = 520
+        rounded_rect(draw, (width//2-185, 220, width//2+185, 388), radius=34, fill="#FFFFFFF2", outline="#FFFFFF88", width=2)
+        paste_flag(img, team, (width//2-160, 238, width//2+160, 366))
+        draw_text(draw, (width//2, 452), team, get_font(55), fill="#FFFFFF", max_width=980)
+        card_top = 548
     else:
-        draw_text(draw, (width//2, 272), "كأس العالم 2026", get_font(62), fill="#FFFFFF")
-        draw_text(draw, (width//2, 332), "مونديال المصيف", get_font(33), fill="#FDE68A")
-        comp_title_y = 445
-    card_top = comp_title_y + 80
-    card_bottom = height - 205
-    rounded_rect(draw, (90, card_top, width-90, card_bottom), radius=42, fill="#071633F2", outline=accent, width=4)
-    rounded_rect(draw, (105, card_top+15, width-105, card_bottom-15), radius=35, fill="#0B1738B8", outline="#FFFFFF35", width=2)
-    draw.line((150, card_top+45, width//2-75, card_top+45), fill="#FFFFFF66", width=2)
-    rounded_rect(draw, (width//2-70, card_top+25, width//2+70, card_top+65), radius=15, fill=label_fill, outline="#FFFFFF44", width=1)
-    draw.line((width//2+75, card_top+45, width-150, card_top+45), fill="#FFFFFF66", width=2)
-    body_font = 50 if len(body) <= 70 else 42 if len(body) <= 125 else 34
-    draw_text(draw, (width//2, (card_top+card_bottom)//2 + 15), body, get_font(body_font), fill="#FFFFFF", max_width=900, spacing=18)
-    draw.line((250, height-158, width-250, height-158), fill="#FFFFFF55", width=2)
-    draw_text(draw, (width//2, height-120), "المصيف يضعكم بالحدث", get_font(30), fill="#FDE68A")
-    out = os.path.join(GENERATED_DIR, f"news_{_safe_filename(kind)}_{_safe_filename(team or 'general')}.png")
+        draw_text(draw, (width//2, 275), "كأس العالم 2026", get_font(68), fill="#FFFFFF")
+        draw_text(draw, (width//2, 340), label, get_font(38), fill=accent2)
+        card_top = 500
+    card = (90, card_top, width-90, height-205)
+    _draw_glow_card(draw, card, 36, "#071633F2", accent, width=4)
+    draw.line((card[0]+60, card[1]+58, card[2]-60, card[1]+58), fill="#FFFFFF70", width=2)
+    rounded_rect(draw, (width//2-85, card[1]+42, width//2+85, card[1]+76), radius=15, fill=badge, outline="#FFFFFF33", width=1)
+    max_w = card[2] - card[0] - 130
+    f, lines = _dynamic_news_font(draw, body, max_w, max_lines=4, start=56, minimum=34)
+    line_h = int(font_size(f, 40) * 1.42)
+    total_h = line_h * len(lines)
+    y0 = (card[1] + card[3])//2 - total_h//2 + 18
+    for i, line in enumerate(lines[:5]):
+        draw_text(draw, (width//2, y0 + i*line_h), line, f, fill="#FFFFFF", max_width=max_w)
+    draw.line((240, height-146, width-240, height-146), fill="#FFFFFF66", width=2)
+    draw_text(draw, (width//2, height-108), "المصيف يضعكم بالحدث", get_font(32), fill="#FDE68A")
+    out = os.path.join(GENERATED_DIR, f"news_{_safe_filename(kind)}_{_safe_filename(team or 'worldcup')}.png")
     img.save(out, quality=96)
     return out
+
 
 async def send_photo_path_markup(message, path, caption=None, reply_markup=None):
     with open(path, "rb") as f:
@@ -9337,20 +9399,20 @@ class _SimpleHTTPResponse:
         self.text = text
         self.status_code = status_code
         self.headers = headers or {}
-
     def json(self):
         return json.loads(self.text)
+    def raise_for_status(self):
+        if int(self.status_code or 0) >= 400:
+            raise RuntimeError(f"HTTP Error {self.status_code}")
 
 
 def _requests_get(url, timeout=16):
     headers = {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
     }
     if requests is not None:
         return requests.get(url, timeout=timeout, headers=headers)
-
-    # fallback بدون requests عشان ما يطلع "requests غير متوفر" في Railway
     try:
         import urllib.request
         req = urllib.request.Request(url, headers=headers)
@@ -9359,8 +9421,8 @@ def _requests_get(url, timeout=16):
             enc = resp.headers.get_content_charset() or "utf-8"
             txt = raw.decode(enc, errors="replace")
             return _SimpleHTTPResponse(txt, getattr(resp, "status", 200), dict(resp.headers))
-    except Exception as e:
-        raise RuntimeError(f"تعذر الاتصال بالمصدر: {e}")
+    except Exception:
+        raise RuntimeError("تعذر الاتصال بالمصدر")
 
 def _extract_json_from_next_data(html):
     m = re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
@@ -9443,36 +9505,65 @@ def _teams_match(event_team1, event_team2, req1, req2):
     return (c1 == r1 and c2 == r2) or (c1 == r2 and c2 == r1)
 
 
-def fetch_match_from_espn(team1, team2):
-    """مصدر سريع: ESPN soccer/all. نجرب اليوم وحوله حتى لا يرجع 400 من league غير صحيح."""
-    date_values = [None]
-    try:
-        today = datetime.utcnow().date()
-        for off in range(-2, 8):
-            date_values.append((today + timedelta(days=off)).strftime("%Y%m%d"))
-    except Exception:
-        pass
-    last_err = None
-    for d in date_values:
-        url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?limit=1000"
-        if d:
-            url += f"&dates={d}"
+def _espn_date_candidates(extra_date=None, days_back=3, days_forward=2):
+    dates = []
+    if extra_date:
+        dates.append(extra_date)
+    today = datetime.utcnow().date()
+    for off in range(-days_back, days_forward + 1):
+        dates.append((today + timedelta(days=off)).strftime("%Y%m%d"))
+    for d in ["20260611", "20260612", "20260613", "20260614", "20260615", "20260616", "20260617", "20260618", "20260619", "20260620"]:
+        dates.append(d)
+    seen, out = set(), []
+    for d in dates:
+        if d and d not in seen:
+            seen.add(d); out.append(d)
+    return out
+
+
+def _espn_scoreboard_urls(date_value):
+    return [
+        f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={date_value}&limit=300",
+        f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={date_value}&limit=300",
+    ]
+
+
+def _fetch_espn_events_by_date(date_value):
+    for url in _espn_scoreboard_urls(date_value):
         try:
-            r = _requests_get(url)
-            if getattr(r, "status_code", 200) >= 400:
-                last_err = RuntimeError(f"HTTP {getattr(r, 'status_code', '')}")
+            r = _requests_get(url, timeout=14)
+            if int(getattr(r, "status_code", 200) or 200) >= 400:
                 continue
             data = r.json()
-            for event in data.get("events", []) or []:
-                obj = _parse_espn_match_from_event(event)
-                if obj and _teams_match(obj["team1"], obj["team2"], team1, team2):
-                    return obj
-        except Exception as e:
-            last_err = e
+            events = data.get("events", []) if isinstance(data, dict) else []
+            if events is not None:
+                return events
+        except Exception:
             continue
-    if last_err:
-        raise last_err
-    return None
+    return []
+
+
+def _parse_live_date_from_text(text):
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", text or "")
+    if not m:
+        return None
+    d, mo, y = map(int, m.groups())
+    return f"{y:04d}{mo:02d}{d:02d}"
+
+
+def fetch_match_from_espn(team1, team2, date_hint=None):
+    """مصدر سريع: يبحث مباشر + اليوم + آخر 24/48 ساعة + أيام قريبة، ويجلب المنتهية أيضًا."""
+    best = None
+    for d in _espn_date_candidates(date_hint, days_back=3, days_forward=2):
+        for event in _fetch_espn_events_by_date(d):
+            obj = _parse_espn_match_from_event(event)
+            if obj and _teams_match(obj["team1"], obj["team2"], team1, team2):
+                status = (obj.get("status") or "") + " " + (obj.get("minute") or "")
+                if "مباشر" in status or "LIVE" in status.upper():
+                    return obj
+                best = obj
+    return best
+
 
 def _parse_fifa_match_candidates(obj, req1, req2):
     for node in _iter_dict_nodes(obj):
@@ -9540,16 +9631,12 @@ def fetch_match_from_fifa(team1, team2):
     return None
 
 
-def fetch_live_match_data(team1, team2, mode="official"):
+def fetch_live_match_data(team1, team2, mode="official", date_hint=None):
     mode = normalize_name(mode or "official").lower()
     if mode in ["رسمي", "official"]:
-        sources = [fetch_match_from_fifa, fetch_match_from_espn]
-    elif mode in ["سريع", "fast"]:
-        sources = [fetch_match_from_espn, fetch_match_from_fifa]
+        sources = [lambda a,b: fetch_match_from_fifa(a, b), lambda a,b: fetch_match_from_espn(a, b, date_hint)]
     else:
-        # الأحدث = جرب السريع ثم الرسمي وخذ أول شيء موجود
-        sources = [fetch_match_from_espn, fetch_match_from_fifa]
-    errors = []
+        sources = [lambda a,b: fetch_match_from_espn(a, b, date_hint), lambda a,b: fetch_match_from_fifa(a, b)]
     for fn in sources:
         try:
             obj = fn(team1, team2)
@@ -9557,11 +9644,8 @@ def fetch_live_match_data(team1, team2, mode="official"):
                 if not obj.get("status"):
                     obj["status"] = "مباشر" if obj.get("minute") else "غير محدد"
                 return obj
-        except Exception as e:
-            errors.append(str(e))
+        except Exception:
             continue
-    if errors:
-        raise RuntimeError(" | ".join(errors[:2]))
     return None
 
 
@@ -9614,24 +9698,60 @@ def _parse_espn_standings_json(data):
 
 
 def fetch_standings_from_espn():
-    urls = [
-        "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/standings",
-        "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world_cup/standings",
-    ]
-    last_err = None
-    for url in urls:
-        try:
-            r = _requests_get(url)
-            data = r.json()
-            groups = _parse_espn_standings_json(data)
-            if groups:
-                return groups
-        except Exception as e:
-            last_err = e
-            continue
-    if last_err:
-        raise last_err
-    return []
+    """نحسب ترتيب المجموعات من نتائج ESPN، وهذا أكثر ثباتًا من endpoint standings وقت البطولة."""
+    table = {t: {"played": 0, "gd": 0, "pts": 0, "gf": 0, "ga": 0} for t in WORLD_CUP_TEAMS}
+    today = datetime.utcnow().date()
+    start = datetime(2026, 6, 11).date()
+    end = max(today + timedelta(days=2), start)
+    dates = []
+    d = start
+    while d <= end:
+        dates.append(d.strftime("%Y%m%d"))
+        d += timedelta(days=1)
+    found_any = False
+    seen_events = set()
+    for dv in dates:
+        for event in _fetch_espn_events_by_date(dv):
+            eid = str(event.get("id") or event.get("uid") or f"{dv}-{len(seen_events)}")
+            if eid in seen_events:
+                continue
+            seen_events.add(eid)
+            obj = _parse_espn_match_from_event(event)
+            if not obj:
+                continue
+            t1 = canonical_team_name(obj.get("team1")) or obj.get("team1")
+            t2 = canonical_team_name(obj.get("team2")) or obj.get("team2")
+            if t1 not in table or t2 not in table:
+                continue
+            status = normalize_name(obj.get("status") or obj.get("minute") or "").lower()
+            try:
+                s1 = int(float(obj.get("score1", 0)))
+                s2 = int(float(obj.get("score2", 0)))
+            except Exception:
+                continue
+            if any(x in status for x in ["scheduled", "لم تبدأ", "not started"]):
+                continue
+            found_any = True
+            table[t1]["played"] += 1; table[t2]["played"] += 1
+            table[t1]["gf"] += s1; table[t1]["ga"] += s2; table[t1]["gd"] += s1 - s2
+            table[t2]["gf"] += s2; table[t2]["ga"] += s1; table[t2]["gd"] += s2 - s1
+            if s1 > s2:
+                table[t1]["pts"] += 3
+            elif s2 > s1:
+                table[t2]["pts"] += 3
+            else:
+                table[t1]["pts"] += 1; table[t2]["pts"] += 1
+    if not found_any:
+        return []
+    groups = []
+    for g, teams in WORLD_CUP_GROUPS:
+        rows = []
+        for t in teams:
+            r = table[t]
+            rows.append((t, r["played"], r["gd"], r["pts"]))
+        rows.sort(key=lambda x: (x[3], x[2], x[0]), reverse=True)
+        groups.append((f"المجموعة {g}", rows))
+    return groups
 
 
 def _parse_fifa_standings_candidates(obj):
@@ -9765,14 +9885,18 @@ def parse_live_command_text(text):
     raw = " ".join(body)
     parts = [normalize_name(x) for x in raw.split("*") if normalize_name(x)]
     mode = "official"
+    date_hint = _parse_live_date_from_text(raw)
     if len(parts) >= 3:
         mode_part = normalize_name(parts[-1])
         if mode_part in ["رسمي", "سريع", "الأحدث", "official", "fast", "latest"]:
             mode = mode_part
             parts = parts[:-1]
+        elif re.match(r"^\d{1,2}/\d{1,2}/\d{4}$", mode_part):
+            date_hint = _parse_live_date_from_text(mode_part)
+            parts = parts[:-1]
     if len(parts) < 2:
-        return None, None, mode
-    return canonical_team_name(parts[0]) or normalize_name(parts[0]), canonical_team_name(parts[1]) or normalize_name(parts[1]), mode
+        return None, None, mode, date_hint
+    return canonical_team_name(parts[0]) or normalize_name(parts[0]), canonical_team_name(parts[1]) or normalize_name(parts[1]), mode, date_hint
 
 
 def mode_label_ar(mode):
@@ -9958,19 +10082,20 @@ async def current_groups_now_command(update: Update, context: ContextTypes.DEFAU
         )
 
 async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
-    team1, team2, mode = parse_live_command_text(update.message.text if getattr(update, 'message', None) else "")
+    team1, team2, mode, date_hint = parse_live_command_text(update.message.text if getattr(update, 'message', None) else "")
     if mode_override:
         mode = mode_override
     if not team1 or not team2:
-        await update.message.reply_text("اكتبها كذا:\n/مباشر السعودية * اسبانيا\nأو\n/مباشر السعودية * اسبانيا * سريع")
+        await update.message.reply_text("اكتبها كذا:\n/مباشر السعودية * اسبانيا\nأو\n/مباشر السعودية * اسبانيا * سريع\nأو بتاريخ محدد:\n/مباشر المكسيك * كوريا الجنوبية * 18/06/2026")
         return
-    payload = {"kind": "live", "team1": team1, "team2": team2}
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
     kb = source_keyboard(context, payload)
     try:
-        data = fetch_live_match_data(team1, team2, mode)
+        data = fetch_live_match_data(team1, team2, mode, date_hint=date_hint)
         if not data:
             await update.message.reply_text(
-                f"ما لقيت مباراة {team1} ضد {team2} من المصدر الحالي.\n\nاختر مصدر آخر:",
+                f"ما لقيت مباراة {team1} ضد {team2} ضمن المباشر أو مباريات آخر 48 ساعة.\n"
+                f"جرب تختار مصدر آخر أو اكتب التاريخ.\n\nاختر مصدر آخر:",
                 reply_markup=kb,
             )
             return
@@ -9981,6 +10106,7 @@ async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE,
             f"تعذر جلب المباراة من المصدر الحالي ❌\nمباراة: {team1} × {team2}\nالمصدر الحالي: {mode_label_ar(mode)}\n\nاختر مصدر آخر:",
             reply_markup=kb,
         )
+
 
 async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -10014,7 +10140,7 @@ async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_T
             team1 = payload.get("team1")
             team2 = payload.get("team2")
             kb = source_keyboard(context, payload)
-            data = fetch_live_match_data(team1, team2, mode)
+            data = fetch_live_match_data(team1, team2, mode, date_hint=payload.get("date_hint"))
             if not data:
                 await query.message.reply_text(f"ما لقيت مباراة {team1} ضد {team2} من مصدر {mode_label_ar(mode)}.\n\nاختر مصدر آخر:", reply_markup=kb)
                 return
