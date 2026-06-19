@@ -5972,6 +5972,497 @@ async def design_all_groups_command(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text(f"تعذر تصميم جميع المجموعات ❌\n{e}")
 
 
+# -------------------- V4 FIX: Google/SerpApi live results, safe API checks, no silent hangs --------------------
+# هذه الدوال تُعيد تعريف دوال V3 السابقة وتبقي باقي البوت كما هو.
+
+
+def _http_json_get(url, params=None, headers=None, timeout=10):
+    """GET JSON using requests if available, otherwise urllib. Keeps bot alive even if requirements lag."""
+    params = params or {}
+    headers = headers or {}
+    base_headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+        "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
+    }
+    base_headers.update(headers)
+    if requests is not None:
+        r = requests.get(url, params=params, headers=base_headers, timeout=timeout)
+        try:
+            data = r.json()
+        except Exception:
+            raise RuntimeError(f"رد غير مفهوم من المصدر: HTTP {getattr(r, 'status_code', '')}")
+        if int(getattr(r, 'status_code', 200) or 200) >= 400:
+            err = data.get("error") if isinstance(data, dict) else None
+            raise RuntimeError(str(err or f"HTTP {getattr(r, 'status_code', '')}"))
+        return data
+    try:
+        import urllib.request, urllib.parse
+        qs = urllib.parse.urlencode(params, doseq=True)
+        full_url = url + (("&" if "?" in url else "?") + qs if qs else "")
+        req = urllib.request.Request(full_url, headers=base_headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            enc = resp.headers.get_content_charset() or "utf-8"
+            text = raw.decode(enc, errors="replace")
+            try:
+                return json.loads(text)
+            except Exception:
+                raise RuntimeError(f"رد غير JSON من المصدر: HTTP {getattr(resp, 'status', '')}")
+    except Exception as e:
+        raise RuntimeError(str(e)[:220])
+
+
+def serpapi_search_json(query, hl="ar", gl="sa", timeout=9):
+    key = _serpapi_key()
+    if not key:
+        raise RuntimeError("SERPAPI_KEY غير موجود في Railway")
+    data = _http_json_get(
+        "https://serpapi.com/search.json",
+        params={"engine": "google", "q": query, "hl": hl, "gl": gl, "api_key": key},
+        timeout=timeout,
+    )
+    if isinstance(data, dict) and data.get("error"):
+        raise RuntimeError(str(data.get("error"))[:220])
+    return data
+
+
+def _api_football_get(endpoint, params=None):
+    key = _api_football_key()
+    if not key:
+        raise RuntimeError("API_FOOTBALL_KEY غير موجود")
+    data = _http_json_get(
+        "https://v3.football.api-sports.io" + endpoint,
+        params=params or {},
+        headers={"x-apisports-key": key},
+        timeout=10,
+    )
+    if isinstance(data, dict) and data.get("errors"):
+        errs = data.get("errors")
+        if errs:
+            raise RuntimeError(str(errs)[:220])
+    return data
+
+
+def _blob_contains_team(blob, team):
+    team = canonical_team_name(team) or normalize_name(team)
+    variants = [team] + (TEAM_SEARCH_EN.get(team) or [])
+    b_low = str(blob).lower()
+    b_simple = simple_key(str(blob))
+    for v in variants:
+        if not v:
+            continue
+        if str(v).lower() in b_low or simple_key(v) in b_simple:
+            return True
+    return False
+
+
+def _match_pair_names(n1, n2, req1, req2):
+    return _teams_match(n1, n2, req1, req2) or (
+        _blob_contains_team(n1, req1) and _blob_contains_team(n2, req2)
+    ) or (
+        _blob_contains_team(n1, req2) and _blob_contains_team(n2, req1)
+    )
+
+
+def _score_from_any(item):
+    if not isinstance(item, dict):
+        return "0"
+    for key in ["score", "points", "goals", "result", "value", "display_score", "displayScore"]:
+        if key in item and item.get(key) not in (None, ""):
+            return _extract_score_value(item.get(key))
+    # Some Google nodes use nested score objects
+    for key in ["standing", "stats", "score_data"]:
+        if isinstance(item.get(key), dict):
+            val = _score_from_any(item.get(key))
+            if val != "0":
+                return val
+    return "0"
+
+
+def _team_name_from_any(item):
+    if isinstance(item, str):
+        return normalize_name(item)
+    if not isinstance(item, dict):
+        return ""
+    for key in ["name", "title", "team", "short_name", "shortName", "displayName", "display_name", "full_name"]:
+        v = item.get(key)
+        if isinstance(v, str) and normalize_name(v):
+            return canonical_team_name(v) or normalize_name(v)
+        if isinstance(v, dict):
+            nested = _team_name_from_any(v)
+            if nested:
+                return nested
+    return ""
+
+
+def _collect_scorers_from_serp_node(node):
+    out = []
+    def add_text(x):
+        s = normalize_name(x)
+        if s and ("'" in s or "هدف" in s or "Goal" in s or "⚽" in s or re.search(r"\b\d{1,3}\b", s)):
+            out.append(s)
+    for n in _walk_json(node):
+        if isinstance(n, dict):
+            # scorer-ish dicts
+            player = n.get("player") or n.get("name") or n.get("title")
+            minute = n.get("time") or n.get("minute") or n.get("elapsed")
+            event_type = normalize_name(n.get("type") or n.get("event") or n.get("detail") or n.get("description") or "")
+            if player and ("goal" in event_type.lower() or "هدف" in event_type or minute):
+                txt = normalize_name(player)
+                if minute and str(minute) not in txt:
+                    txt += f" {minute}'"
+                add_text(txt)
+            for k in ["text", "description", "subtitle", "detail", "summary"]:
+                if isinstance(n.get(k), str):
+                    add_text(n.get(k))
+        elif isinstance(n, str):
+            add_text(n)
+    # Clean false positives/long blobs
+    clean = []
+    for s in out:
+        if len(s) <= 80 and s not in clean:
+            clean.append(s)
+    return clean[:8]
+
+
+def _status_from_serp_node(node):
+    vals = []
+    if isinstance(node, dict):
+        for k in ["status", "game_status", "match_status", "status_text", "status_line", "state", "period", "time", "date"]:
+            if node.get(k) not in (None, ""):
+                vals.append(str(node.get(k)))
+    raw = " | ".join(vals)
+    return _norm_status_ar(raw) if raw else "غير محدد"
+
+
+def _parse_serp_sports_node(node, req1, req2):
+    """Parse most known SerpApi/Google Sports shapes."""
+    if not isinstance(node, dict):
+        return None
+    # Shape 1: teams/players list
+    for key in ["teams", "players", "competitors", "participants"]:
+        arr = node.get(key)
+        if isinstance(arr, list) and len(arr) >= 2:
+            parsed = []
+            for item in arr[:2]:
+                nm = _team_name_from_any(item)
+                sc = _score_from_any(item) if isinstance(item, dict) else "0"
+                if nm:
+                    parsed.append((canonical_team_name(nm) or normalize_name(nm), sc))
+            if len(parsed) >= 2 and _match_pair_names(parsed[0][0], parsed[1][0], req1, req2):
+                return {
+                    "team1": parsed[0][0], "team2": parsed[1][0],
+                    "score1": parsed[0][1], "score2": parsed[1][1],
+                    "status": _status_from_serp_node(node),
+                    "minute": "",
+                    "scorers": _collect_scorers_from_serp_node(node),
+                    "source": "Google Sports",
+                }
+    # Shape 2: home/away dicts
+    home = node.get("home") or node.get("home_team") or node.get("team_home")
+    away = node.get("away") or node.get("away_team") or node.get("team_away")
+    if isinstance(home, dict) and isinstance(away, dict):
+        n1, n2 = _team_name_from_any(home), _team_name_from_any(away)
+        if n1 and n2 and _match_pair_names(n1, n2, req1, req2):
+            return {
+                "team1": canonical_team_name(n1) or n1, "team2": canonical_team_name(n2) or n2,
+                "score1": _score_from_any(home), "score2": _score_from_any(away),
+                "status": _status_from_serp_node(node), "minute": "",
+                "scorers": _collect_scorers_from_serp_node(node), "source": "Google Sports",
+            }
+    # Shape 3: explicit names/scores
+    n1 = node.get("team1") or node.get("home_name") or node.get("homeTeam")
+    n2 = node.get("team2") or node.get("away_name") or node.get("awayTeam")
+    if isinstance(n1, dict): n1 = _team_name_from_any(n1)
+    if isinstance(n2, dict): n2 = _team_name_from_any(n2)
+    if n1 and n2 and _match_pair_names(str(n1), str(n2), req1, req2):
+        return {
+            "team1": canonical_team_name(n1) or normalize_name(n1),
+            "team2": canonical_team_name(n2) or normalize_name(n2),
+            "score1": _extract_score_value(node.get("score1") or node.get("home_score") or node.get("homeScore") or 0),
+            "score2": _extract_score_value(node.get("score2") or node.get("away_score") or node.get("awayScore") or 0),
+            "status": _status_from_serp_node(node), "minute": "",
+            "scorers": _collect_scorers_from_serp_node(node), "source": "Google Sports",
+        }
+    return None
+
+
+def _serpapi_query_candidates(team1, team2, date_hint=None):
+    ar1, ar2 = canonical_team_name(team1) or normalize_name(team1), canonical_team_name(team2) or normalize_name(team2)
+    en1s, en2s = team_query_names(ar1), team_query_names(ar2)
+    qs = []
+    if date_hint:
+        qs.append(f"مباراة {ar1} {ar2} {date_hint}")
+        qs.append(f"{en1s[1] if len(en1s)>1 else en1s[0]} vs {en2s[1] if len(en2s)>1 else en2s[0]} {date_hint} FIFA World Cup 2026")
+    qs.extend([
+        f"مباراة {ar1} {ar2}",
+        f"{en1s[1] if len(en1s)>1 else en1s[0]} vs {en2s[1] if len(en2s)>1 else en2s[0]}",
+        f"{en1s[-1]} {en2s[-1]} score FIFA World Cup 2026",
+    ])
+    out, seen = [], set()
+    for q in qs:
+        if q and q not in seen:
+            seen.add(q); out.append(q)
+    return out
+
+
+def fetch_match_from_serpapi(team1, team2, date_hint=None):
+    if not _serpapi_key():
+        return None
+    req1 = canonical_team_name(team1) or normalize_name(team1)
+    req2 = canonical_team_name(team2) or normalize_name(team2)
+    last_data = None
+    for q in _serpapi_query_candidates(req1, req2, date_hint):
+        for hl, gl in [("ar", "sa"), ("en", "us")]:
+            try:
+                data = serpapi_search_json(q, hl=hl, gl=gl, timeout=8)
+                last_data = data
+            except Exception:
+                continue
+            roots = []
+            sr = data.get("sports_results") if isinstance(data, dict) else None
+            if isinstance(sr, dict):
+                roots.append(sr)
+                # Prioritize common spotlight/game containers
+                for k in ["game_spotlight", "games", "matches", "scoreboard"]:
+                    if isinstance(sr.get(k), (dict, list)):
+                        roots.append(sr.get(k))
+            roots.append(data)
+            for root in roots:
+                for node in _walk_json(root):
+                    obj = _parse_serp_sports_node(node, req1, req2)
+                    if obj:
+                        return obj
+            # Very cautious fallback: sports_results exists and blob contains both teams + score pattern
+            blob = json.dumps(sr or data, ensure_ascii=False)
+            if _blob_contains_team(blob, req1) and _blob_contains_team(blob, req2):
+                # Look for final score in common textual snippets. Keep requested order.
+                m = re.search(r"(\d+)\s*[-–]\s*(\d+)", blob)
+                if m and len(m.group(1)) <= 2 and len(m.group(2)) <= 2:
+                    return {
+                        "team1": req1, "team2": req2,
+                        "score1": m.group(1), "score2": m.group(2),
+                        "status": "حسب نتائج Google", "minute": "",
+                        "scorers": _collect_scorers_from_serp_node(sr or data),
+                        "source": "Google Search",
+                    }
+    return None
+
+
+def _source_mode_sequence(mode):
+    m = normalize_name(mode or "official").lower()
+    if m in ["سريع", "fast"]:
+        return ["google"]
+    if m in ["الأحدث", "الاحدث", "latest"]:
+        return ["google", "api", "espn", "fifa"]
+    return ["api", "fifa", "espn", "google"]
+
+
+def fetch_live_match_data(team1, team2, mode="official", date_hint=None):
+    for src in _source_mode_sequence(mode):
+        try:
+            if src == "google":
+                obj = fetch_match_from_serpapi(team1, team2, date_hint=date_hint)
+            elif src == "api":
+                obj = fetch_match_from_api_football(team1, team2, date_hint=date_hint)
+            elif src == "espn":
+                obj = fetch_match_from_espn(team1, team2, date_hint=date_hint)
+            else:
+                obj = fetch_match_from_fifa(team1, team2)
+            if obj:
+                if not obj.get("status"):
+                    obj["status"] = "مباشر" if obj.get("minute") else "غير محدد"
+                return obj
+        except Exception:
+            continue
+    return None
+
+
+def fetch_current_groups(mode="official"):
+    """لا نعرض أي ترتيب إلا من مصدر واضح. تجنب ترتيب عشوائي."""
+    m = normalize_name(mode or "official").lower()
+    # ملاحظة: Google Sports standings parsing مختلف حسب البلد/اللغة؛ لا نعتمده إلا لو استطعنا قراءة 8/12 مجموعات بشكل صريح.
+    # API-Football official if league ID resolves.
+    if m in ["رسمي", "official", "الأحدث", "الاحدث", "latest"]:
+        try:
+            groups = fetch_standings_from_api_football()
+            if groups and len(groups) >= 8:
+                return groups, "API-Football"
+        except Exception:
+            pass
+    return [], ""
+
+
+def _source_help_text(kind, mode):
+    if kind == "standings":
+        return (
+            f"تعذر جلب ترتيب مجموعات مؤكد من مصدر {mode_label_ar(mode)} ❌\n"
+            "لن أعرض ترتيبًا غير موثوق.\n\n"
+            "للتحديث اليدوي استخدم /قالب_المجموعات ثم /كل_المجموعات."
+        )
+    return f"تعذر جلب البيانات من مصدر {mode_label_ar(mode)} ❌"
+
+
+async def api_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lines = ["فحص مصادر النتائج:", ""]
+    # SerpApi
+    if _serpapi_key():
+        try:
+            data = serpapi_search_json("مباراة المكسيك كوريا الجنوبية", timeout=8)
+            lines.append("✅ SERPAPI_KEY موجود والاتصال بقوقل شغال")
+            if isinstance(data.get("sports_results"), dict):
+                lines.append("✅ Google Sports ظهر في نتيجة الفحص")
+            else:
+                lines.append("⚠️ الاتصال شغال، لكن لم يظهر كرت Google Sports في هذا الفحص")
+        except Exception as e:
+            lines.append(f"❌ SerpApi موجود لكن فشل الاتصال: {str(e)[:120]}")
+    else:
+        lines.append("❌ SERPAPI_KEY غير موجود")
+    # API-Football
+    if _api_football_key():
+        try:
+            _api_football_get("/status", {})
+            lines.append("✅ API_FOOTBALL_KEY موجود والاتصال شغال")
+            lid = get_api_football_league_id()
+            if lid:
+                lines.append(f"✅ League ID الحالي لكأس العالم: {lid}")
+            else:
+                lines.append("⚠️ لم يتم تحديد League ID تلقائيًا")
+        except Exception as e:
+            lines.append(f"❌ API-Football فشل: {str(e)[:120]}")
+    else:
+        lines.append("❌ API_FOOTBALL_KEY غير موجود")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def google_search_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = parse_command_body_lines(update.message.text)
+    q = " ".join(body).strip() or "مباراة المكسيك كوريا الجنوبية"
+    msg = await update.message.reply_text(f"⏳ أفحص قوقل: {q}")
+    try:
+        data = serpapi_search_json(q, timeout=8)
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        lines = ["نتيجة فحص قوقل:", f"query: {q}"]
+        if isinstance(sr, dict):
+            lines.append("✅ sports_results موجود")
+            # Try list visible team names
+            names = []
+            for node in _walk_json(sr):
+                if isinstance(node, dict):
+                    nm = _team_name_from_any(node)
+                    if nm and nm not in names:
+                        names.append(nm)
+                    if len(names) >= 6:
+                        break
+            if names:
+                lines.append("فرق/أسماء ظهرت: " + "، ".join(names[:6]))
+            lines.append("مفاتيح: " + "، ".join(list(sr.keys())[:12]))
+        else:
+            lines.append("⚠️ لم يظهر sports_results")
+        await msg.edit_text("\n".join(lines))
+    except Exception as e:
+        await msg.edit_text(f"❌ فشل فحص قوقل: {str(e)[:180]}")
+
+
+async def current_groups_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    text = update.message.text if getattr(update, 'message', None) else ""
+    mode = mode_override
+    if not mode:
+        m = re.search(r"\*\s*(رسمي|سريع|الأحدث|الاحدث|official|fast|latest)\s*$", text or "", re.I)
+        mode = m.group(1) if m else "official"
+    payload = {"kind": "standings"}
+    kb = source_keyboard(context, payload)
+    msg = await update.message.reply_text(f"⏳ جاري فحص ترتيب المجموعات من مصدر {mode_label_ar(mode)}...")
+    groups, source_label = fetch_current_groups(mode)
+    if not groups:
+        await msg.edit_text(_source_help_text("standings", mode), reply_markup=kb)
+        return
+    path = create_all_groups_image(groups)
+    await msg.delete()
+    await send_photo_path_markup(update.message, path, f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)} ({source_label})", kb)
+    await update.message.reply_text(build_groups_text(groups, f"{mode_label_ar(mode)} ({source_label})"))
+
+
+async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    team1, team2, mode, date_hint = parse_live_command_text(update.message.text if getattr(update, 'message', None) else "")
+    if mode_override:
+        mode = mode_override
+    if not team1 or not team2:
+        await update.message.reply_text("اكتبها كذا:\n/مباشر السعودية * اسبانيا\nأو\n/مباشر السعودية * اسبانيا * سريع\nأو بتاريخ محدد:\n/مباشر المكسيك * كوريا الجنوبية * 18/06/2026 * سريع")
+        return
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
+    kb = source_keyboard(context, payload)
+    wait = await update.message.reply_text(f"⏳ جاري البحث عن {team1} × {team2} من مصدر {mode_label_ar(mode)}...")
+    data = fetch_live_match_data(team1, team2, mode, date_hint=date_hint)
+    if not data:
+        await wait.edit_text(
+            f"تعذر جلب المباراة من مصدر {mode_label_ar(mode)} ❌\n"
+            f"مباراة: {team1} × {team2}\n" + (f"التاريخ: {date_hint}\n" if date_hint else "") +
+            "\nجرّب زر الأحدث أو اكتب التاريخ.\n"
+            "وللتشخيص استخدم: /بحث_قوقل مباراة المكسيك كوريا الجنوبية",
+            reply_markup=kb,
+        )
+        return
+    path = render_live_match_card(data, mode_label_ar(mode))
+    try:
+        await wait.delete()
+    except Exception:
+        pass
+    await send_photo_path_markup(update.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+
+
+async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    if not is_admin_user(update):
+        await query.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+    parts = (query.data or "").split("|")
+    if len(parts) != 3:
+        await query.message.reply_text("تعذر قراءة الخيار.")
+        return
+    _tag, token, mode = parts
+    payload = context.bot_data.get("sports_source_requests", {}).get(token)
+    if not payload:
+        await query.message.reply_text("انتهت صلاحية الخيار، أعد تنفيذ الأمر من جديد.")
+        return
+    kind = payload.get("kind")
+    kb = source_keyboard(context, payload)
+    if kind == "standings":
+        msg = await query.message.reply_text(f"⏳ جاري فحص ترتيب المجموعات من مصدر {mode_label_ar(mode)}...")
+        groups, src = fetch_current_groups(mode)
+        if not groups:
+            await msg.edit_text(_source_help_text("standings", mode), reply_markup=kb)
+            return
+        path = create_all_groups_image(groups)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        await send_photo_path_markup(query.message, path, f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)} ({src})", kb)
+        await query.message.reply_text(build_groups_text(groups, f"{mode_label_ar(mode)} ({src})"))
+        return
+    if kind == "live":
+        team1, team2 = payload.get("team1"), payload.get("team2")
+        msg = await query.message.reply_text(f"⏳ جاري البحث عن {team1} × {team2} من مصدر {mode_label_ar(mode)}...")
+        data = fetch_live_match_data(team1, team2, mode, date_hint=payload.get("date_hint"))
+        if not data:
+            await msg.edit_text(f"تعذر جلب مباراة {team1} × {team2} من مصدر {mode_label_ar(mode)} ❌\n\nاختر مصدر آخر:", reply_markup=kb)
+            return
+        path = render_live_match_card(data, mode_label_ar(mode))
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        await send_photo_path_markup(query.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+        return
+    await query.message.reply_text("تعذر تحديد نوع الطلب.")
+
+# -------------------- نهاية V4 FIX --------------------
+
+
 def main():
     if not TOKEN:
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
@@ -11157,6 +11648,7 @@ def main():
 
     # الأخبار والمتأهلين والمباشر V2
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فحص_api(?:\s|$)"), admin_only(api_check_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بحث_قوقل(?:\s|$)"), admin_only(google_search_debug_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المنتخبات(?:\s|$)"), admin_only(teams_supported_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المجموعات(?:\s|$)"), admin_only(groups_points_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قالب_المجموعات(?:\s|$)"), admin_only(groups_template_command)))
