@@ -13108,6 +13108,501 @@ async def google_search_debug_command(update: Update, context: ContextTypes.DEFA
     except Exception as e:
         await msg.edit_text(f"❌ فشل فحص قوقل: {str(e)[:220]}")
 
+
+# ==================== V9 FINAL LIVE IMAGE + GOALS + SOURCES PATCH ====================
+# اعتماد V9:
+# - /مباشر يرسل صورة بخلفية التمثال وليس نص فقط.
+# - النتيجة لا تُقبل إذا كانت تاريخًا أو رقمًا غير منطقيًا مثل 26-06.
+# - الهدافون لا يُقبلون من نصوص عشوائية/تعليقات؛ فقط صيغ موثوقة فيها دقيقة هدف أو dict goal.
+# - 365 وكورة للتفاصيل/الهدافين، ولا يغيرون نتيجة قوقل/رسمي إذا كانت مشكوك فيها.
+# - يوضح المصدر المطلوب والمصدر الفعلي.
+
+BAD_SCORER_HINTS_V9 = [
+    "google sports", "google", "sports_results", "video", "highlight", "carousel", "ملخص", "ملخصات",
+    "مباراة", "ولا اروع", "أروع", "اعجبتني", "أعجبتني", "كثير", "2h", "1h", "ago", "قبل",
+    "reuters", "النتيجة", "انتهت", "مباشر", "اليوم", "غداً", "غدا", "أمس", "امس", "حسب", "المصدر",
+    "http", "www", "site:", "kooora", "365scores", "espn", "serpapi", "تشكيلات", "إحصاءات", "الاحصاءات",
+]
+
+
+def _v9_int_score(v):
+    try:
+        s = str(v).strip()
+        # لا تقبل رقم فيه سنة أو تاريخ أو وقت
+        if re.search(r"20\d{2}|/|:", s):
+            return None
+        if not re.fullmatch(r"\d{1,2}", s):
+            return None
+        n = int(s)
+        # نتائج كرة القدم الواقعية هنا، ونمنع 26/06 من التاريخ
+        if 0 <= n <= 15:
+            return n
+    except Exception:
+        pass
+    return None
+
+
+def _v9_valid_score_obj(obj):
+    if not isinstance(obj, dict):
+        return False
+    a = _v9_int_score(obj.get("score1"))
+    b = _v9_int_score(obj.get("score2"))
+    if a is None or b is None:
+        return False
+    # لا تقبل 26-06 أو 18-06 أو أرقام شبيهة بالتاريخ
+    if a > 15 or b > 15:
+        return False
+    obj["score1"] = str(a)
+    obj["score2"] = str(b)
+    return True
+
+
+def _v9_clean_source_name(src):
+    src = normalize_name(src or "")
+    if not src:
+        return "غير محدد"
+    return src.replace(" عبر Google", "")
+
+
+def _v9_status_line(obj):
+    status = normalize_name((obj or {}).get("status") or "")
+    minute = normalize_name((obj or {}).get("minute") or "")
+    if minute and minute not in status:
+        # لو الدقيقة شكلها رقم فقط خله مع علامة دقيقة
+        if re.fullmatch(r"\d{1,3}", minute):
+            minute = minute + "'"
+        return f"{status} — {minute}" if status else minute
+    return status or minute or "متابعة مباشرة"
+
+
+def _v9_is_strict_goal_text(s):
+    s = normalize_name(s)
+    if not s or len(s) > 70:
+        return False
+    low = s.lower()
+    if any(bad in low for bad in BAD_SCORER_HINTS_V9):
+        return False
+    # لازم تظهر دقيقة هدف: 50' أو 50’ أو 50 دقيقة، أو كلمة هدف مع اسم قصير
+    has_minute = bool(re.search(r"(?:^|\s)\d{1,3}\s*(?:['’′]|د|دقيقة|min|m)(?:\s|$)", s, re.I))
+    has_goal_word = bool(re.search(r"\b(goal|هدف|penalty|ركلة جزاء|own goal|هدف عكسي)\b", s, re.I))
+    # لا نأخذ نص فيه أرقام كثيرة/سنوات/تواريخ
+    if re.search(r"20\d{2}|\d{1,2}/\d{1,2}|\d+h", s):
+        return False
+    return has_minute or (has_goal_word and len(s.split()) <= 7)
+
+
+def _v9_normalize_goal_text(s):
+    s = clean_draw_text(normalize_name(s))
+    s = s.replace("’", "'").replace("′", "'")
+    s = re.sub(r"\s+", " ", s).strip(" -—•،,.")
+    # اختصر "Goal - Luis Romo 50'" إلى شكل مفهوم إن أمكن
+    s = re.sub(r"^(goal|هدف)\s*[-:–]?\s*", "", s, flags=re.I)
+    # 50 min -> 50'
+    s = re.sub(r"\b(\d{1,3})\s*(?:min|m|دقيقة|د)\b", r"\1'", s, flags=re.I)
+    return s
+
+
+def _v9_sanitize_scorers(items):
+    clean = []
+    for item in items or []:
+        if isinstance(item, dict):
+            name = normalize_name(item.get("player") or item.get("name") or item.get("title") or item.get("athlete") or "")
+            minute = normalize_name(item.get("minute") or item.get("time") or item.get("elapsed") or item.get("displayTime") or "")
+            detail = normalize_name(item.get("type") or item.get("detail") or item.get("event") or item.get("description") or "")
+            if name and (minute or "goal" in detail.lower() or "هدف" in detail):
+                if minute and not str(minute).endswith("'"):
+                    minute = re.sub(r"\D+", "", minute) or minute
+                    if re.fullmatch(r"\d{1,3}", minute):
+                        minute += "'"
+                s = f"{name} {minute}".strip()
+            else:
+                s = ""
+        else:
+            s = str(item or "")
+        s = _v9_normalize_goal_text(s)
+        if _v9_is_strict_goal_text(s) and s not in clean:
+            clean.append(s)
+        if len(clean) >= 8:
+            break
+    return clean
+
+
+def _v9_collect_goal_details_from_json(root):
+    out = []
+    try:
+        for node in _walk_json(root):
+            if isinstance(node, dict):
+                # أوضح حالة: كائن هدف/حدث فيه لاعب ودقيقة
+                detail = normalize_name(node.get("type") or node.get("event") or node.get("detail") or node.get("description") or node.get("play") or "")
+                name = node.get("player") or node.get("name") or node.get("title") or node.get("athlete")
+                minute = node.get("minute") or node.get("time") or node.get("elapsed") or node.get("displayTime")
+                if name and (minute or "goal" in detail.lower() or "هدف" in detail):
+                    out.append({"name": name, "minute": minute, "detail": detail})
+                # بعض المصادر تضع أحداث الأهداف كنصوص قصيرة
+                for k in ["text", "summary", "subtitle", "description", "detail"]:
+                    v = node.get(k)
+                    if isinstance(v, str) and _v9_is_strict_goal_text(v):
+                        out.append(v)
+            elif isinstance(node, str) and _v9_is_strict_goal_text(node):
+                out.append(node)
+    except Exception:
+        pass
+    return _v9_sanitize_scorers(out)
+
+
+def _v9_serp_goal_queries(team1, team2, date_hint=None, source="google"):
+    c1 = canonical_team_name(team1) or normalize_name(team1)
+    c2 = canonical_team_name(team2) or normalize_name(team2)
+    en1 = (TEAM_SEARCH_EN.get(c1) or [c1])[0]
+    en2 = (TEAM_SEARCH_EN.get(c2) or [c2])[0]
+    base_ar = f"مباراة {c1} {c2} الهدافين"
+    base_en = f"{en1} {en2} scorers goals"
+    if date_hint:
+        base_ar += f" {date_hint}"
+        base_en += f" {date_hint}"
+    if source == "365":
+        return [f"site:365scores.com {base_ar}", f"site:365scores.com {base_en}"]
+    if source == "kooora":
+        return [f"site:kooora.com {base_ar}", f"site:kooora.com {base_en}"]
+    return [base_ar, base_en]
+
+
+def _v9_fetch_scorers_from_serp_source(team1, team2, date_hint=None, source="google"):
+    if not _serpapi_key():
+        return []
+    for q in _v9_serp_goal_queries(team1, team2, date_hint, source=source)[:2]:
+        for hl, gl in [("ar", "sa"), ("en", "us")]:
+            try:
+                data = serpapi_search_json(q, hl=hl, gl=gl, timeout=7)
+            except Exception:
+                continue
+            sr = data.get("sports_results") if isinstance(data, dict) else None
+            # فقط JSON منظم أو نصوص فيها دقيقة هدف بوضوح
+            scorers = _v9_collect_goal_details_from_json(sr or data)
+            if scorers:
+                return scorers
+    return []
+
+
+def _v9_fetch_scorers_from_espn(team1, team2, date_hint=None):
+    try:
+        obj = fetch_match_from_espn(team1, team2, date_hint=date_hint)
+        return _v9_sanitize_scorers((obj or {}).get("scorers") or [])
+    except Exception:
+        return []
+
+
+def _v9_fetch_goal_details(team1, team2, date_hint=None, preferred_source="google"):
+    # 365 وكورة للتفاصيل أولاً لو المستخدم اختارهم، ثم ESPN/Google.
+    sequence = []
+    if preferred_source == "365":
+        sequence = ["365", "kooora", "espn", "google"]
+    elif preferred_source == "kooora":
+        sequence = ["kooora", "365", "espn", "google"]
+    else:
+        sequence = ["espn", "google", "365", "kooora"]
+    for src in sequence:
+        if src == "espn":
+            scorers = _v9_fetch_scorers_from_espn(team1, team2, date_hint)
+        else:
+            scorers = _v9_fetch_scorers_from_serp_source(team1, team2, date_hint, source=src)
+        scorers = _v9_sanitize_scorers(scorers)
+        if scorers:
+            return scorers, mode_label_ar(src) if src in ["365", "kooora"] else ("ESPN" if src == "espn" else "Google Sports")
+    return [], ""
+
+
+def _v9_fetch_primary_from_source(team1, team2, src, date_hint=None):
+    if src == "google":
+        return fetch_match_from_serpapi(team1, team2, date_hint=date_hint)
+    if src == "365":
+        return fetch_match_from_365(team1, team2, date_hint=date_hint)
+    if src == "kooora":
+        return fetch_match_from_kooora(team1, team2, date_hint=date_hint)
+    if src == "api":
+        return fetch_match_from_api_football(team1, team2, date_hint=date_hint)
+    if src == "fifa":
+        return fetch_match_from_fifa(team1, team2)
+    return fetch_match_from_espn(team1, team2, date_hint=date_hint)
+
+
+def fetch_live_match_data(team1, team2, mode="google", date_hint=None):
+    """V9: نتيجة مؤكدة + تفاصيل هدافين موثوقة + منع التاريخ والكاش القديم."""
+    norm = _norm_source_mode(mode)
+    requested_label = mode_label_ar(norm)
+    # 365/كورة نحاولهم، لكن لو النتيجة مشكوك فيها نثبت من Google/ESPN.
+    seq = _source_mode_sequence(norm)
+    if norm in ["365", "kooora"]:
+        seq = [norm, "google", "espn", "api"]
+    elif norm == "latest":
+        seq = ["google", "espn", "365", "kooora", "api"]
+    elif norm == "official":
+        seq = ["espn", "api", "google"]
+    elif norm == "google":
+        seq = ["google", "espn"]
+
+    seen = set()
+    for src in seq:
+        if src in seen:
+            continue
+        seen.add(src)
+        try:
+            obj = _v9_fetch_primary_from_source(team1, team2, src, date_hint=date_hint)
+        except Exception:
+            continue
+        if not obj or not _v9_valid_score_obj(obj):
+            continue
+        obj["source"] = _v9_clean_source_name(obj.get("source") or ("ESPN" if src == "espn" else mode_label_ar(src)))
+        obj["requested_source"] = requested_label
+        obj["actual_source"] = obj["source"]
+        if not obj.get("status"):
+            obj["status"] = "مباشر" if obj.get("minute") else "غير محدد"
+        # الهدافين من المصدر نفسه أولاً، لكن بفلتر صارم.
+        scorers = _v9_sanitize_scorers(obj.get("scorers") or [])
+        details_source = obj.get("source") if scorers else ""
+        if not scorers:
+            pref = norm if norm in ["365", "kooora"] else src
+            scorers, details_source = _v9_fetch_goal_details(team1, team2, date_hint=date_hint, preferred_source=pref)
+        obj["scorers"] = scorers
+        obj["goals_source"] = details_source or "غير متوفر"
+        return obj
+    return None
+
+
+def _v9_live_bg(width, height):
+    # خلفية التمثال المعتمدة إن وجدت، وإلا fallback نظيف.
+    try:
+        img, draw = _v31_load_bg(V31_CLEAN_BG, width, height)
+        # تغميق خفيف حتى النص يطلع واضح
+        overlay = Image.new("RGBA", (width, height), (0, 6, 20, 80))
+        img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+        return img, ImageDraw.Draw(img)
+    except Exception:
+        try:
+            img = _style4_clean_background(width, height)
+            return img, ImageDraw.Draw(img)
+        except Exception:
+            img = Image.new("RGB", (width, height), "#061633")
+            return img, ImageDraw.Draw(img)
+
+
+def _v9_draw_flag_fit(img, team, box):
+    try:
+        # علم كبير ومناسب داخل خانته
+        _v31_paste_flag(img, team, box)
+    except Exception:
+        try:
+            paste_flag(img, team, box)
+        except Exception:
+            pass
+
+
+def render_live_match_card(match, mode_label="رسمي"):
+    ensure_generated_dir()
+    width, height = 1200, 1500
+    img, draw = _v9_live_bg(width, height)
+
+    # عنوان
+    draw_text(draw, (width//2, 88), "MONDIAL AL MASEEF 2026", _v31_latin_font(34), fill="#FFFFFF", max_width=760)
+    draw_text(draw, (width//2, 160), "LIVE MATCH", _v31_latin_font(74), fill="#FFFFFF", max_width=900)
+    draw_text(draw, (width//2, 222), "متابعة المباراة", get_font(34), fill="#FDE68A", max_width=720)
+
+    # الكرت الرئيسي
+    main = (70, 290, width-70, 1020)
+    try:
+        _draw_glow_card(draw, main, 42, "#061633E8", "#38BDF8", width=4)
+    except Exception:
+        rounded_rect(draw, main, radius=42, fill="#061633", outline="#38BDF8", width=4)
+
+    # المنتخبات والأعلام
+    flag_y1, flag_y2 = 365, 485
+    left_flag = (130, flag_y1, 310, flag_y2)
+    right_flag = (width-310, flag_y1, width-130, flag_y2)
+    rounded_rect(draw, (left_flag[0]-12, left_flag[1]-10, left_flag[2]+12, left_flag[3]+10), radius=28, fill="#FFFFFFE8", outline="#FFFFFF55", width=2)
+    rounded_rect(draw, (right_flag[0]-12, right_flag[1]-10, right_flag[2]+12, right_flag[3]+10), radius=28, fill="#FFFFFFE8", outline="#FFFFFF55", width=2)
+    _v9_draw_flag_fit(img, match.get("team1", ""), left_flag)
+    _v9_draw_flag_fit(img, match.get("team2", ""), right_flag)
+    draw_text(draw, (220, 540), match.get("team1", ""), get_font(40), fill="#FFFFFF", max_width=330)
+    draw_text(draw, (width-220, 540), match.get("team2", ""), get_font(40), fill="#FFFFFF", max_width=330)
+
+    # النتيجة الكبيرة
+    score = f"{match.get('score1','0')} - {match.get('score2','0')}"
+    draw_text(draw, (width//2, 463), score, _v31_latin_font(116), fill="#FFFFFF", max_width=360)
+
+    # الحالة
+    status = _v9_status_line(match)
+    rounded_rect(draw, (width//2-230, 590, width//2+230, 662), radius=24, fill="#FBBF24", outline="#FFFFFF55", width=2)
+    draw_text(draw, (width//2, 626), status, get_font(30), fill="#061633", max_width=410)
+
+    # الهدافين
+    scorers = _v9_sanitize_scorers(match.get("scorers") or [])
+    details_top = 720
+    draw_text(draw, (width//2, details_top), "الهدافون", get_font(40), fill="#FDE68A", max_width=480)
+    y = details_top + 70
+    if scorers:
+        for s in scorers[:5]:
+            rounded_rect(draw, (130, y-28, width-130, y+38), radius=22, fill="#07132FEA", outline="#FFFFFF33", width=2)
+            draw_text(draw, (width//2, y+5), f"⚽ {s}", get_font(30), fill="#FFFFFF", max_width=880)
+            y += 78
+    else:
+        rounded_rect(draw, (150, y-30, width-150, y+42), radius=24, fill="#07132FEA", outline="#FFFFFF33", width=2)
+        draw_text(draw, (width//2, y+6), "تفاصيل الهدافين غير متوفرة حاليًا", get_font(30), fill="#FFFFFF", max_width=820)
+        y += 86
+
+    # مصادر
+    actual = match.get("actual_source") or match.get("source") or mode_label
+    requested = match.get("requested_source") or mode_label
+    goals_src = match.get("goals_source") or "غير متوفر"
+    src_text = f"المصدر الفعلي: {actual}"
+    if requested and requested != actual:
+        src_text += f"  |  المطلوب: {requested}"
+    draw_text(draw, (width//2, 1115), src_text, get_font(28), fill="#D7E7FF", max_width=950)
+    draw_text(draw, (width//2, 1160), f"تفاصيل الأهداف: {goals_src}", get_font(26), fill="#FDE68A", max_width=860)
+
+    # تذييل
+    draw.line((230, height-160, width-230, height-160), fill="#FFFFFF66", width=2)
+    draw_text(draw, (width//2, height-120), "المصيف يضعكم بالحدث", get_font(34), fill="#FDE68A", max_width=650)
+
+    out = os.path.join(GENERATED_DIR, f"live_v9_{_safe_filename(match.get('team1','team1'))}_{_safe_filename(match.get('team2','team2'))}.png")
+    try:
+        img.save(out, quality=96)
+    except TypeError:
+        img.save(out)
+    return out
+
+
+def build_live_caption(match, mode_label="رسمي"):
+    lines = [f"{match.get('team1','')} {match.get('score1','0')} - {match.get('score2','0')} {match.get('team2','')}"]
+    st = _v9_status_line(match)
+    if st:
+        lines.append(st)
+    scorers = _v9_sanitize_scorers(match.get("scorers") or [])
+    lines.append("")
+    lines.append("⚽ الهدافون:")
+    if scorers:
+        lines.extend([f"- {s}" for s in scorers[:5]])
+    else:
+        lines.append("غير متوفرين حاليًا من المصادر")
+    actual = match.get("actual_source") or match.get("source") or mode_label
+    requested = match.get("requested_source") or mode_label
+    lines.append("")
+    if requested and requested != actual:
+        lines.append(f"المصدر المطلوب: {requested}")
+    lines.append(f"المصدر الفعلي: {actual}")
+    if match.get("goals_source"):
+        lines.append(f"تفاصيل الأهداف: {match.get('goals_source')}")
+    return "\n".join(lines)
+
+
+async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    team1, team2, mode, date_hint = parse_live_command_text(update.message.text if getattr(update, 'message', None) else "")
+    if mode_override:
+        mode = _norm_source_mode(mode_override)
+    if not team1 or not team2:
+        await update.message.reply_text("اكتبها كذا:\n/مباشر المكسيك * كوريا الجنوبية * قوقل\nأو:\n/مباشر المكسيك * كوريا الجنوبية * 18/06/2026 * قوقل")
+        return
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
+    kb = source_keyboard(context, payload)
+    wait = await update.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}")
+    try:
+        data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_live_match_data, team1, team2, mode, date_hint), timeout=22)
+    except Exception:
+        data = None
+    if not data:
+        await wait.edit_text(
+            f"تعذر جلب المباراة من مصدر {mode_label_ar(mode)} ❌\n"
+            f"مباراة: {team1} × {team2}\n" + (f"التاريخ: {date_hint}\n" if date_hint else "") +
+            "\nاختر مصدر آخر أو جرّب الأمر:\n/بحث_قوقل مباراة المكسيك كوريا الجنوبية",
+            reply_markup=kb,
+        )
+        return
+    path = None
+    try:
+        path = render_live_match_card(data, mode_label_ar(mode))
+    except Exception:
+        path = None
+    if path and os.path.exists(path):
+        try:
+            await send_photo_path_markup(update.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            try:
+                await wait.edit_text(f"تم جلب المباراة لكن تعذر إرسال الصورة ❌\n{str(e)[:120]}\n\n" + build_live_caption(data, mode_label_ar(mode)), reply_markup=kb)
+                return
+            except Exception:
+                pass
+    await wait.edit_text(build_live_caption(data, mode_label_ar(mode)), reply_markup=kb)
+
+
+async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    if not is_admin_user(update):
+        await query.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+    parts = (query.data or "").split("|")
+    if len(parts) != 3:
+        await query.message.reply_text("تعذر قراءة الخيار.")
+        return
+    _tag, token, mode = parts
+    payload = context.bot_data.get("sports_source_requests", {}).get(token)
+    if not payload:
+        await query.message.reply_text("انتهت صلاحية الخيار، أعد تنفيذ الأمر من جديد.")
+        return
+    kind = payload.get("kind")
+    kb = source_keyboard(context, payload)
+    if kind == "standings":
+        msg = await query.message.reply_text(f"⏳ جاري فحص ترتيب المجموعات من مصدر {mode_label_ar(mode)}...")
+        groups, src = fetch_current_groups(mode)
+        if not groups:
+            await msg.edit_text(_source_help_text("standings", mode), reply_markup=kb)
+            return
+        path = create_all_groups_image(groups)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        await send_photo_path_markup(query.message, path, f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)} ({src})", kb)
+        await query.message.reply_text(build_groups_text(groups, f"{mode_label_ar(mode)} ({src})"))
+        return
+    if kind == "live":
+        team1, team2 = payload.get("team1"), payload.get("team2")
+        msg = await query.message.reply_text(f"⏳ جاري البحث عن {team1} × {team2} من مصدر {mode_label_ar(mode)}...")
+        try:
+            data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_live_match_data, team1, team2, mode, payload.get("date_hint")), timeout=22)
+        except Exception:
+            data = None
+        if not data:
+            await msg.edit_text(f"تعذر جلب مباراة {team1} × {team2} من مصدر {mode_label_ar(mode)} ❌\n\nاختر مصدر آخر:", reply_markup=kb)
+            return
+        path = None
+        try:
+            path = render_live_match_card(data, mode_label_ar(mode))
+        except Exception:
+            path = None
+        if path and os.path.exists(path):
+            try:
+                await send_photo_path_markup(query.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
+                return
+            except Exception as e:
+                await msg.edit_text(f"تم جلب المباراة لكن تعذر إرسال الصورة ❌\n{str(e)[:120]}\n\n" + build_live_caption(data, mode_label_ar(mode)), reply_markup=kb)
+                return
+        await msg.edit_text(build_live_caption(data, mode_label_ar(mode)), reply_markup=kb)
+        return
+    await query.message.reply_text("تعذر تحديد نوع الطلب.")
+
+# ==================== END V9 FINAL PATCH ====================
+
 # ==================== END V8 FINAL PATCH ====================
 
 if __name__ == "__main__":
