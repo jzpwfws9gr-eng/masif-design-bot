@@ -5858,7 +5858,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الاساطير"), legends_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), dashboard_sheet_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), all_dashboard_images_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:ملف_الاحصائيات|ملف_الإحصائيات|ملف_احصائيات|ملف_إحصائيات|pdf_الاحصائيات|PDF_الاحصائيات)(?:\\s|$)"), statistics_pdf_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملف_الاحصائيات(?:\\s|$)"), statistics_pdf_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بطاقة"), participant_card_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تقرير_الفترة"), period_report_command))
 
@@ -7711,44 +7711,82 @@ def create_all_groups_frame_style_image(groups):
 
 def create_multi_days_matches_image(schedule_blocks, style=4):
     ensure_generated_dir()
+
+    # تصميم واضح أنه جدول عدة أيام وليس مباريات اليوم
     width, height = 1800, 2400
     img, draw = _games_day_background(width, height)
-    draw_text(draw, (width//2, 90), "MONDIAL AL MASEEF 2026", get_font(40), fill="#FFFFFF")
-    draw_text(draw, (width//2, 170), "MATCH SCHEDULE", get_font(72), fill="#FFFFFF", max_width=width-160)
-    draw_text(draw, (width//2, 235), "جدول المباريات", get_font(36), fill="#FBBF24")
-    cols = 2
-    margin_x, gap_x = 90, 45
-    card_w = (width - 2*margin_x - gap_x) // cols
-    card_h = 650
-    start_y = 320
-    gap_y = 42
-    for idx, (date_txt, matches) in enumerate(schedule_blocks[:6]):
+
+    # تغميق بسيط للقراءة
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (48, 48, width-48, height-48), radius=42, fill="#03112A55", outline="#FFFFFF22", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    draw_text(draw, (width//2, 80), "MONDIAL AL MASEEF 2026", _v31_latin_font(42) if "_v31_latin_font" in globals() else get_font(40), fill="#FFFFFF", max_width=900)
+    draw_text(draw, (width//2, 165), "MULTI-DAY MATCH SCHEDULE", _v31_latin_font(64) if "_v31_latin_font" in globals() else get_font(60), fill="#FFFFFF", max_width=width-150)
+    draw_text(draw, (width//2, 235), "جدول مباريات عدة أيام", get_font(42), fill="#FBBF24", max_width=800)
+
+    blocks = list(schedule_blocks or [])[:6]
+    if not blocks:
+        raise ValueError("لا توجد مباريات")
+
+    cols = 2 if len(blocks) > 1 else 1
+    margin_x = 85 if cols == 2 else 210
+    gap_x = 45
+    card_w = (width - 2*margin_x - (cols-1)*gap_x) // cols
+    start_y = 325
+    gap_y = 36
+
+    # ارتفاع الكرت ديناميكي حسب عدد أيام/مباريات، مع الحفاظ على صورة واحدة.
+    rows_count = (len(blocks) + cols - 1) // cols
+    available_h = height - start_y - 145 - (rows_count-1)*gap_y
+    card_h = max(445, min(650, available_h // max(1, rows_count)))
+
+    for idx, (date_txt, matches) in enumerate(blocks):
         c = idx % cols
         r = idx // cols
-        x = margin_x + c*(card_w+gap_x)
-        y = start_y + r*(card_h+gap_y)
-        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=28, fill="#0638A5EE", outline="#14B8F5", width=3)
+        x = margin_x + c*(card_w + gap_x)
+        y = start_y + r*(card_h + gap_y)
+
+        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=30, fill="#0638A5E8", outline="#14B8F5", width=3)
         rounded_rect(draw, (x+18, y+18, x+card_w-18, y+82), radius=18, fill="#FBBF24", outline="#00000055", width=1)
-        draw_text(draw, (x+card_w//2, y+50), _format_design_date_text(date_txt), get_font(26), fill="#061633", max_width=card_w-40)
-        yy = y + 108
-        for a, b, t in matches[:6]:
-            rounded_rect(draw, (x+20, yy, x+card_w-20, yy+76), radius=16, fill="#061633AA", outline="#FFFFFF22", width=1)
-            cy = yy + 38
-            paste_flag(img, a, (x+card_w-120, cy-25, x+card_w-68, cy+25))
-            paste_flag(img, b, (x+68, cy-25, x+120, cy+25))
-            draw_text(draw, (x+card_w-225, cy), _clean_display_name(a), get_font(20), fill="#FFFFFF", max_width=165)
-            draw_text(draw, (x+225, cy), _clean_display_name(b), get_font(20), fill="#FFFFFF", max_width=165)
+        draw_text(draw, (x+card_w//2, y+50), _format_design_date_text(date_txt), _v31_latin_font(28) if "_v31_latin_font" in globals() else get_font(28), fill="#061633", max_width=card_w-44)
+
+        yy = y + 105
+        match_list = list(matches or [])[:6]
+        row_h = max(58, min(76, (card_h - 130) // max(1, len(match_list))))
+        row_gap = 8
+
+        for midx, (a, b, t) in enumerate(match_list, start=1):
+            rounded_rect(draw, (x+20, yy, x+card_w-20, yy+row_h), radius=16, fill="#061633B8", outline="#FFFFFF28", width=1)
+            cy = yy + row_h // 2
+
+            # أعلام واضحة لكن مناسبة للكرت
+            flag_h = min(44, row_h-14)
+            flag_w = int(flag_h * 1.55)
+            paste_flag(img, a, (x+card_w-92-flag_w, cy-flag_h//2, x+card_w-92, cy+flag_h//2))
+            paste_flag(img, b, (x+92, cy-flag_h//2, x+92+flag_w, cy+flag_h//2))
+
+            name_font = get_font(22 if len(match_list) <= 4 else 20)
+            draw_text(draw, (x+card_w-205, cy), _clean_display_name(a), name_font, fill="#FFFFFF", max_width=150)
+            draw_text(draw, (x+205, cy), _clean_display_name(b), name_font, fill="#FFFFFF", max_width=150)
+
             if t:
                 tm, period = _ampm_from_time(t)
                 mid = tm if not period else f"{tm} {period}"
             else:
-                mid = 'VS'
-            draw_text(draw, (x+card_w//2, cy), mid, get_font(20), fill="#FBBF24", max_width=160)
-            yy += 88
-    draw_text(draw, (width//2, height-70), "المصيف ينقل لكم الحدث", get_font(36), fill="#FBBF24")
-    path = os.path.join(GENERATED_DIR, f"multi_days_style{style}.png")
+                mid = "VS"
+            rounded_rect(draw, (x+card_w//2-78, cy-23, x+card_w//2+78, cy+23), radius=14, fill="#020A1B", outline="#FBBF24", width=2)
+            draw_text(draw, (x+card_w//2, cy), mid, _v31_latin_font(21) if "_v31_latin_font" in globals() else get_font(21), fill="#FBBF24", max_width=145)
+
+            yy += row_h + row_gap
+
+    draw_text(draw, (width//2, height-72), "المصيف ينقل لكم الحدث", get_font(38), fill="#FBBF24", max_width=700)
+    path = os.path.join(GENERATED_DIR, f"multi_days_schedule_style{style}.png")
     img.save(path, quality=95)
     return path
+
 
 async def multi_days_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -7758,7 +7796,7 @@ async def multi_days_matches_command(update: Update, context: ContextTypes.DEFAU
             await update.message.reply_text("اكتبها كذا:\n/مباريات_الأيام 4\n24/06/2026\nالهلال * النصر * 8:00 م\nالهلال * الشباب * 10:00 م\n\n25/06/2026\nالأهلي * الاتحاد * 9:00 م")
             return
         path = create_multi_days_matches_image(blocks, style)
-        await send_photo_path(update, path, "جدول مباريات عدة أيام ✅")
+        await send_photo_path(update, path, "✅ جدول مباريات عدة أيام")
     except Exception as e:
         await update.message.reply_text(f"تعذر تصميم مباريات الأيام ❌\n{e}")
 
@@ -8528,7 +8566,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/اضافه 5\n/نتائج 5\n/اعتماد_نتائج 5\n/احصائيات\n/احصائيات 1 6\n/الترتيب_العام\n/الترتيب_العام 1 6\n/ترتيب_نص\n\n"
         "أوامر الصور والتقارير:\n"
         "/صورة_اليوم 6\n/صورة_الترتيب 1 6\n/صورة_الاساطير 1 6\n/صورة_احصائيات 1 6 لوحة عامة\n"
-        "/صور_الاحصائيات\n/صور_الاحصائيات 1 6\n/ملف_الاحصائيات\n/ملف_الإحصائيات\n/ملف_الاحصائيات 1 6\n"
+        "/صور_الاحصائيات\n/صور_الاحصائيات 1 6\n/ملف_الاحصائيات\n/ملف_الاحصائيات 1 6\n"
         "/بطاقة فارس سالم\n/تقرير_الفترة 1 4\n/تفعيل_الصور_التلقائية\n/إيقاف_الصور_التلقائية\n\n"
         "أوامر المباريات:\n"
         "/مباريات_اليوم\n/مباريات_اليوم2\n/مباريات_الأيام\n/مباريات_الايام\n/كل_المجموعات\n\n"
@@ -8557,6 +8595,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الاساطير"), legends_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), dashboard_sheet_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), all_dashboard_images_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:ملف_الاحصائيات|ملف_الإحصائيات|ملف_احصائيات|ملف_إحصائيات|pdf_الاحصائيات|PDF_الاحصائيات)(?:\\s|$)"), statistics_pdf_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بطاقة"), participant_card_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تقرير_الفترة"), period_report_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعلان_اليوم"), announcement_day_command))
