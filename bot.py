@@ -3320,13 +3320,40 @@ def has_arabic(text):
     return bool(re.search(r"[\u0600-\u06FF]", str(text or "")))
 
 
+
+def clean_draw_text(text):
+    """تنظيف نصوص الصور من الرموز التي تظهر كمربعات داخل التقرير."""
+    s = "" if text is None else str(text)
+    replacements = {
+        "🏆": "",
+        "👑": "",
+        "🧤": "",
+        "👥": "",
+        "⚽": "",
+        "🔥": "",
+        "😅": "",
+        "⚔️": "",
+        "⚔": "",
+        "🥇": "1",
+        "🥈": "2",
+        "🥉": "3",
+        "\ufe0f": "",
+        "□": "",
+        "\u200f": "",
+        "\u200e": "",
+    }
+    for a, b in replacements.items():
+        s = s.replace(a, b)
+    s = re.sub(r"\s{2,}", " ", s)
+    return s.strip()
+
 def draw_text(draw, xy, text, font, fill="white", anchor="mm", align="center", max_width=None, spacing=8):
     """
     V12: رسم عربي آمن داخل الصور.
     - إذا RAQM متوفر: نرسم النص الأصلي direction=rtl حتى لا تظهر مربعات/فواصل داخل الكلمات.
     - إذا RAQM غير متوفر: نستخدم arabic_reshaper + bidi مع خط NotoNaskh كبديل.
     """
-    text = "" if text is None else str(text)
+    text = clean_draw_text("" if text is None else str(text))
     if font is None:
         font = get_font(24)
 
@@ -3357,7 +3384,7 @@ def draw_text(draw, xy, text, font, fill="white", anchor="mm", align="center", m
             draw.text(xy, text, font=font, fill=fill, anchor=anchor)
 
 def text_width(draw, text, font):
-    text = "" if text is None else str(text)
+    text = clean_draw_text("" if text is None else str(text))
     try:
         if has_arabic(text) and PIL_RAQM:
             bbox = draw.textbbox((0, 0), text, font=font, direction="rtl", language="ar")
@@ -3371,7 +3398,7 @@ def text_width(draw, text, font):
         return len(str(text)) * 12
 
 def wrap_text(draw, text, font, max_width):
-    text = "" if text is None else str(text)
+    text = clean_draw_text("" if text is None else str(text))
     final_lines = []
     for raw_line in text.splitlines() or [""]:
         words = raw_line.split()
@@ -3599,7 +3626,7 @@ def create_daily_result_image(day, goals_count=None, clean_sheets=None):
 
 def build_daily_summary_text(day):
     data = build_day_summary(day)
-    winners = " + ".join(data["winners"]) if data["winners"] else "لا يوجد"
+    winners = " و ".join(data["winners"]) if data["winners"] else "لا يوجد"
     top_rows = data["sorted_rows"][:5]
     lines = [
         f"📊 ملخص اليوم {ordinal_day(day)}",
@@ -3791,7 +3818,7 @@ def render_worksheet_to_images(xlsx_path, sheet_name, max_rows_per_image=32):
         width = max(1100, max_col * col_w + 100)
         height = title_h + (end-start+1) * row_h + 80
         img, draw = make_canvas(width, height)
-        draw_text(draw, (width//2, 52), f"{sheet_name}" + (f" — {page_index}" if max_row-min_row+1 > max_rows_per_image else ""), get_font(42), fill="#FFFFFF")
+        draw_text(draw, (width//2, 52), f"{sheet_name}" + (f" - {page_index}" if max_row-min_row+1 > max_rows_per_image else ""), get_font(42), fill="#FFFFFF")
         y = title_h
         for r in range(start, end + 1):
             x = 50
@@ -4320,7 +4347,7 @@ def add_matchups_sheet_to_dashboard(xlsx_path, start_day=1, end_day=31):
 
 def build_daily_summary_text(day):
     data = build_day_summary(day)
-    winners = " + ".join(data["winners"]) if data["winners"] else "لا يوجد"
+    winners = " و ".join(data["winners"]) if data["winners"] else "لا يوجد"
     top_rows = data["sorted_rows"][:5]
     lines = [
         f"📊 ملخص اليوم {ordinal_day(day)}",
@@ -4649,8 +4676,8 @@ def create_participant_card_image(name, start_day=1, end_day=31):
         (90,310,360,430,"المركز", f"#{rank}"),
         (465,310,735,430,"النقاط", str(total)),
         (840,310,1110,430,"أسطورة اليوم", str(stats["daily_wins"].get(name,0))),
-        (90,470,360,590,"أفضل يوم", f"{best_day} — {best_score}"),
-        (465,470,735,590,"أسوأ يوم", f"{worst_day} — {worst_score}"),
+        (90,470,360,590,"أفضل يوم", f"{best_day} - {best_score}"),
+        (465,470,735,590,"أسوأ يوم", f"{worst_day} - {worst_score}"),
         (840,470,1110,590,"نسبة المشاركة", pct),
         (90,630,545,750,"أفضل كابتن", f"{best_cap} +{best_cap_pts}"),
         (655,630,1110,750,"فوز المواجهات", str(wins)),
@@ -5675,7 +5702,7 @@ def create_all_groups_image(groups):
     start_y = 260
     gap_y = 42
     for idx, (title, rows) in enumerate(groups[:12]):
-        c = idx % cols
+        c = (cols - 1) - (idx % cols) if cols == 2 else 0
         r = idx // cols
         x = margin_x + c*(card_w+gap_x)
         y = start_y + r*(card_h+gap_y)
@@ -5959,7 +5986,7 @@ def _clean_display_name(text):
 
 def build_daily_summary_text(day):
     data = build_day_summary(day)
-    winners = " + ".join(data["winners"]) if data["winners"] else "لا يوجد"
+    winners = " و ".join(data["winners"]) if data["winners"] else "لا يوجد"
     top_rows = data["sorted_rows"][:5]
     lines = [
         f"📊 ملخص اليوم {ordinal_day(day)}",
@@ -5981,7 +6008,7 @@ def create_daily_result_image(day, goals_count=None, clean_sheets=None):
     rows = data["sorted_rows"]
     matchups = generate_matchups_for_day(day)
     match_rows = len(matchups.get("pairs", [])) + (1 if matchups.get("bye") else 0)
-    goals_lines = [f"{_clean_display_name(p)} — {c}" for p, c in (goals_count or {}).items()] if goals_count else [f"{_clean_display_name(p)} — {pts} نقطة" for p, pts in data["player_points"].most_common(5)]
+    goals_lines = [f"{_clean_display_name(p)} {c}" for p, c in (goals_count or {}).items()] if goals_count else [f"{_clean_display_name(p)} {pts} نقطة" for p, pts in data["player_points"].most_common(5)]
     clean_lines = [ _clean_display_name(x) for x in (clean_sheets or list(data["keeper_points"].keys()) or ["لا يوجد"]) ]
     goals_lines = goals_lines or ["لا يوجد"]
     clean_lines = clean_lines or ["لا يوجد"]
@@ -5990,10 +6017,10 @@ def create_daily_result_image(day, goals_count=None, clean_sheets=None):
     base_h = 420 + len(rows) * 56 + max(170, 85 + match_rows * 40) + 250
     height = max(1220, base_h)
     img, draw = design_canvas(None, width, height, "purple")
-    draw_design_header(draw, width, f"فانتزي المصيف 2026 - اليوم {ordinal_day(day)}", "أسطورة اليوم وترتيب المشاركين", img)
+    draw_design_header(draw, width, f"فانتزي المصيف 2026 اليوم {ordinal_day(day)}", "أسطورة اليوم وترتيب المشاركين", img)
     fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=235, bottom_pad=110, accent="#8B5CF6")
 
-    legends = " + ".join(data["winners"]) if data["winners"] else "لا يوجد"
+    legends = " و ".join(data["winners"]) if data["winners"] else "لا يوجد"
     rounded_rect(draw, (90, fy1 + 18, 1010, fy1 + 150), radius=32, fill="#7C3AEDDD", outline="#FFFFFF40", width=2)
     draw_text(draw, (550, fy1 + 58), "أسطورة اليوم", get_font(28), fill="#FFFFFF")
     draw_text(draw, (550, fy1 + 112), f"{legends} - {data['max_score']} نقطة", get_font(42), fill="#FFF6D6", max_width=850)
@@ -6030,7 +6057,7 @@ def create_daily_result_image(day, goals_count=None, clean_sheets=None):
         yy += 36
     else:
         for p in matchups.get("pairs", []):
-            line = f"{_clean_display_name(p['a'])} {p['a_points']} - {p['b_points']} {_clean_display_name(p['b'])} - الفائز: {_clean_display_name(p['winner'])}"
+            line = f"{_clean_display_name(p['a'])} {p['a_points']} ضد {_clean_display_name(p['b'])} {p['b_points']} الفائز {_clean_display_name(p['winner'])}"
             draw_text(draw, (700, yy), line, get_font(22), fill="#FFFFFF", max_width=1100)
             yy += 36
         if matchups.get("bye"):
@@ -6079,7 +6106,7 @@ def create_legends_image(start_day=1, end_day=31):
     else:
         for idx, day in enumerate(days, start=1):
             info = stats["per_day"].get(day, {})
-            winners = " + ".join(_clean_display_name(w) for w in info.get("winners", [])) if info.get("winners") else "لا يوجد"
+            winners = " و ".join(_clean_display_name(w) for w in info.get("winners", [])) if info.get("winners") else "لا يوجد"
             max_score = info.get("max_score", 0)
             accent = "#F59E0B" if idx == 1 else v16_accent(idx)
             rounded_rect(draw, (92, y, width-92, y+row_h), radius=20, fill="#0B1020", outline=accent, width=2)
@@ -6573,10 +6600,10 @@ def create_daily_result_image(day, goals_count=None, clean_sheets=None):
     match_box_h = max(165, 85 + match_rows * 36)
     height = max(1580, 520 + len(rows)*50 + match_box_h + 300)
     img, draw = design_canvas(None, width, height, "purple")
-    draw_design_header(draw, width, f"فانتزي المصيف 2026 - اليوم {ordinal_day(day)}", "أسطورة اليوم وترتيب المشاركين", img)
+    draw_design_header(draw, width, f"فانتزي المصيف 2026 اليوم {ordinal_day(day)}", "أسطورة اليوم وترتيب المشاركين", img)
     fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=235, bottom_pad=95, accent="#8B5CF6")
 
-    legends = " + ".join(_clean_display_name(w) for w in data["winners"]) if data["winners"] else "لا يوجد"
+    legends = " و ".join(_clean_display_name(w) for w in data["winners"]) if data["winners"] else "لا يوجد"
     rounded_rect(draw, (90, fy1 + 18, 1010, fy1 + 145), radius=32, fill="#7C3AEDDD", outline="#FFFFFF40", width=2)
     draw_text(draw, (550, fy1 + 55), "أسطورة اليوم", get_font(27), fill="#FFFFFF")
     draw_text(draw, (550, fy1 + 106), f"{legends} - {data['max_score']} نقطة", get_font(39), fill="#FFF6D6", max_width=850)
@@ -6610,7 +6637,7 @@ def create_daily_result_image(day, goals_count=None, clean_sheets=None):
         draw_text(draw, (700, yy), "لا توجد مواجهات", get_font(22), fill="#FFFFFF")
     else:
         for p in pairs:
-            line = f"{_clean_display_name(p['a'])} {p['a_points']} - {p['b_points']} {_clean_display_name(p['b'])} - الفائز: {_clean_display_name(p['winner'])}"
+            line = f"{_clean_display_name(p['a'])} {p['a_points']} ضد {_clean_display_name(p['b'])} {p['b_points']} الفائز {_clean_display_name(p['winner'])}"
             draw_text(draw, (700, yy), line, get_font(20), fill="#FFFFFF", max_width=1120)
             yy += 34
         if matchups.get("bye"):
@@ -6655,7 +6682,7 @@ def create_legends_image(start_day=1, end_day=31):
     else:
         for idx, day in enumerate(days, start=1):
             info = stats["per_day"].get(day, {})
-            winners = " + ".join(_clean_display_name(w) for w in info.get("winners", [])) if info.get("winners") else "لا يوجد"
+            winners = " و ".join(_clean_display_name(w) for w in info.get("winners", [])) if info.get("winners") else "لا يوجد"
             max_score = info.get("max_score", 0)
             accent = "#F59E0B" if idx == 1 else v16_accent(idx)
             rounded_rect(draw, (92, y, width-92, y+row_h), radius=20, fill="#0B1020", outline=accent, width=2)
@@ -6770,18 +6797,18 @@ def create_period_report_image(start_day, end_day):
     fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=230, bottom_pad=105, accent="#F59E0B")
 
     cards = [
-        (80, fy1+15, 430, fy1+160, "بطل الفترة", f"{_clean_display_name(champion)}\n{champ_points} نقطة"),
-        (525, fy1+15, 875, fy1+160, "أكثر اللاعبين صعودًا", rising_text),
-        (970, fy1+15, 1320, fy1+160, "أكثر اللاعبين تراجعًا", falling_text),
-        (80, fy1+205, 652, fy1+355, "أعلى نقاط يومية في الفترة", f"{_clean_display_name(top_day_name)}\n{top_day_score} نقطة\nالجولة {top_day}"),
-        (748, fy1+205, 1320, fy1+355, "أكثر من فاز بأسطورة اليوم", f"{_clean_display_name(top_legend_name)}\n{top_legend_count} مرات"),
+        (80, fy1+15, 430, fy1+175, "بطل الفترة", f"{_clean_display_name(champion)}\n{champ_points} نقطة"),
+        (525, fy1+15, 875, fy1+175, "أكثر اللاعبين صعودًا", rising_text),
+        (970, fy1+15, 1320, fy1+175, "أكثر اللاعبين تراجعًا", falling_text),
+        (80, fy1+220, 652, fy1+395, "أعلى نقاط يومية في الفترة", f"{_clean_display_name(top_day_name)}\n{top_day_score} نقطة\nالجولة {top_day}"),
+        (748, fy1+220, 1320, fy1+395, "أكثر من فاز بأسطورة اليوم", f"{_clean_display_name(top_legend_name)}\n{top_legend_count} مرات"),
     ]
     for x1,y1,x2,y2,t,v in cards:
         rounded_rect(draw,(x1,y1,x2,y2), radius=30, fill="#091122DD", outline="#FFFFFF25", width=2)
-        draw_text(draw, ((x1+x2)//2, y1+38), t, get_font(25), fill="#E5E7EB", max_width=x2-x1-20)
-        draw_text(draw, ((x1+x2)//2, y1+101), v, get_font(31), fill="#FFFFFF", max_width=x2-x1-30)
+        draw_text(draw, ((x1+x2)//2, y1+40), t, get_font(24), fill="#E5E7EB", max_width=x2-x1-20)
+        draw_text(draw, ((x1+x2)//2, y1+108), v, get_font(27), fill="#FFFFFF", max_width=x2-x1-30)
 
-    y = fy1 + 405
+    y = fy1 + 450
     draw_text(draw, (700, y), "أفضل 5 في الفترة", get_font(36), fill="#FDE68A")
     y += 55
     for i, (pname, pts) in enumerate(top5, start=1):
@@ -7734,7 +7761,7 @@ def _multi_days_ar_date_label(raw):
         return ""
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
     if not m:
-        return f"( {raw} )"
+        return f"— {raw} —"
     d, mo, y = map(int, m.groups())
     ar_days = {
         0: "الاثنين",
@@ -7747,9 +7774,9 @@ def _multi_days_ar_date_label(raw):
     }
     try:
         dt = datetime(y, mo, d)
-        return f"( {ar_days.get(dt.weekday(), '')} {d:02d}/{mo:02d} )"
+        return f"— {ar_days.get(dt.weekday(), '')} {d:02d}/{mo:02d} —"
     except Exception:
-        return f"( {d:02d}/{mo:02d} )"
+        return f"— {d:02d}/{mo:02d} —"
 
 
 def create_multi_days_matches_image(schedule_blocks, style=4):
@@ -7821,7 +7848,7 @@ def create_multi_days_matches_image(schedule_blocks, style=4):
             rounded_rect(draw, (x+20, yy, x+card_w-20, yy+row_h), radius=16, fill="#061633B8", outline="#FFFFFF28", width=1)
             cy = yy + row_h // 2
 
-            flag_h = 40
+            flag_h = 46
             flag_w = int(flag_h * 1.55)
             paste_flag(img, a, (x+card_w-92-flag_w, cy-flag_h//2, x+card_w-92, cy+flag_h//2))
             paste_flag(img, b, (x+92, cy-flag_h//2, x+92+flag_w, cy+flag_h//2))
@@ -8488,7 +8515,7 @@ def create_day_choices_image(day):
     bottom = 95
     height = max(1320, top + len(rows) * (row_h + 10) + bottom)
     img, draw = design_canvas(None, width, height, "purple")
-    draw_design_header(draw, width, f"تفاصيل اختيارات اللاعبين - اليوم {ordinal_day(day)}", "فانتزي المصيف 2026", img)
+    draw_design_header(draw, width, f"تفاصيل اختيارات اللاعبين اليوم {ordinal_day(day)}", "فانتزي المصيف 2026", img)
     fx1, fy1, fx2, fy2 = draw_broadcast_inner_frame(draw, width, height, top=245, bottom_pad=95, accent="#06B6D4")
 
     cols = [
