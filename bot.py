@@ -5,12 +5,23 @@ import shutil
 import asyncio
 from datetime import datetime
 from collections import Counter, defaultdict
+import difflib
+
+try:
+    import requests
+except Exception:
+    requests = None
+
+try:
+    from bs4 import BeautifulSoup
+except Exception:
+    BeautifulSoup = None
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -8906,6 +8917,1052 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+
+# -------------------- ميزات الأخبار والمتأهلين والمباشر V2 --------------------
+
+QUALIFIED32_FILE = "qualified32_state.json"
+SPORTS_CACHE_FILE = "sports_cache_state.json"
+
+WORLD_CUP_GROUPS = [
+    ("A", ["المكسيك", "جنوب أفريقيا", "كوريا الجنوبية", "التشيك"]),
+    ("B", ["كندا", "البوسنة والهرسك", "قطر", "سويسرا"]),
+    ("C", ["البرازيل", "المغرب", "هايتي", "اسكتلندا"]),
+    ("D", ["الولايات المتحدة", "باراغواي", "أستراليا", "تركيا"]),
+    ("E", ["ألمانيا", "كوراساو", "ساحل العاج", "الإكوادور"]),
+    ("F", ["هولندا", "اليابان", "السويد", "تونس"]),
+    ("G", ["بلجيكا", "مصر", "إيران", "نيوزيلندا"]),
+    ("H", ["إسبانيا", "الرأس الأخضر", "السعودية", "أوروجواي"]),
+    ("I", ["فرنسا", "السنغال", "العراق", "النرويج"]),
+    ("J", ["الأرجنتين", "الجزائر", "النمسا", "الأردن"]),
+    ("K", ["البرتغال", "الكونغو الديمقراطية", "أوزبكستان", "كولومبيا"]),
+    ("L", ["إنجلترا", "كرواتيا", "غانا", "بنما"]),
+]
+
+WORLD_CUP_TEAMS = [t for _, teams in WORLD_CUP_GROUPS for t in teams]
+
+TEAM_ALIASES = {
+    "أمريكا": "الولايات المتحدة",
+    "امريكا": "الولايات المتحدة",
+    "اميركا": "الولايات المتحدة",
+    "أميركا": "الولايات المتحدة",
+    "usa": "الولايات المتحدة",
+    "unitedstates": "الولايات المتحدة",
+    "الولاياتالمتحده": "الولايات المتحدة",
+    "الولاياتالمتحدة": "الولايات المتحدة",
+    "اسكتلندا": "اسكتلندا",
+    "إسكتلندا": "اسكتلندا",
+    "سكوتلندا": "اسكتلندا",
+    "الباراغواي": "باراغواي",
+    "بارجواي": "باراغواي",
+    "اوروغواي": "أوروجواي",
+    "اوروجواي": "أوروجواي",
+    "الاوروغواي": "أوروجواي",
+    "كوتديفوار": "ساحل العاج",
+    "كوتديفوارى": "ساحل العاج",
+    "ساحلالعاج": "ساحل العاج",
+    "هولند": "هولندا",
+    "انجلترا": "إنجلترا",
+    "كوريا": "كوريا الجنوبية",
+    "كورياالجنوبية": "كوريا الجنوبية",
+    "كورياالجنوبية": "كوريا الجنوبية",
+    "راسالخضراء": "الرأس الأخضر",
+    "الرأسالخضر": "الرأس الأخضر",
+    "جنوبافريقيا": "جنوب أفريقيا",
+    "البوسنة": "البوسنة والهرسك",
+    "الكونغو": "الكونغو الديمقراطية",
+}
+
+TEAM_THEME_MAP = {
+    "السعودية": ("#0F5132", "#22C55E", "#FFFFFF"),
+    "المكسيك": ("#0B5130", "#CE1126", "#FFFFFF"),
+    "الأرجنتين": ("#5ABCEB", "#FFFFFF", "#F6C945"),
+    "فرنسا": ("#0F172A", "#2563EB", "#FFFFFF"),
+    "إسبانيا": ("#991B1B", "#F59E0B", "#FDE68A"),
+    "البرازيل": ("#0F5132", "#FDE047", "#FFFFFF"),
+    "المغرب": ("#7F1D1D", "#15803D", "#FFFFFF"),
+    "البرتغال": ("#14532D", "#B91C1C", "#FDE68A"),
+    "إنجلترا": ("#111827", "#FFFFFF", "#DC2626"),
+    "ألمانيا": ("#111827", "#B91C1C", "#FBBF24"),
+    "كرواتيا": ("#991B1B", "#FFFFFF", "#1D4ED8"),
+    "مصر": ("#991B1B", "#111827", "#FFFFFF"),
+    "الولايات المتحدة": ("#1E3A8A", "#DC2626", "#FFFFFF"),
+}
+
+SPORTS_SOURCE_LABELS = {
+    "official": "رسمي",
+    "fast": "سريع",
+    "latest": "الأحدث",
+}
+
+
+def simple_key(name):
+    s = normalize_name(name).lower()
+    rep = {
+        "أ": "ا", "إ": "ا", "آ": "ا", "ة": "ه", "ى": "ي",
+        "ؤ": "و", "ئ": "ي",
+    }
+    for a, b in rep.items():
+        s = s.replace(a, b)
+    s = re.sub(r"[^a-z0-9\u0600-\u06FF]+", "", s)
+    return s
+
+
+def all_teams_canonical_map():
+    data = {}
+    for t in WORLD_CUP_TEAMS:
+        data[simple_key(t)] = t
+    for k, v in TEAM_ALIASES.items():
+        data[simple_key(k)] = v
+    # دعم أسماء الأعلام المعروفة في flags_map.json
+    try:
+        flags = load_flags_map()
+        for k in flags.keys():
+            can = flags.get(k)
+            if k:
+                kk = simple_key(k)
+                if kk not in data and can:
+                    data[kk] = can if can in WORLD_CUP_TEAMS else data.get(simple_key(can), can)
+    except Exception:
+        pass
+    return data
+
+
+def canonical_team_name(name):
+    if not name:
+        return None
+    key = simple_key(name)
+    data = all_teams_canonical_map()
+    exact = data.get(key)
+    if exact:
+        return exact
+    # تقريب ذكي
+    options = list(data.keys())
+    close = difflib.get_close_matches(key, options, n=1, cutoff=0.80)
+    if close:
+        return data.get(close[0])
+    return None
+
+
+def grouped_teams_text(with_points=False):
+    lines = []
+    for group, teams in WORLD_CUP_GROUPS:
+        lines.append(f"المجموعة {group}")
+        for t in teams:
+            if with_points:
+                lines.append(f"{t} — 0 نقطة")
+            else:
+                lines.append(t)
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def groups_template_text():
+    lines = ["/كل_المجموعات"]
+    for group, teams in WORLD_CUP_GROUPS:
+        lines.append(group)
+        for t in teams:
+            lines.append(f"{t} * 0 * 0 * 0")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def unsupported_team_message(name):
+    header = f"ما قدرت أتعرف على المنتخب: {normalize_name(name)} ❌\n\n"
+    keys = [t for t in WORLD_CUP_TEAMS]
+    suggestions = difflib.get_close_matches(simple_key(name), [simple_key(x) for x in keys], n=5, cutoff=0.55)
+    if suggestions:
+        rev = {simple_key(x): x for x in keys}
+        sug_names = [rev[s] for s in suggestions if s in rev]
+        if sug_names:
+            header += "هل تقصد:\n- " + "\n- ".join(sug_names) + "\n\n"
+    header += "اكتب /المنتخبات لعرض كل الـ 48 منتخب المعتمدة."
+    return header
+
+
+def load_qualified32_state():
+    if os.path.exists(QUALIFIED32_FILE):
+        try:
+            with open(QUALIFIED32_FILE, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            if isinstance(obj, dict):
+                teams = obj.get("teams", [])
+                if isinstance(teams, list):
+                    return [canonical_team_name(x) or normalize_name(x) for x in teams if normalize_name(x)]
+        except Exception:
+            pass
+    return []
+
+
+def save_qualified32_state(teams):
+    data = {"teams": [normalize_name(x) for x in teams[:32]]}
+    with open(QUALIFIED32_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def render_qualified32_board(teams):
+    ensure_generated_dir()
+    width, height = 1600, 2200
+    img = Image.new("RGB", (width, height), "#061633")
+    draw = ImageDraw.Draw(img)
+
+    # خلفية ناعمة
+    for y in range(height):
+        t = y / max(height - 1, 1)
+        c1 = (6, 22, 51)
+        c2 = (5, 55, 110)
+        r = int(c1[0] * (1 - t) + c2[0] * t)
+        g = int(c1[1] * (1 - t) + c2[1] * t)
+        b = int(c1[2] * (1 - t) + c2[2] * t)
+        draw.line((0, y, width, y), fill=(r, g, b))
+    ov = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(ov)
+    od.ellipse((-180, 220, 420, 820), fill=(20, 184, 166, 55))
+    od.ellipse((width - 380, 80, width + 140, 620), fill=(251, 191, 36, 45))
+    od.ellipse((width - 330, height - 580, width + 100, height - 120), fill=(34, 211, 238, 35))
+    try:
+        ov = ov.filter(ImageFilter.GaussianBlur(15))
+    except Exception:
+        pass
+    img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    draw_text(draw, (width//2, 110), "كأس العالم 2026", get_font(68), fill="#FFFFFF")
+    draw_text(draw, (width//2, 180), "المنتخبات المتأهلة إلى دور الـ 32", get_font(38), fill="#FDE68A")
+    draw.line((220, 230, width-220, 230), fill="#FFFFFF40", width=2)
+
+    cols, rows = 4, 8
+    margin_x, gap_x = 78, 34
+    start_y, gap_y = 290, 26
+    box_w = (width - 2*margin_x - (cols-1)*gap_x) // cols
+    box_h = 190
+
+    idx = 0
+    for r in range(rows):
+        for c in range(cols):
+            x = margin_x + c * (box_w + gap_x)
+            y = start_y + r * (box_h + gap_y)
+            rounded_rect(draw, (x, y, x+box_w, y+box_h), radius=24, fill="#081B3ECC", outline="#FFFFFF38", width=2)
+            draw_text(draw, (x+34, y+32), str(idx+1), get_font(22), fill="#A5B4FC", anchor="mm")
+            if idx < len(teams):
+                team = teams[idx]
+                paste_flag(img, team, (x+box_w//2-62, y+28, x+box_w//2+62, y+102))
+                draw_text(draw, (x+box_w//2, y+138), team, get_font(27), fill="#FFFFFF", max_width=box_w-30)
+            else:
+                rounded_rect(draw, (x+box_w//2-66, y+32, x+box_w//2+66, y+102), radius=18, fill="#FFFFFF0F", outline="#FFFFFF20", width=1)
+                draw_text(draw, (x+box_w//2, y+140), "—", get_font(28), fill="#93C5FD")
+            idx += 1
+
+    footer_event(draw, width, height)
+    path = os.path.join(GENERATED_DIR, "qualified32_board.png")
+    img.save(path, quality=95)
+    return path
+
+
+def parse_command_body_lines(text):
+    lines = (text or "").splitlines()
+    if not lines:
+        return []
+    first = lines[0]
+    rem = first.split(maxsplit=1)
+    body = []
+    if len(rem) > 1 and rem[1].strip():
+        body.append(rem[1].strip())
+    for line in lines[1:]:
+        if normalize_name(line):
+            body.append(normalize_name(line))
+    return body
+
+
+def parse_news_input(text):
+    body = parse_command_body_lines(text)
+    if not body:
+        return None, ""
+    if len(body) >= 2:
+        maybe_team = canonical_team_name(body[0])
+        if maybe_team:
+            return maybe_team, "\n".join(body[1:]).strip()
+    # إذا سطر واحد وكان فريق فقط، نرفض لأن الخبر ناقص
+    if len(body) == 1 and canonical_team_name(body[0]):
+        return canonical_team_name(body[0]), ""
+    return None, "\n".join(body).strip()
+
+
+def team_theme(team, mode="خبر"):
+    if team and team in TEAM_THEME_MAP:
+        return TEAM_THEME_MAP[team]
+    if mode == "عاجل":
+        return ("#7F1D1D", "#F59E0B", "#FFFFFF")
+    if mode == "تأهل":
+        return ("#14532D", "#FBBF24", "#FFFFFF")
+    if mode == "إقصاء":
+        return ("#1F2937", "#B91C1C", "#E5E7EB")
+    return ("#0F172A", "#38BDF8", "#FFFFFF")
+
+
+def news_header_title(kind):
+    return {
+        "خبر": "خبر",
+        "عاجل": "عاجل",
+        "تأهل": "رسميًا",
+        "إقصاء": "إقصاء",
+    }.get(kind, "خبر")
+
+
+def render_news_card(kind, team, body):
+    ensure_generated_dir()
+    width, height = 1200, 1350
+    base, accent, txt2 = team_theme(team, kind)
+    img = Image.new("RGB", (width, height), base)
+    draw = ImageDraw.Draw(img)
+    # تدرج
+    for y in range(height):
+        t = y / max(height - 1, 1)
+        try:
+            rgb1 = tuple(int(base.lstrip('#')[i:i+2], 16) for i in (0,2,4))
+            rgb2 = (5, 12, 24)
+            rr = int(rgb1[0]*(1-t)+rgb2[0]*t)
+            gg = int(rgb1[1]*(1-t)+rgb2[1]*t)
+            bb = int(rgb1[2]*(1-t)+rgb2[2]*t)
+            draw.line((0, y, width, y), fill=(rr, gg, bb))
+        except Exception:
+            pass
+    ov = Image.new("RGBA", (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(ov)
+    try:
+        if team:
+            od.ellipse((width-400, 90, width+80, 560), fill=(255,255,255,28))
+            od.ellipse((-120, 700, 280, 1120), fill=(255,255,255,18))
+        else:
+            od.ellipse((width-360, 120, width+60, 540), fill=(56,189,248,55))
+            od.ellipse((-150, 760, 250, 1160), fill=(251,191,36,32))
+        ov = ov.filter(ImageFilter.GaussianBlur(12))
+    except Exception:
+        pass
+    img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    rounded_rect(draw, (70, 70, width-70, 170), radius=30, fill="#FFFFFF18", outline="#FFFFFF35", width=2)
+    draw_text(draw, (width//2, 120), news_header_title(kind), get_font(54), fill="#FFFFFF")
+
+    if team:
+        paste_flag(img, team, (width//2-110, 215, width//2+110, 335))
+        draw_text(draw, (width//2, 380), team, get_font(52), fill="#FFFFFF", max_width=940)
+        top_body_y = 590
+    else:
+        draw_text(draw, (width//2, 290), "أخبار المصيف", get_font(58), fill="#FFFFFF")
+        top_body_y = 470
+
+    rounded_rect(draw, (90, top_body_y-70, width-90, height-170), radius=36, fill="#061633CC", outline=accent, width=3)
+    draw_text(draw, (width//2, (top_body_y+height-170)//2 - 16), body, get_font(46), fill="#FFFFFF", max_width=900, spacing=16)
+    draw.line((240, height-124, width-240, height-124), fill="#FFFFFF40", width=2)
+    draw_text(draw, (width//2, height-86), "المصيف يضعكم بالحدث", get_font(32), fill="#FDE68A")
+
+    out = os.path.join(GENERATED_DIR, f"news_{_safe_filename(kind)}_{_safe_filename(team or 'general')}.png")
+    img.save(out, quality=95)
+    return out
+
+
+async def send_photo_path_markup(message, path, caption=None, reply_markup=None):
+    with open(path, "rb") as f:
+        await message.reply_photo(photo=f, caption=caption or "", reply_markup=reply_markup)
+
+
+def load_sports_cache():
+    if os.path.exists(SPORTS_CACHE_FILE):
+        try:
+            with open(SPORTS_CACHE_FILE, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+    return {}
+
+
+def save_sports_cache(data):
+    with open(SPORTS_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def store_source_request(context, payload):
+    store = context.bot_data.setdefault("sports_source_requests", {})
+    key = datetime.now().strftime("%Y%m%d%H%M%S%f")[-12:]
+    store[key] = payload
+    # تنظيف خفيف
+    if len(store) > 80:
+        for k in list(store.keys())[:-60]:
+            store.pop(k, None)
+    return key
+
+
+def source_keyboard(context, payload):
+    token = store_source_request(context, payload)
+    rows = [[
+        InlineKeyboardButton("رسمي", callback_data=f"sportsrc|{token}|official"),
+        InlineKeyboardButton("سريع", callback_data=f"sportsrc|{token}|fast"),
+        InlineKeyboardButton("الأحدث", callback_data=f"sportsrc|{token}|latest"),
+    ]]
+    return InlineKeyboardMarkup(rows)
+
+
+def _requests_get(url, timeout=16):
+    if requests is None:
+        raise RuntimeError("requests غير متوفر")
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
+    }
+    return requests.get(url, timeout=timeout, headers=headers)
+
+
+def _extract_json_from_next_data(html):
+    m = re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except Exception:
+        return None
+
+
+def _iter_dict_nodes(obj):
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _iter_dict_nodes(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _iter_dict_nodes(item)
+
+
+def _normalize_status_text(text):
+    t = normalize_name(text)
+    if not t:
+        return ""
+    if any(x in t.lower() for x in ["in progress", "live"]):
+        return "مباشر"
+    if any(x in t.lower() for x in ["halftime", "half-time"]):
+        return "بين الشوطين"
+    if any(x in t.lower() for x in ["final", "full time", "ft"]):
+        return "انتهت المباراة"
+    if any(x in t.lower() for x in ["scheduled", "not started"]):
+        return "لم تبدأ"
+    return t
+
+
+def _parse_espn_match_from_event(event):
+    try:
+        comp = (event.get("competitions") or [event])[0]
+        competitors = comp.get("competitors") or []
+        if len(competitors) < 2:
+            return None
+        a = competitors[0]
+        b = competitors[1]
+        team1 = canonical_team_name(a.get("team", {}).get("displayName")) or normalize_name(a.get("team", {}).get("displayName"))
+        team2 = canonical_team_name(b.get("team", {}).get("displayName")) or normalize_name(b.get("team", {}).get("displayName"))
+        score1 = str(a.get("score", 0))
+        score2 = str(b.get("score", 0))
+        status = comp.get("status") or event.get("status") or {}
+        detail = normalize_name(((status.get("type") or {}).get("detail")) or status.get("displayClock") or "")
+        short_detail = normalize_name(((status.get("type") or {}).get("shortDetail")) or "")
+        state = normalize_name(((status.get("type") or {}).get("name")) or ((status.get("type") or {}).get("state")) or "")
+        status_ar = _normalize_status_text(detail or short_detail or state)
+        scorers = []
+        for d in comp.get("details", []) or []:
+            if isinstance(d, dict):
+                txt = normalize_name(d.get("text") or d.get("detail") or "")
+                if txt:
+                    scorers.append(txt)
+        minute = detail or short_detail
+        return {
+            "team1": team1,
+            "team2": team2,
+            "score1": score1,
+            "score2": score2,
+            "status": status_ar,
+            "minute": minute,
+            "scorers": scorers[:8],
+            "source": "ESPN",
+        }
+    except Exception:
+        return None
+
+
+def _teams_match(event_team1, event_team2, req1, req2):
+    c1 = canonical_team_name(event_team1) or normalize_name(event_team1)
+    c2 = canonical_team_name(event_team2) or normalize_name(event_team2)
+    r1 = canonical_team_name(req1) or normalize_name(req1)
+    r2 = canonical_team_name(req2) or normalize_name(req2)
+    return (c1 == r1 and c2 == r2) or (c1 == r2 and c2 == r1)
+
+
+def fetch_match_from_espn(team1, team2):
+    urls = [
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world_cup/scoreboard",
+    ]
+    last_err = None
+    for url in urls:
+        try:
+            r = _requests_get(url)
+            data = r.json()
+            for event in data.get("events", []) or []:
+                obj = _parse_espn_match_from_event(event)
+                if obj and _teams_match(obj["team1"], obj["team2"], team1, team2):
+                    return obj
+        except Exception as e:
+            last_err = e
+            continue
+    if last_err:
+        raise last_err
+    return None
+
+
+def _parse_fifa_match_candidates(obj, req1, req2):
+    for node in _iter_dict_nodes(obj):
+        keys = {k.lower() for k in node.keys()}
+        if not keys:
+            continue
+        # استخراج أسماء الفرق من أي شكل معروف
+        team_names = []
+        for key in ["homeTeam", "awayTeam", "home_team", "away_team", "team1", "team2"]:
+            if key in node:
+                val = node.get(key)
+                if isinstance(val, dict):
+                    team_names.append(val.get("name") or val.get("shortName") or val.get("displayName"))
+                else:
+                    team_names.append(val)
+        if len(team_names) < 2 and "participants" in node and isinstance(node.get("participants"), list):
+            parts = node.get("participants")
+            for p in parts[:2]:
+                if isinstance(p, dict):
+                    team_names.append(p.get("name") or p.get("shortName") or ((p.get("team") or {}).get("name") if isinstance(p.get("team"), dict) else None))
+        if len(team_names) < 2 and "teams" in node and isinstance(node.get("teams"), list):
+            for p in node.get("teams")[:2]:
+                if isinstance(p, dict):
+                    team_names.append(p.get("name") or p.get("shortName") or ((p.get("team") or {}).get("name") if isinstance(p.get("team"), dict) else None))
+        if len(team_names) >= 2 and _teams_match(team_names[0], team_names[1], req1, req2):
+            s1 = node.get("homeScore") or node.get("score1") or node.get("home_score")
+            s2 = node.get("awayScore") or node.get("score2") or node.get("away_score")
+            if isinstance(s1, dict):
+                s1 = s1.get("score") or s1.get("value") or s1.get("goals")
+            if isinstance(s2, dict):
+                s2 = s2.get("score") or s2.get("value") or s2.get("goals")
+            status = node.get("status") or node.get("matchStatus") or node.get("state") or node.get("stage") or ""
+            minute = node.get("minute") or node.get("clock") or node.get("time") or ""
+            scorers = []
+            for k in ["details", "events", "goals"]:
+                if k in node and isinstance(node.get(k), list):
+                    for item in node.get(k):
+                        if isinstance(item, dict):
+                            txt = item.get("text") or item.get("description") or item.get("detail") or item.get("name")
+                            if txt:
+                                scorers.append(normalize_name(txt))
+            return {
+                "team1": canonical_team_name(team_names[0]) or normalize_name(team_names[0]),
+                "team2": canonical_team_name(team_names[1]) or normalize_name(team_names[1]),
+                "score1": str(s1 if s1 is not None else 0),
+                "score2": str(s2 if s2 is not None else 0),
+                "status": _normalize_status_text(status),
+                "minute": normalize_name(minute),
+                "scorers": scorers[:8],
+                "source": "FIFA",
+            }
+    return None
+
+
+def fetch_match_from_fifa(team1, team2):
+    url = "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/scores-fixtures"
+    r = _requests_get(url)
+    txt = r.text
+    data = _extract_json_from_next_data(txt)
+    if data:
+        obj = _parse_fifa_match_candidates(data, team1, team2)
+        if obj:
+            return obj
+    # fallback: raw regex is intentionally light; if no reliable data نجد nothing.
+    return None
+
+
+def fetch_live_match_data(team1, team2, mode="official"):
+    mode = normalize_name(mode or "official").lower()
+    if mode in ["رسمي", "official"]:
+        sources = [fetch_match_from_fifa, fetch_match_from_espn]
+    elif mode in ["سريع", "fast"]:
+        sources = [fetch_match_from_espn, fetch_match_from_fifa]
+    else:
+        # الأحدث = جرب السريع ثم الرسمي وخذ أول شيء موجود
+        sources = [fetch_match_from_espn, fetch_match_from_fifa]
+    errors = []
+    for fn in sources:
+        try:
+            obj = fn(team1, team2)
+            if obj:
+                if not obj.get("status"):
+                    obj["status"] = "مباشر" if obj.get("minute") else "غير محدد"
+                return obj
+        except Exception as e:
+            errors.append(str(e))
+            continue
+    if errors:
+        raise RuntimeError(" | ".join(errors[:2]))
+    return None
+
+
+def _parse_espn_standings_json(data):
+    groups = []
+    entries = data.get("children") or data.get("groups") or data.get("standings") or []
+    for grp in entries:
+        title = normalize_name(grp.get("name") or grp.get("abbreviation") or grp.get("title") or "")
+        title = title if title.startswith("المجموعة") else (f"المجموعة {title}" if title else "")
+        rows = []
+        for item in grp.get("standings", []) or grp.get("entries", []) or []:
+            team = None
+            if isinstance(item.get("team"), dict):
+                team = item.get("team", {}).get("displayName") or item.get("team", {}).get("name")
+            elif isinstance(item.get("team"), str):
+                team = item.get("team")
+            elif isinstance(item.get("stats"), dict):
+                team = item.get("name")
+            stats = item.get("stats", []) or []
+            stat_map = {}
+            if isinstance(stats, list):
+                for s in stats:
+                    if isinstance(s, dict):
+                        key = normalize_name(s.get("name") or s.get("abbreviation") or "").lower()
+                        stat_map[key] = s.get("value") if s.get("value") is not None else s.get("displayValue")
+            elif isinstance(stats, dict):
+                stat_map = {normalize_name(k).lower(): v for k, v in stats.items()}
+            played = stat_map.get("played") or stat_map.get("p") or stat_map.get("gamesplayed") or 0
+            gd = stat_map.get("pointdifferential") or stat_map.get("gd") or stat_map.get("goaldifference") or 0
+            pts = stat_map.get("points") or stat_map.get("pts") or 0
+            team = canonical_team_name(team) or normalize_name(team)
+            if team:
+                try:
+                    played = int(played)
+                except Exception:
+                    pass
+                try:
+                    gd = int(gd)
+                except Exception:
+                    pass
+                try:
+                    pts = int(pts)
+                except Exception:
+                    pass
+                rows.append((team, played, gd, pts))
+        if title and rows:
+            rows.sort(key=lambda x: (x[3], x[2], x[0]), reverse=True)
+            groups.append((title, rows))
+    return groups
+
+
+def fetch_standings_from_espn():
+    urls = [
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/standings",
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world_cup/standings",
+    ]
+    last_err = None
+    for url in urls:
+        try:
+            r = _requests_get(url)
+            data = r.json()
+            groups = _parse_espn_standings_json(data)
+            if groups:
+                return groups
+        except Exception as e:
+            last_err = e
+            continue
+    if last_err:
+        raise last_err
+    return []
+
+
+def _parse_fifa_standings_candidates(obj):
+    group_map = defaultdict(list)
+    for node in _iter_dict_nodes(obj):
+        team = None
+        group = None
+        played = gd = pts = None
+        # team
+        if isinstance(node.get("team"), dict):
+            team = node.get("team", {}).get("name") or node.get("team", {}).get("shortName")
+        team = team or node.get("teamName") or node.get("name")
+        # stats
+        group = node.get("group") or node.get("groupName") or node.get("pool") or node.get("letter")
+        played = node.get("played") or node.get("gamesPlayed") or node.get("matches")
+        gd = node.get("goalDifference") or node.get("gd") or node.get("goal_diff")
+        pts = node.get("points") or node.get("pts")
+        if team and group is not None and pts is not None:
+            team = canonical_team_name(team) or normalize_name(team)
+            g = normalize_name(group)
+            if not g.startswith("المجموعة"):
+                g = f"المجموعة {g}"
+            try:
+                played = int(played)
+            except Exception:
+                played = 0
+            try:
+                gd = int(gd)
+            except Exception:
+                gd = 0
+            try:
+                pts = int(pts)
+            except Exception:
+                pts = 0
+            row = (team, played, gd, pts)
+            if row not in group_map[g]:
+                group_map[g].append(row)
+    groups = []
+    for g, rows in group_map.items():
+        rows.sort(key=lambda x: (x[3], x[2], x[0]), reverse=True)
+        groups.append((g, rows))
+    groups.sort(key=lambda x: x[0])
+    return groups
+
+
+def fetch_standings_from_fifa():
+    url = "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/standings"
+    r = _requests_get(url)
+    txt = r.text
+    data = _extract_json_from_next_data(txt)
+    if data:
+        groups = _parse_fifa_standings_candidates(data)
+        if groups:
+            return groups
+    return []
+
+
+def fetch_current_groups(mode="official"):
+    mode = normalize_name(mode or "official").lower()
+    if mode in ["رسمي", "official"]:
+        order = [(fetch_standings_from_fifa, "FIFA"), (fetch_standings_from_espn, "ESPN")]
+    elif mode in ["سريع", "fast"]:
+        order = [(fetch_standings_from_espn, "ESPN"), (fetch_standings_from_fifa, "FIFA")]
+    else:
+        order = [(fetch_standings_from_espn, "ESPN"), (fetch_standings_from_fifa, "FIFA")]
+    errors = []
+    for fn, label in order:
+        try:
+            groups = fn()
+            if groups:
+                return groups, label
+        except Exception as e:
+            errors.append(str(e))
+    if errors:
+        raise RuntimeError(" | ".join(errors[:2]))
+    return [], ""
+
+
+def build_groups_text(groups, source_label=None):
+    lines = []
+    for title, rows in groups:
+        lines.append(title)
+        for i, (team, played, gd, pts) in enumerate(rows, start=1):
+            lines.append(f"{i}- {team} — لعب {played} | فارق {gd} | {pts} نقطة")
+        lines.append("")
+    if source_label:
+        lines.append(f"المصدر: {source_label}")
+    return "\n".join(lines).strip()
+
+
+def render_live_match_card(match, mode_label="رسمي"):
+    ensure_generated_dir()
+    width, height = 1200, 1350
+    img = _style4_clean_background(width, height)
+    draw = ImageDraw.Draw(img)
+    draw_text(draw, (width//2, 100), "مباشر الآن", get_font(62), fill="#FFFFFF")
+    draw_text(draw, (width//2, 165), f"المصدر: {mode_label}", get_font(28), fill="#FDE68A")
+
+    rounded_rect(draw, (80, 235, width-80, 820), radius=40, fill="#07132FDD", outline="#38BDF855", width=2)
+    paste_flag(img, match["team1"], (160, 320, 310, 420))
+    paste_flag(img, match["team2"], (width-310, 320, width-160, 420))
+    draw_text(draw, (245, 470), match["team1"], get_font(40), fill="#FFFFFF", max_width=280)
+    draw_text(draw, (width-245, 470), match["team2"], get_font(40), fill="#FFFFFF", max_width=280)
+    draw_text(draw, (width//2, 430), f"{match['score1']} - {match['score2']}", get_font(96), fill="#FFFFFF")
+    rounded_rect(draw, (width//2-170, 520, width//2+170, 590), radius=22, fill="#FBBF24", outline="#FFFFFF33", width=1)
+    status_line = match.get("minute") or match.get("status") or ""
+    if match.get("status") and match.get("minute") and match.get("status") not in status_line:
+        status_line = f"{match['status']} — {match['minute']}"
+    draw_text(draw, (width//2, 555), status_line, get_font(30), fill="#061633")
+
+    y = 640
+    scorers = match.get("scorers") or []
+    if scorers:
+        draw_text(draw, (width//2, y), "الأحداث / الهدافون", get_font(34), fill="#FDE68A")
+        y += 60
+        for item in scorers[:6]:
+            rounded_rect(draw, (120, y-18, width-120, y+36), radius=18, fill="#0B1E46", outline="#FFFFFF22", width=1)
+            draw_text(draw, (width//2, y+10), normalize_name(item), get_font(28), fill="#FFFFFF", max_width=880)
+            y += 64
+    else:
+        draw_text(draw, (width//2, 690), match.get("status") or "متابعة مباشرة", get_font(34), fill="#FFFFFF")
+
+    footer_event(draw, width, height)
+    out = os.path.join(GENERATED_DIR, f"live_{_safe_filename(match['team1'])}_{_safe_filename(match['team2'])}.png")
+    img.save(out, quality=95)
+    return out
+
+
+def parse_live_command_text(text):
+    body = parse_command_body_lines(text)
+    raw = " ".join(body)
+    parts = [normalize_name(x) for x in raw.split("*") if normalize_name(x)]
+    mode = "official"
+    if len(parts) >= 3:
+        mode_part = normalize_name(parts[-1])
+        if mode_part in ["رسمي", "سريع", "الأحدث", "official", "fast", "latest"]:
+            mode = mode_part
+            parts = parts[:-1]
+    if len(parts) < 2:
+        return None, None, mode
+    return canonical_team_name(parts[0]) or normalize_name(parts[0]), canonical_team_name(parts[1]) or normalize_name(parts[1]), mode
+
+
+def mode_label_ar(mode):
+    mode = normalize_name(mode or "official").lower()
+    if mode in ["fast", "سريع"]:
+        return "سريع"
+    if mode in ["latest", "الأحدث"]:
+        return "الأحدث"
+    return "رسمي"
+
+
+def build_live_caption(match, mode_label="رسمي"):
+    lines = [f"{match['team1']} {match['score1']} - {match['score2']} {match['team2']}"]
+    status_line = match.get("minute") or match.get("status") or ""
+    if match.get("status") and match.get("minute") and match.get("status") not in status_line:
+        status_line = f"{match['status']} — {match['minute']}"
+    if status_line:
+        lines.append(status_line)
+    if match.get("scorers"):
+        lines.append("")
+        lines.append("الهدافون / الأحداث:")
+        for s in match.get("scorers", [])[:6]:
+            lines.append(f"- {normalize_name(s)}")
+    lines.append("")
+    lines.append(f"المصدر: {mode_label}")
+    return "\n".join(lines)
+
+
+async def teams_supported_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(grouped_teams_text(with_points=False))
+
+
+async def groups_points_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(grouped_teams_text(with_points=True))
+
+
+async def groups_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(groups_template_text())
+
+
+async def qualified_show_board_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    teams = load_qualified32_state()
+    path = render_qualified32_board(teams)
+    await send_photo_path(update, path, f"لوحة المتأهلين الحالية ✅\nعدد المنتخبات المضافة: {len(teams)}/32")
+
+
+async def qualified_reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    save_qualified32_state([])
+    path = render_qualified32_board([])
+    await send_photo_path(update, path, "تمت إعادة لوحة المتأهلين إلى وضعها الفارغ ✅")
+
+
+async def qualified_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = parse_command_body_lines(update.message.text)
+    if not body:
+        await update.message.reply_text("اكتبها كذا:\n/متأهل المكسيك")
+        return
+    team_raw = body[0]
+    team = canonical_team_name(team_raw)
+    if not team:
+        await update.message.reply_text(unsupported_team_message(team_raw))
+        return
+    teams = load_qualified32_state()
+    if team in teams:
+        await update.message.reply_text(f"{team} موجود مسبقًا في اللوحة ✅")
+        return
+    if len(teams) >= 32:
+        await update.message.reply_text("تم اكتمال قائمة المنتخبات المتأهلة إلى دور الـ32 ✅")
+        return
+    teams.append(team)
+    save_qualified32_state(teams)
+    path = render_qualified32_board(teams)
+    await send_photo_path(update, path, f"تمت إضافة {team} ✅\nالمجموع الحالي: {len(teams)}/32")
+
+
+async def qualified_add_many_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = parse_command_body_lines(update.message.text)
+    if not body:
+        await update.message.reply_text("اكتبها كذا:\n/متأهلين\nالمكسيك\nاليابان\nفرنسا")
+        return
+    if len(body) == 1 and ("," in body[0] or "،" in body[0]):
+        names = [normalize_name(x) for x in re.split(r"[,،]", body[0]) if normalize_name(x)]
+    else:
+        names = body
+    teams = load_qualified32_state()
+    added, invalid, skipped = [], [], []
+    for raw in names:
+        team = canonical_team_name(raw)
+        if not team:
+            invalid.append(raw)
+            continue
+        if team in teams or team in added:
+            skipped.append(team)
+            continue
+        if len(teams) + len(added) >= 32:
+            break
+        added.append(team)
+    teams.extend(added)
+    save_qualified32_state(teams)
+    path = render_qualified32_board(teams)
+    cap = [f"تم تحديث لوحة المتأهلين ✅\nالمجموع الحالي: {len(teams)}/32"]
+    if added:
+        cap.append("\nتمت الإضافة:\n- " + "\n- ".join(added))
+    if skipped:
+        cap.append("\nموجود مسبقًا:\n- " + "\n- ".join(skipped[:8]))
+    if invalid:
+        cap.append("\nتعذر التعرف على:\n- " + "\n- ".join(invalid[:8]))
+    await send_photo_path(update, path, "\n".join(cap))
+
+
+async def qualified_remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = parse_command_body_lines(update.message.text)
+    if not body:
+        await update.message.reply_text("اكتبها كذا:\n/حذف_متأهل المكسيك")
+        return
+    team_raw = body[0]
+    team = canonical_team_name(team_raw)
+    if not team:
+        await update.message.reply_text(unsupported_team_message(team_raw))
+        return
+    teams = load_qualified32_state()
+    if team not in teams:
+        await update.message.reply_text(f"{team} غير موجود في لوحة المتأهلين.")
+        return
+    teams = [x for x in teams if x != team]
+    save_qualified32_state(teams)
+    path = render_qualified32_board(teams)
+    await send_photo_path(update, path, f"تم حذف {team} من اللوحة ✅\nالمجموع الحالي: {len(teams)}/32")
+
+
+async def news_generic_command(update: Update, context: ContextTypes.DEFAULT_TYPE, kind="خبر"):
+    team, body = parse_news_input(update.message.text)
+    if not body:
+        sample = f"/{kind}\nالسعودية\nاستعادت صدارة المجموعة"
+        if kind in ["خبر", "عاجل"]:
+            sample += f"\n\nأو بدون منتخب:\n/{kind}\nتأجيل مباراة اليوم 30 دقيقة"
+        await update.message.reply_text(f"اكتبها كذا:\n{sample}")
+        return
+    path = render_news_card(kind, team, body)
+    caption = f"{kind} ✅"
+    if team:
+        caption += f"\n{team}"
+    await send_photo_path(update, path, caption)
+
+
+async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await news_generic_command(update, context, "خبر")
+
+
+async def urgent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await news_generic_command(update, context, "عاجل")
+
+
+async def qualified_news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await news_generic_command(update, context, "تأهل")
+
+
+async def eliminated_news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await news_generic_command(update, context, "إقصاء")
+
+
+async def current_groups_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    text = update.message.text if getattr(update, 'message', None) else ""
+    mode = mode_override
+    if not mode:
+        m = re.search(r"\*\s*(رسمي|سريع|الأحدث|official|fast|latest)\s*$", text or "", re.I)
+        mode = m.group(1) if m else "official"
+    try:
+        groups, source_label = fetch_current_groups(mode)
+        if not groups:
+            await update.message.reply_text("تعذر جلب ترتيب المجموعات الآن.")
+            return
+        path = create_all_groups_image(groups)
+        payload = {"kind": "standings"}
+        kb = source_keyboard(context, payload)
+        caption = f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)}"
+        await send_photo_path_markup(update.message, path, caption, kb)
+        await update.message.reply_text(build_groups_text(groups, mode_label_ar(mode)))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر جلب ترتيب المجموعات الآن:\n{e}")
+
+
+async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    team1, team2, mode = parse_live_command_text(update.message.text if getattr(update, 'message', None) else "")
+    if mode_override:
+        mode = mode_override
+    if not team1 or not team2:
+        await update.message.reply_text("اكتبها كذا:\n/مباشر السعودية * اسبانيا\nأو\n/مباشر السعودية * اسبانيا * سريع")
+        return
+    try:
+        data = fetch_live_match_data(team1, team2, mode)
+        if not data:
+            await update.message.reply_text(f"ما لقيت مباراة {team1} ضد {team2} الآن.")
+            return
+        path = render_live_match_card(data, mode_label_ar(mode))
+        payload = {"kind": "live", "team1": team1, "team2": team2}
+        kb = source_keyboard(context, payload)
+        await send_photo_path_markup(update.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+    except Exception as e:
+        await update.message.reply_text(f"تعذر جلب المباراة الآن:\n{e}")
+
+
+async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    if not is_admin_user(update):
+        await query.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+    parts = (query.data or "").split("|")
+    if len(parts) != 3:
+        await query.message.reply_text("تعذر قراءة الخيار.")
+        return
+    _tag, token, mode = parts
+    payload = context.bot_data.get("sports_source_requests", {}).get(token)
+    if not payload:
+        await query.message.reply_text("انتهت صلاحية الخيار، أعد تنفيذ الأمر من جديد.")
+        return
+    kind = payload.get("kind")
+    try:
+        if kind == "standings":
+            groups, _src = fetch_current_groups(mode)
+            if not groups:
+                await query.message.reply_text("تعذر جلب ترتيب المجموعات الآن.")
+                return
+            path = create_all_groups_image(groups)
+            kb = source_keyboard(context, payload)
+            await send_photo_path_markup(query.message, path, f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)}", kb)
+            await query.message.reply_text(build_groups_text(groups, mode_label_ar(mode)))
+        elif kind == "live":
+            team1 = payload.get("team1")
+            team2 = payload.get("team2")
+            data = fetch_live_match_data(team1, team2, mode)
+            if not data:
+                await query.message.reply_text(f"ما لقيت مباراة {team1} ضد {team2} الآن.")
+                return
+            path = render_live_match_card(data, mode_label_ar(mode))
+            kb = source_keyboard(context, payload)
+            await send_photo_path_markup(query.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+        else:
+            await query.message.reply_text("تعذر تحديد نوع الطلب.")
+    except Exception as e:
+        await query.message.reply_text(f"تعذر جلب البيانات الآن:\n{e}")
+
+
 # Main V27 — يعيد تسجيل كل الأوامر بالترتيب الصحيح.
 def main():
     if not TOKEN:
@@ -9012,6 +10069,28 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_آخر"), admin_only(restore_last)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
+
+
+    # الأخبار والمتأهلين والمباشر V2
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المنتخبات(?:\s|$)"), admin_only(teams_supported_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المجموعات(?:\s|$)"), admin_only(groups_points_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قالب_المجموعات(?:\s|$)"), admin_only(groups_template_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/لوحة_المتأهلين(?:\s|$)"), admin_only(qualified_show_board_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إعادة_المتأهلين(?:\s|$)"), admin_only(qualified_reset_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعادة_المتأهلين(?:\s|$)"), admin_only(qualified_reset_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/حذف_متأهل(?:\s|$)"), admin_only(qualified_remove_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/متأهلين(?:\s|$)"), admin_only(qualified_add_many_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/متأهل(?:\s|$)"), admin_only(qualified_add_command)))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تأهل(?:\s|$)"), admin_only(qualified_news_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إقصاء(?:\s|$)"), admin_only(eliminated_news_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اقصاء(?:\s|$)"), admin_only(eliminated_news_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/عاجل(?:\s|$)"), admin_only(urgent_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/خبر(?:\s|$)"), admin_only(news_command)))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_المجموعات_الان(?:\s|$)"), admin_only(current_groups_now_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباشر(?:\s|$)"), admin_only(live_match_command)))
+    app.add_handler(CallbackQueryHandler(sports_source_callback, pattern=r"^sportsrc\|"))
 
     # V31 — مباريات اليوم بالتصميم الجديد
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم2(?:\s|$)"), admin_only(matches_today_v31_clean_command)))
