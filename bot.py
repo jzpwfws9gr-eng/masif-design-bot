@@ -12088,6 +12088,462 @@ async def participants_list_command(update: Update, context: ContextTypes.DEFAUL
 
 # ==================== END V5 FINAL PATCH ====================
 
+# ==================== V6 HOTFIX: live sources stability + Google/365/Kooora parsing ====================
+import asyncio as _asyncio_v6
+
+
+def _norm_source_mode(mode):
+    m = normalize_name(mode or "").lower().strip()
+    table = {
+        "سريع": "google", "fast": "google", "google": "google", "قوقل": "google", "جوجل": "google",
+        "365": "365", "٣٦٥": "365", "365scores": "365", "365score": "365",
+        "كورة": "kooora", "كوره": "kooora", "كووورة": "kooora", "كووره": "kooora", "kooora": "kooora", "koora": "kooora",
+        "رسمي": "official", "official": "official", "api": "official", "api-football": "official", "api football": "official",
+        "الأحدث": "latest", "الاحدث": "latest", "latest": "latest",
+    }
+    return table.get(m, m or "google")
+
+
+def mode_label_ar(mode):
+    m = _norm_source_mode(mode)
+    return {"google": "قوقل", "365": "365", "kooora": "كورة", "official": "رسمي", "latest": "الأحدث"}.get(m, normalize_name(mode or "قوقل"))
+
+
+def source_keyboard(context, payload):
+    token = store_source_request(context, payload)
+    rows = [
+        [
+            InlineKeyboardButton("قوقل", callback_data=f"sportsrc|{token}|google"),
+            InlineKeyboardButton("365", callback_data=f"sportsrc|{token}|365"),
+            InlineKeyboardButton("كورة", callback_data=f"sportsrc|{token}|kooora"),
+        ],
+        [
+            InlineKeyboardButton("رسمي", callback_data=f"sportsrc|{token}|official"),
+            InlineKeyboardButton("الأحدث", callback_data=f"sportsrc|{token}|latest"),
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def _parse_live_date_token_v6(token):
+    token = normalize_name(token)
+    if not token:
+        return None
+    # dd/mm/yyyy -> yyyy-mm-dd
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", token)
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return f"{y:04d}-{mo:02d}-{d:02d}"
+    # yyyy-mm-dd stays
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", token):
+        return token
+    try:
+        return _parse_live_date_from_text(token)
+    except Exception:
+        return None
+
+
+def parse_live_command_text(text):
+    body = parse_command_body_lines(text)
+    raw = " ".join(body)
+    parts = [normalize_name(x) for x in raw.split("*") if normalize_name(x)]
+    mode = "google"
+    date_hint = _parse_live_date_token_v6(raw)
+    source_words = {"رسمي", "سريع", "الأحدث", "الاحدث", "official", "fast", "latest", "google", "قوقل", "جوجل", "365", "٣٦٥", "365scores", "كورة", "كوره", "كووورة", "كووره", "kooora", "koora", "api"}
+    # Peel any source/date tokens from the end, in any order.
+    while len(parts) >= 3:
+        last = normalize_name(parts[-1])
+        if last.lower() in {x.lower() for x in source_words} or last in source_words:
+            mode = last
+            parts.pop()
+            continue
+        d = _parse_live_date_token_v6(last)
+        if d:
+            date_hint = d
+            parts.pop()
+            continue
+        break
+    if len(parts) < 2:
+        return None, None, _norm_source_mode(mode), date_hint
+    t1 = canonical_team_name(parts[0]) or normalize_name(parts[0])
+    t2 = canonical_team_name(parts[1]) or normalize_name(parts[1])
+    return t1, t2, _norm_source_mode(mode), date_hint
+
+
+def _source_mode_sequence(mode):
+    m = _norm_source_mode(mode)
+    if m == "google":
+        return ["google"]
+    if m == "365":
+        return ["365", "google"]
+    if m == "kooora":
+        return ["kooora", "google"]
+    if m == "official":
+        return ["api", "fifa", "espn", "google"]
+    if m == "latest":
+        return ["google", "365", "kooora", "api", "fifa", "espn"]
+    return ["google", "365", "kooora", "api"]
+
+
+def _team_name_from_any_v6(item):
+    if isinstance(item, str):
+        return canonical_team_name(item) or normalize_name(item)
+    if not isinstance(item, dict):
+        return ""
+    keys = [
+        "name", "title", "team", "team_name", "teamName", "short_name", "shortName",
+        "displayName", "display_name", "full_name", "fullName", "participant", "competitor",
+        "homeTeam", "awayTeam", "home_team", "away_team", "home", "away",
+    ]
+    for key in keys:
+        v = item.get(key)
+        if isinstance(v, str) and normalize_name(v):
+            return canonical_team_name(v) or normalize_name(v)
+        if isinstance(v, dict):
+            nested = _team_name_from_any_v6(v)
+            if nested:
+                return nested
+    # Some Google result cards use aria/alt labels.
+    for key in ["alt", "aria_label", "aria-label", "subtitle", "label"]:
+        v = item.get(key)
+        if isinstance(v, str):
+            for tm in WORLD_CUP_TEAMS:
+                if _blob_has_both_teams(v, tm, tm):
+                    return tm
+    return ""
+
+
+def _score_from_any_v6(item):
+    if not isinstance(item, dict):
+        return None
+    score_keys = [
+        "score", "points", "goals", "result", "value", "display_score", "displayScore",
+        "home_score", "away_score", "homeScore", "awayScore", "goalsFor", "goals_for",
+    ]
+    for key in score_keys:
+        if key in item and item.get(key) not in (None, ""):
+            try:
+                return _extract_score_value(item.get(key))
+            except Exception:
+                return str(item.get(key)).strip()
+    for key in ["standing", "stats", "score_data", "scoreData", "statistics"]:
+        if isinstance(item.get(key), dict):
+            val = _score_from_any_v6(item.get(key))
+            if val is not None:
+                return val
+    return None
+
+
+def _team_matches_req_v6(name, req):
+    try:
+        return _blob_contains_team(name, req)
+    except Exception:
+        name = simple_key(name)
+        req = simple_key(req)
+        return bool(name and req and (name in req or req in name))
+
+
+def _collect_scores_by_team_v6(root, req1, req2):
+    scores = {}
+    names = {}
+    for node in _walk_json(root):
+        if not isinstance(node, dict):
+            continue
+        nm = _team_name_from_any_v6(node)
+        if not nm:
+            continue
+        sc = _score_from_any_v6(node)
+        if sc is None:
+            continue
+        if _team_matches_req_v6(nm, req1):
+            scores["req1"] = sc
+            names["req1"] = canonical_team_name(nm) or normalize_name(nm)
+        elif _team_matches_req_v6(nm, req2):
+            scores["req2"] = sc
+            names["req2"] = canonical_team_name(nm) or normalize_name(nm)
+    if "req1" in scores and "req2" in scores:
+        return {
+            "team1": canonical_team_name(req1) or names.get("req1") or req1,
+            "team2": canonical_team_name(req2) or names.get("req2") or req2,
+            "score1": scores["req1"],
+            "score2": scores["req2"],
+        }
+    return None
+
+
+def _status_from_serp_v6(root):
+    vals = []
+    for node in _walk_json(root):
+        if not isinstance(node, dict):
+            continue
+        for k in ["status", "game_status", "match_status", "status_text", "statusText", "status_line", "state", "period", "time", "date"]:
+            v = node.get(k)
+            if isinstance(v, str) and normalize_name(v) and len(v) < 80:
+                vals.append(v)
+    raw = " | ".join(vals[:4])
+    if raw:
+        try:
+            return _norm_status_ar(raw)
+        except Exception:
+            return normalize_name(raw)
+    return "غير محدد"
+
+
+def _parse_serp_sports_node_v6(node, req1, req2, source_name="Google Sports"):
+    # Existing parser first.
+    try:
+        obj = _parse_serp_sports_node(node, req1, req2)
+        if obj:
+            obj["source"] = source_name
+            return obj
+    except Exception:
+        pass
+    if not isinstance(node, (dict, list)):
+        return None
+    # New robust team-score collector for Google Sports game_spotlight.
+    pair = _collect_scores_by_team_v6(node, req1, req2)
+    if pair:
+        pair.update({
+            "status": _status_from_serp_v6(node),
+            "minute": "",
+            "scorers": _collect_scorers_from_serp_node(node) if '_collect_scorers_from_serp_node' in globals() else [],
+            "source": source_name,
+        })
+        return pair
+    # If Google returned teams without scores, do not invent a score.
+    return None
+
+
+def _serpapi_query_candidates(team1, team2, date_hint=None, source="google"):
+    ar1, ar2 = canonical_team_name(team1) or normalize_name(team1), canonical_team_name(team2) or normalize_name(team2)
+    en1 = team_query_name(ar1) if 'team_query_name' in globals() else ar1
+    en2 = team_query_name(ar2) if 'team_query_name' in globals() else ar2
+    if source == "365":
+        base = [
+            f"site:365scores.com {ar1} {ar2} كأس العالم 2026",
+            f"site:365scores.com {en1} {en2} FIFA World Cup 2026 score",
+        ]
+    elif source == "kooora":
+        base = [
+            f"site:kooora.com {ar1} {ar2} كأس العالم 2026",
+            f"site:kooora.com {en1} {en2} FIFA World Cup 2026 score",
+        ]
+    else:
+        base = [
+            f"مباراة {ar1} {ar2}",
+            f"{en1} vs {en2} FIFA World Cup 2026",
+        ]
+    queries = []
+    if date_hint:
+        queries.extend([f"{q} {date_hint}" for q in base])
+    queries.extend(base)
+    out = []
+    for q in queries:
+        q = normalize_name(q)
+        if q and q not in out:
+            out.append(q)
+    return out[:3]
+
+
+def _fetch_match_from_serp_source(team1, team2, date_hint=None, source="google"):
+    if not _serpapi_key():
+        return None
+    req1 = canonical_team_name(team1) or normalize_name(team1)
+    req2 = canonical_team_name(team2) or normalize_name(team2)
+    source_name = {"google": "Google Sports", "365": "365Scores عبر Google", "kooora": "Kooora عبر Google"}.get(source, "Google")
+    # Limit attempts so Telegram never feels frozen.
+    attempts = []
+    for q in _serpapi_query_candidates(req1, req2, date_hint, source=source):
+        if source == "google":
+            attempts.append((q, "ar", "sa"))
+            if len(attempts) < 2:
+                attempts.append((q, "en", "us"))
+        else:
+            attempts.append((q, "ar", "sa"))
+    for q, hl, gl in attempts[:3]:
+        data = serpapi_search_json(q, hl=hl, gl=gl, timeout=7)
+        roots = []
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        if isinstance(sr, dict):
+            roots.append(sr)
+            for k in ["game_spotlight", "games", "matches", "scoreboard", "team_standings", "players", "teams"]:
+                if isinstance(sr.get(k), (dict, list)):
+                    roots.append(sr.get(k))
+        roots.append(data)
+        for root in roots:
+            obj = _parse_serp_sports_node_v6(root, req1, req2, source_name=source_name)
+            if obj:
+                return obj
+        blob = json.dumps(data, ensure_ascii=False)
+        # Organic snippets fallback, only if both teams are clearly present.
+        if _blob_has_both_teams(blob, req1, req2):
+            s = _score_from_text_near_teams(blob, req1, req2) if '_score_from_text_near_teams' in globals() else None
+            if s:
+                return {
+                    "team1": req1, "team2": req2,
+                    "score1": s.get("score1"), "score2": s.get("score2"),
+                    "status": s.get("status") or "حسب المصدر", "minute": "",
+                    "scorers": _collect_scorers_from_serp_node(data) if '_collect_scorers_from_serp_node' in globals() else [],
+                    "source": source_name,
+                }
+    return None
+
+
+def fetch_match_from_serpapi(team1, team2, date_hint=None):
+    return _fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="google")
+
+
+def fetch_match_from_365(team1, team2, date_hint=None):
+    return _fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="365")
+
+
+def fetch_match_from_kooora(team1, team2, date_hint=None):
+    return _fetch_match_from_serp_source(team1, team2, date_hint=date_hint, source="kooora")
+
+
+def fetch_live_match_data(team1, team2, mode="google", date_hint=None):
+    for src in _source_mode_sequence(mode):
+        try:
+            if src == "google":
+                obj = fetch_match_from_serpapi(team1, team2, date_hint=date_hint)
+            elif src == "365":
+                obj = fetch_match_from_365(team1, team2, date_hint=date_hint)
+            elif src == "kooora":
+                obj = fetch_match_from_kooora(team1, team2, date_hint=date_hint)
+            elif src == "api":
+                obj = fetch_match_from_api_football(team1, team2, date_hint=date_hint)
+            elif src == "fifa":
+                obj = fetch_match_from_fifa(team1, team2)
+            else:
+                obj = fetch_match_from_espn(team1, team2, date_hint=date_hint)
+            if obj:
+                obj["source"] = obj.get("source") or mode_label_ar(src)
+                if not obj.get("status"):
+                    obj["status"] = "مباشر" if obj.get("minute") else "غير محدد"
+                return obj
+        except Exception as e:
+            # Do not crash or freeze the bot. Try next source.
+            continue
+    return None
+
+
+async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    team1, team2, mode, date_hint = parse_live_command_text(update.message.text if getattr(update, 'message', None) else "")
+    if mode_override:
+        mode = _norm_source_mode(mode_override)
+    if not team1 or not team2:
+        await update.message.reply_text("اكتبها كذا:\n/مباشر المكسيك * كوريا الجنوبية * قوقل\nأو:\n/مباشر المكسيك * كوريا الجنوبية * 18/06/2026 * قوقل")
+        return
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
+    kb = source_keyboard(context, payload)
+    wait = await update.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}")
+    try:
+        data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_live_match_data, team1, team2, mode, date_hint), timeout=18)
+    except Exception:
+        data = None
+    if not data:
+        await wait.edit_text(
+            f"تعذر جلب المباراة من مصدر {mode_label_ar(mode)} ❌\n"
+            f"مباراة: {team1} × {team2}\n" + (f"التاريخ: {date_hint}\n" if date_hint else "") +
+            "\nاختر مصدر آخر أو جرّب الأمر:\n/بحث_قوقل مباراة المكسيك كوريا الجنوبية",
+            reply_markup=kb,
+        )
+        return
+    try:
+        path = render_live_match_card(data, mode_label_ar(mode))
+        await wait.delete()
+        await send_photo_path_markup(update.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+    except Exception:
+        await wait.edit_text(build_live_caption(data, mode_label_ar(mode)), reply_markup=kb)
+
+
+async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    if not is_admin_user(update):
+        await query.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+    parts = (query.data or "").split("|")
+    if len(parts) != 3:
+        await query.message.reply_text("تعذر قراءة الخيار.")
+        return
+    _tag, token, mode = parts
+    payload = context.bot_data.get("sports_source_requests", {}).get(token)
+    if not payload:
+        await query.message.reply_text("انتهت صلاحية الخيار، أعد تنفيذ الأمر من جديد.")
+        return
+    kb = source_keyboard(context, payload)
+    if payload.get("kind") == "standings":
+        groups, src = fetch_current_groups(mode)
+        if not groups:
+            await query.message.reply_text(_source_help_text("standings", mode) + "\n\nاختر مصدر آخر:", reply_markup=kb)
+            return
+        path = create_all_groups_image(groups)
+        await send_photo_path_markup(query.message, path, f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)} ({src})", kb)
+        await query.message.reply_text(build_groups_text(groups, f"{mode_label_ar(mode)} ({src})"))
+        return
+    if payload.get("kind") == "live":
+        team1, team2 = payload.get("team1"), payload.get("team2")
+        msg = await query.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}")
+        try:
+            data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_live_match_data, team1, team2, mode, payload.get("date_hint")), timeout=18)
+        except Exception:
+            data = None
+        if not data:
+            await msg.edit_text(f"تعذر جلب مباراة {team1} × {team2} من مصدر {mode_label_ar(mode)} ❌\n\nاختر مصدر آخر:", reply_markup=kb)
+            return
+        try:
+            path = render_live_match_card(data, mode_label_ar(mode))
+            await msg.delete()
+            await send_photo_path_markup(query.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+        except Exception:
+            await msg.edit_text(build_live_caption(data, mode_label_ar(mode)), reply_markup=kb)
+        return
+    await query.message.reply_text("تعذر تحديد نوع الطلب.")
+
+
+async def google_search_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = parse_command_body_lines(update.message.text)
+    query = " ".join(body).strip() or "مباراة المكسيك كوريا الجنوبية"
+    msg = await update.message.reply_text(f"⏳ أفحص قوقل: {query}")
+    try:
+        data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(serpapi_search_json, query, "ar", "sa", 8), timeout=12)
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        lines = ["نتيجة فحص قوقل:", f"query: {query}"]
+        if isinstance(sr, dict):
+            lines.append("✅ sports_results موجود")
+            lines.append("مفاتيح: " + "، ".join(list(sr.keys())[:12]))
+            # Try parse the requested/known Mexico-Korea match if present.
+            obj = None
+            for root in [sr, data]:
+                obj = _parse_serp_sports_node_v6(root, "المكسيك", "كوريا الجنوبية", source_name="Google Sports")
+                if obj:
+                    break
+            if obj:
+                lines.append(f"✅ قرأت المباراة: {obj['team1']} {obj['score1']} - {obj['score2']} {obj['team2']}")
+                lines.append(f"الحالة: {obj.get('status','')}")
+            else:
+                names = []
+                for node in _walk_json(sr):
+                    if isinstance(node, dict):
+                        nm = _team_name_from_any_v6(node)
+                        if nm and nm not in names:
+                            names.append(nm)
+                    if len(names) >= 8:
+                        break
+                if names:
+                    lines.append("أسماء ظهرت: " + "، ".join(names[:8]))
+                lines.append("⚠️ وصلنا لقوقل لكن لم أقرأ النتيجة من البنية الحالية")
+        else:
+            lines.append("⚠️ لم يظهر sports_results")
+        await msg.edit_text("\n".join(lines[:12]))
+    except Exception as e:
+        await msg.edit_text(f"❌ فشل فحص قوقل: {str(e)[:220]}")
+
+# ==================== END V6 HOTFIX ====================
+
 def main():
     if not TOKEN:
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
