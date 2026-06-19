@@ -23,7 +23,7 @@ from openpyxl.chart import BarChart, LineChart, PieChart, Reference
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or os.getenv("TOKEN"))
 
 PARTICIPANTS = [
     "عادل عيد", "فهد فارس", "نواف فارس", "خالد عبدالرحمن",
@@ -6465,7 +6465,7 @@ async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 def main():
     if not TOKEN:
-        raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
+        raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN (أو TELEGRAM_BOT_TOKEN / TELEGRAM_TOKEN)")
     ensure_flags_assets()
     ensure_design_assets()
     load_participants_state()
@@ -12551,7 +12551,7 @@ async def google_search_debug_command(update: Update, context: ContextTypes.DEFA
 
 def main():
     if not TOKEN:
-        raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
+        raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN (أو TELEGRAM_BOT_TOKEN / TELEGRAM_TOKEN)")
     ensure_flags_assets()
     ensure_design_assets()
     app = ApplicationBuilder().token(TOKEN).build()
@@ -15129,6 +15129,782 @@ async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_T
         await send_photo_path_markup(query.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
         return
     await query.message.reply_text("تعذر تحديد نوع الطلب.")
+
+
+# ==================== V12 FINAL PATCH: clean team filenames + deeper Google rankings parser ====================
+# اعتماد V12:
+# - لا يسمح بدخول أسماء ملفات الأعلام مثل scotland.png في البحث أو الكابشن.
+# - /ترتيب_المجموعات_الان يقرأ sports_results.rankings بعمق أكبر، ويجمع الصفوف حتى لو تغيرت بنية SerpApi.
+# - /مباشر * قوقل يبني الاستعلام بأسماء المنتخبات الحقيقية فقط.
+
+_V12_ORIGINAL_CANONICAL_TEAM_NAME = canonical_team_name
+_V12_ORIGINAL_FETCH_LIVE_MATCH_DATA = fetch_live_match_data
+
+
+def _v12_strip_file_token(value):
+    s = normalize_name(value or "")
+    # Telegram/Google parsing bug guard: never treat flag filenames as team names.
+    s = re.sub(r"(?i)\b([a-z0-9_\-]+)\.(?:png|jpg|jpeg|webp|svg)\b", r"\1", s)
+    s = s.replace("_", " ").replace("-", " ")
+    return normalize_name(s)
+
+
+def _v12_team_alias_map():
+    data = {}
+    for t in WORLD_CUP_TEAMS:
+        data[simple_key(t)] = t
+    for k, v in TEAM_ALIASES.items():
+        if v in WORLD_CUP_TEAMS:
+            data[simple_key(k)] = v
+    try:
+        for ar, ens in TEAM_SEARCH_EN.items():
+            data[simple_key(ar)] = ar
+            for en in ens:
+                data[simple_key(en)] = ar
+                data[simple_key(en.lower())] = ar
+    except Exception:
+        pass
+    # stems usually coming from flags filenames
+    data.update({
+        "mexico": "المكسيك", "mex": "المكسيك",
+        "southafrica": "جنوب أفريقيا", "rsa": "جنوب أفريقيا",
+        "southkorea": "كوريا الجنوبية", "korea": "كوريا الجنوبية", "korearepublic": "كوريا الجنوبية", "kor": "كوريا الجنوبية",
+        "czechia": "التشيك", "czech": "التشيك", "cze": "التشيك",
+        "canada": "كندا", "can": "كندا",
+        "bosnia": "البوسنة والهرسك", "bosniaandherzegovina": "البوسنة والهرسك", "bih": "البوسنة والهرسك",
+        "qatar": "قطر", "qat": "قطر",
+        "switzerland": "سويسرا", "sui": "سويسرا",
+        "brazil": "البرازيل", "bra": "البرازيل",
+        "morocco": "المغرب", "mar": "المغرب",
+        "haiti": "هايتي", "hti": "هايتي",
+        "scotland": "اسكتلندا", "sco": "اسكتلندا",
+        "unitedstates": "الولايات المتحدة", "usa": "الولايات المتحدة", "us": "الولايات المتحدة", "america": "الولايات المتحدة",
+        "paraguay": "باراغواي", "par": "باراغواي",
+        "australia": "أستراليا", "aus": "أستراليا",
+        "turkey": "تركيا", "turkiye": "تركيا", "tur": "تركيا",
+        "germany": "ألمانيا", "ger": "ألمانيا",
+        "curacao": "كوراساو", "cuw": "كوراساو",
+        "ivorycoast": "ساحل العاج", "cotedivoire": "ساحل العاج", "civ": "ساحل العاج",
+        "ecuador": "الإكوادور", "ecu": "الإكوادور",
+        "netherlands": "هولندا", "ned": "هولندا",
+        "japan": "اليابان", "jpn": "اليابان",
+        "sweden": "السويد", "swe": "السويد",
+        "tunisia": "تونس", "tun": "تونس",
+        "belgium": "بلجيكا", "bel": "بلجيكا",
+        "egypt": "مصر", "egy": "مصر",
+        "iran": "إيران", "iri": "إيران",
+        "newzealand": "نيوزيلندا", "nzl": "نيوزيلندا",
+        "spain": "إسبانيا", "esp": "إسبانيا",
+        "capeverde": "الرأس الأخضر", "caboverde": "الرأس الأخضر", "cpv": "الرأس الأخضر",
+        "saudiarabia": "السعودية", "ksa": "السعودية",
+        "uruguay": "أوروجواي", "uru": "أوروجواي",
+        "france": "فرنسا", "fra": "فرنسا",
+        "senegal": "السنغال", "sen": "السنغال",
+        "iraq": "العراق", "irq": "العراق",
+        "norway": "النرويج", "nor": "النرويج",
+        "argentina": "الأرجنتين", "arg": "الأرجنتين",
+        "algeria": "الجزائر", "dza": "الجزائر", "alg": "الجزائر",
+        "austria": "النمسا", "aut": "النمسا",
+        "jordan": "الأردن", "jor": "الأردن",
+        "portugal": "البرتغال", "por": "البرتغال",
+        "drcongo": "الكونغو الديمقراطية", "congodr": "الكونغو الديمقراطية", "cod": "الكونغو الديمقراطية",
+        "uzbekistan": "أوزبكستان", "uzb": "أوزبكستان",
+        "colombia": "كولومبيا", "col": "كولومبيا",
+        "england": "إنجلترا", "eng": "إنجلترا",
+        "croatia": "كرواتيا", "cro": "كرواتيا",
+        "ghana": "غانا", "gha": "غانا",
+        "panama": "بنما", "pan": "بنما",
+    })
+    return data
+
+
+def canonical_team_name(name):
+    """V12 safe canonicalizer: official team names only; never returns flag filenames."""
+    raw = normalize_name(name or "")
+    cleaned = _v12_strip_file_token(raw)
+    data = _v12_team_alias_map()
+    for candidate in [cleaned, raw]:
+        key = simple_key(candidate)
+        if key in data:
+            return data[key]
+    try:
+        old = _V12_ORIGINAL_CANONICAL_TEAM_NAME(cleaned) or _V12_ORIGINAL_CANONICAL_TEAM_NAME(raw)
+    except Exception:
+        old = None
+    if old:
+        old_clean = _v12_strip_file_token(old)
+        if old_clean in WORLD_CUP_TEAMS:
+            return old_clean
+        ok = data.get(simple_key(old_clean))
+        if ok:
+            return ok
+    close = difflib.get_close_matches(simple_key(cleaned), list(data.keys()), n=1, cutoff=0.78)
+    if close:
+        return data.get(close[0])
+    return None
+
+
+def _v12_canon_or_clean_team(x):
+    return canonical_team_name(x) or _v12_strip_file_token(x)
+
+
+def parse_live_command_text(text):
+    body = parse_command_body_lines(text)
+    raw = " ".join(body)
+    parts = [normalize_name(x) for x in raw.split("*") if normalize_name(x)]
+    mode = "google"
+    date_hint = _parse_live_date_token_v6(raw)
+    source_words = {"رسمي", "سريع", "الأحدث", "الاحدث", "official", "fast", "latest", "google", "قوقل", "جوجل", "365", "٣٦٥", "365scores", "كورة", "كوره", "كووورة", "كووره", "kooora", "koora", "api"}
+    while len(parts) >= 3:
+        last = normalize_name(parts[-1])
+        if last.lower() in {x.lower() for x in source_words} or last in source_words:
+            mode = last
+            parts.pop()
+            continue
+        d = _parse_live_date_token_v6(last)
+        if d:
+            date_hint = d
+            parts.pop()
+            continue
+        break
+    if len(parts) < 2:
+        return None, None, _norm_source_mode(mode), date_hint
+    t1 = _v12_canon_or_clean_team(parts[0])
+    t2 = _v12_canon_or_clean_team(parts[1])
+    return t1, t2, _norm_source_mode(mode), date_hint
+
+
+def _v12_team_hits(obj):
+    try:
+        blob = normalize_name(json.dumps(obj, ensure_ascii=False) if not isinstance(obj, str) else obj)
+    except Exception:
+        blob = normalize_name(str(obj))
+    sk_blob = simple_key(blob)
+    hits = []
+    for tm in WORLD_CUP_TEAMS:
+        # Arabic team name
+        keys = [simple_key(tm)]
+        try:
+            keys.extend(simple_key(x) for x in TEAM_SEARCH_EN.get(tm, []))
+        except Exception:
+            pass
+        # avoid very short ambiguous keys except official ISO-ish handled in map not here
+        if any(k and len(k) >= 4 and k in sk_blob for k in keys):
+            hits.append(tm)
+    return list(dict.fromkeys(hits))
+
+
+def _v12_first_scalar(value):
+    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        for k in ["value", "displayValue", "display_value", "text", "label", "name", "title"]:
+            if isinstance(value.get(k), (str, int, float)) and not isinstance(value.get(k), bool):
+                return value.get(k)
+    return None
+
+
+def _v12_stats_deep(obj):
+    stats = {}
+    ignore_value_keys = {"thumbnail", "image", "logo", "flag", "url", "link", "href", "source", "id", "uid", "year", "season"}
+
+    def add(label, value):
+        if label is None or value is None:
+            return
+        lk = simple_key(str(label))
+        if not lk or lk in ignore_value_keys:
+            return
+        stats[lk] = value
+
+    def visit(node, parent_key=""):
+        if isinstance(node, dict):
+            label = node.get("label") or node.get("name") or node.get("title") or node.get("displayName") or node.get("abbreviation") or node.get("type") or node.get("key")
+            val = node.get("value") if "value" in node else node.get("displayValue") if "displayValue" in node else node.get("display_value") if "display_value" in node else node.get("rank") if "rank" in node else None
+            if label is not None and val is not None:
+                add(label, val)
+            for k, v in node.items():
+                lk = simple_key(k)
+                if lk in ignore_value_keys:
+                    continue
+                if isinstance(v, (str, int, float)) and not isinstance(v, bool):
+                    add(k, v)
+                else:
+                    visit(v, k)
+        elif isinstance(node, list):
+            # columns + values parallel if list objects embed both via caller handled elsewhere too
+            for it in node:
+                visit(it, parent_key)
+    visit(obj)
+    # parallel columns/values found anywhere in a dict tree
+    def visit_parallel(node):
+        if isinstance(node, dict):
+            cols = node.get("columns") or node.get("headers") or node.get("labels") or node.get("keys")
+            vals = node.get("values") or node.get("row") or node.get("cells") or node.get("data")
+            if isinstance(cols, list) and isinstance(vals, list):
+                for c, v in zip(cols, vals):
+                    label = c.get("name") if isinstance(c, dict) else c.get("label") if isinstance(c, dict) else c
+                    value = _v12_first_scalar(v)
+                    add(label, value)
+            for v in node.values():
+                visit_parallel(v)
+        elif isinstance(node, list):
+            for it in node:
+                visit_parallel(it)
+    visit_parallel(obj)
+    return stats
+
+
+def _v12_pick(stats, aliases, default=None):
+    # More specific aliases first; supports Arabic and English/abbreviations.
+    alias_keys = [simple_key(a) for a in aliases]
+    for a in alias_keys:
+        if a in stats:
+            val = _v11_to_int(stats.get(a), None)
+            if val is not None:
+                return val
+    for sk, sv in stats.items():
+        for a in alias_keys:
+            if a and (a == sk or a in sk or sk in a):
+                val = _v11_to_int(sv, None)
+                if val is not None:
+                    return val
+    return default
+
+
+def _v12_collect_numeric_cells(obj):
+    nums = []
+    ignore_keys = {"thumbnail", "image", "logo", "flag", "url", "link", "href", "id", "uid", "year", "season", "width", "height"}
+
+    def add_num(v, key=""):
+        lk = simple_key(key)
+        if lk in ignore_keys:
+            return
+        if isinstance(v, bool):
+            return
+        n = _v11_to_int(v, None)
+        if n is None:
+            return
+        if n == 2026 or abs(n) > 200:
+            return
+        nums.append(n)
+
+    def visit(node, key=""):
+        if isinstance(node, dict):
+            # Prefer tabular/stat values, but allow direct numeric keys if small.
+            for k, v in node.items():
+                lk = simple_key(k)
+                if lk in ignore_keys:
+                    continue
+                if isinstance(v, (str, int, float)) and not isinstance(v, bool):
+                    add_num(v, k)
+                elif isinstance(v, (list, tuple, dict)):
+                    visit(v, k)
+        elif isinstance(node, (list, tuple)):
+            for it in node:
+                if isinstance(it, (str, int, float)) and not isinstance(it, bool):
+                    add_num(it, key)
+                else:
+                    visit(it, key)
+    # If there is a row/cells/value list, start there to avoid unrelated numbers.
+    if isinstance(obj, dict):
+        preferred = []
+        for k in ["values", "cells", "row", "data", "stats", "statistics", "columns", "details", "record", "records"]:
+            if k in obj:
+                preferred.append(obj.get(k))
+        if preferred:
+            for p in preferred:
+                visit(p)
+        else:
+            visit(obj)
+    else:
+        visit(obj)
+    # de-noise repeated ranks/IDs but keep order
+    return nums
+
+
+def _v12_parse_standing_row(row):
+    hits = _v12_team_hits(row)
+    if len(hits) != 1:
+        # Try direct row parser as a last chance for simple scalar/list rows.
+        try:
+            old = _v11_parse_standing_row(row)
+            if old and old[0] in WORLD_CUP_TEAMS:
+                return old
+        except Exception:
+            pass
+        return None
+    team = hits[0]
+    stats = _v12_stats_deep(row)
+    played = _v12_pick(stats, ["played", "matches played", "games played", "mp", "gp", "p", "played games", "لعب", "ل", "لعبت", "المباريات"], None)
+    wins = _v12_pick(stats, ["wins", "win", "w", "فوز", "ف", "فاز"], None)
+    draws = _v12_pick(stats, ["draws", "draw", "d", "تعادل", "ت"], None)
+    losses = _v12_pick(stats, ["losses", "loss", "lost", "l", "خسارة", "خ"], None)
+    gf = _v12_pick(stats, ["goals for", "goalsfor", "gf", "for", "له", "اهداف له", "أهداف له"], None)
+    ga = _v12_pick(stats, ["goals against", "goalsagainst", "ga", "against", "عليه", "اهداف عليه", "أهداف عليه"], None)
+    gd = _v12_pick(stats, ["goal difference", "goaldifference", "gd", "+/-", "diff", "difference", "فارق", "فرق", "فارق الأهداف", "فارق الاهداف"], None)
+    pts = _v12_pick(stats, ["points", "pts", "pt", "pnts", "نقاط", "النقاط", "نقطة"], None)
+    if gd is None and gf is not None and ga is not None:
+        try:
+            gd = int(gf) - int(ga)
+        except Exception:
+            gd = None
+    if played is None or pts is None:
+        nums = _v12_collect_numeric_cells(row)
+        # Common rows: rank, played, wins, draws, losses, gf, ga/gd, pts
+        if nums:
+            # remove leading rank if it looks like 1..4 and enough stats follow
+            seq = nums[:]
+            if len(seq) >= 5 and seq[0] in (1, 2, 3, 4) and seq[1] <= 3:
+                rank = seq.pop(0)
+            if played is None:
+                played = seq[0] if seq else None
+            if pts is None:
+                # points in standings are usually the last visible numeric value.
+                pts = seq[-1] if seq else None
+            if gd is None:
+                # Use explicit gf/ga if the sequence has them, else a safe zero.
+                if len(seq) >= 7:
+                    try:
+                        gd = int(seq[-3]) - int(seq[-2])
+                    except Exception:
+                        gd = seq[-2]
+                elif len(seq) >= 3:
+                    gd = seq[-2]
+    if played is None:
+        played = 0
+    if gd is None:
+        gd = 0
+    if pts is None:
+        return None
+    return (team, int(played), int(gd), int(pts))
+
+
+def _v12_collect_standing_rows(node, max_depth=8):
+    rows = []
+    seen = set()
+
+    def add(row):
+        r = _v12_parse_standing_row(row)
+        if r and r[0] not in seen:
+            rows.append(r)
+            seen.add(r[0])
+
+    def walk(obj, depth=0):
+        if depth > max_depth:
+            return
+        hits = _v12_team_hits(obj)
+        if len(hits) == 1:
+            add(obj)
+            return
+        if isinstance(obj, dict):
+            # First inspect obvious row collections.
+            for k in ["teams", "rows", "entries", "standings", "table", "rankings", "ranking", "competitors", "participants", "items", "children", "values", "data", "ranked", "ranked_teams", "rankedTeams"]:
+                v = obj.get(k)
+                if isinstance(v, list):
+                    for it in v:
+                        walk(it, depth+1)
+                elif isinstance(v, dict):
+                    walk(v, depth+1)
+            # Then fallback all children.
+            for v in obj.values():
+                if isinstance(v, (dict, list, tuple)):
+                    walk(v, depth+1)
+        elif isinstance(obj, (list, tuple)):
+            for it in obj:
+                walk(it, depth+1)
+    walk(node)
+    return rows
+
+
+def _v12_extract_groups_from_rankings(rankings):
+    groups = []
+    flat_rows = []
+
+    def add_group(title, container):
+        rows = _v12_collect_standing_rows(container)
+        if not rows:
+            return
+        gl = _v11_group_letter_from_title(title) or ""
+        if gl:
+            groups.append((_v11_group_title_from_letter(gl), rows[:4]))
+        else:
+            # If all rows are from the same official group, use it.
+            letters = [V11_GROUP_BY_TEAM.get(r[0]) for r in rows if r and r[0] in V11_GROUP_BY_TEAM]
+            letters = [x for x in letters if x]
+            if letters and len(set(letters)) == 1:
+                groups.append((_v11_group_title_from_letter(letters[0]), rows[:4]))
+            else:
+                flat_rows.extend(rows)
+
+    if isinstance(rankings, dict):
+        add_group(rankings.get("title") or rankings.get("name") or rankings.get("group") or rankings.get("label") or "", rankings)
+        for k, v in rankings.items():
+            if isinstance(v, (dict, list)):
+                add_group(k, v)
+    elif isinstance(rankings, list):
+        for item in rankings:
+            if isinstance(item, dict):
+                title = item.get("title") or item.get("name") or item.get("group") or item.get("label") or item.get("stage") or ""
+                add_group(title, item)
+            else:
+                add_group("", item)
+    # Add flat rows grouped by official groups.
+    groups.extend(_v11_group_rows_by_official_groups(flat_rows))
+    # Cleanup/sort rows and groups.
+    out, seen = [], set()
+    for title, rows in groups:
+        cleaned = []
+        for r in rows:
+            if r and r[0] in WORLD_CUP_TEAMS and r[0] not in [x[0] for x in cleaned]:
+                cleaned.append((r[0], int(r[1]), int(r[2]), int(r[3])))
+        if len(cleaned) < 2:
+            continue
+        cleaned.sort(key=lambda r: (r[3], r[2], r[1]), reverse=True)
+        gl = _v11_group_letter_from_title(title) or (V11_GROUP_BY_TEAM.get(cleaned[0][0]) or "")
+        title = _v11_group_title_from_letter(gl) if gl else title or "المجموعة"
+        key = title + "|" + ",".join(r[0] for r in cleaned)
+        if key not in seen:
+            seen.add(key)
+            out.append((title, cleaned[:4]))
+    return out
+
+
+def _v11_extract_groups_from_rankings(rankings):
+    return _v12_extract_groups_from_rankings(rankings)
+
+
+def _v11_extract_groups_from_google_json(data):
+    sr = data.get("sports_results") if isinstance(data, dict) else None
+    candidates = []
+    if isinstance(sr, dict):
+        if "rankings" in sr:
+            candidates.extend(_v12_extract_groups_from_rankings(sr.get("rankings")))
+        for k in ["standings", "tables", "table", "groups", "ranking", "league", "tournament"]:
+            if isinstance(sr.get(k), (dict, list)):
+                candidates.extend(_v12_extract_groups_from_rankings(sr.get(k)))
+    # Deep fallback across the whole sports_results tree.
+    for node in _walk_json(sr or data):
+        if isinstance(node, (dict, list)):
+            candidates.extend(_v12_extract_groups_from_rankings(node))
+    # Deduplicate and order by official group.
+    order = {g: i for i, (g, _) in enumerate(WORLD_CUP_GROUPS)}
+    seen, out = set(), []
+    for title, rows in candidates:
+        clean = []
+        for r in rows:
+            if r and r[0] in WORLD_CUP_TEAMS and r[0] not in [x[0] for x in clean]:
+                clean.append((r[0], int(r[1]), int(r[2]), int(r[3])))
+        if len(clean) < 2:
+            continue
+        gl = _v11_group_letter_from_title(title) or (V11_GROUP_BY_TEAM.get(clean[0][0]) or "")
+        title = _v11_group_title_from_letter(gl) if gl else title or "المجموعة"
+        key = title + "|" + ",".join(r[0] for r in clean[:4])
+        if key in seen:
+            continue
+        seen.add(key)
+        clean.sort(key=lambda r: (r[3], r[2], r[1]), reverse=True)
+        out.append((title, clean[:4]))
+    out.sort(key=lambda item: order.get(_v11_group_letter_from_title(item[0]), 99))
+    return out[:12]
+
+
+def fetch_live_match_data(team1, team2, mode="latest", date_hint=None):
+    team1 = _v12_canon_or_clean_team(team1)
+    team2 = _v12_canon_or_clean_team(team2)
+    return _V12_ORIGINAL_FETCH_LIVE_MATCH_DATA(team1, team2, mode, date_hint=date_hint)
+
+
+async def google_search_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = parse_command_body_lines(update.message.text)
+    query = " ".join(body).strip() or "مباراة المكسيك كوريا الجنوبية"
+    msg = await update.message.reply_text(f"⏳ أفحص قوقل: {query}")
+    try:
+        data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(serpapi_search_json, query, "ar", "sa", 10), timeout=16)
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        lines = ["نتيجة فحص قوقل:", f"query: {query}"]
+        if isinstance(sr, dict):
+            lines.append("✅ sports_results موجود")
+            lines.append("مفاتيح: " + "، ".join(list(sr.keys())[:12]))
+            if "rankings" in sr:
+                groups = _v11_extract_groups_from_google_json(data)
+                if groups:
+                    lines.append(f"✅ قرأت ترتيب المجموعات: {len(groups)} مجموعة")
+                    for title, rows in groups[:4]:
+                        lines.append(f"{title}: " + "، ".join([f"{r[0]} {r[3]}" for r in rows[:4]]))
+                else:
+                    lines.append("⚠️ rankings موجود لكن لم أقرأ صفوف ترتيب مؤكدة")
+                    try:
+                        rk = sr.get("rankings")
+                        if isinstance(rk, list) and rk:
+                            lines.append("شكل rankings: list / أول عنصر مفاتيحه: " + "، ".join(list(rk[0].keys())[:10]) if isinstance(rk[0], dict) else "شكل rankings: list")
+                        elif isinstance(rk, dict):
+                            lines.append("شكل rankings: dict مفاتيحه: " + "، ".join(list(rk.keys())[:10]))
+                    except Exception:
+                        pass
+            else:
+                txt = normalize_name(query)
+                found = []
+                for tm in WORLD_CUP_TEAMS:
+                    if simple_key(tm) in simple_key(txt):
+                        found.append(tm)
+                    if len(found) >= 2:
+                        break
+                req1, req2 = (found[0], found[1]) if len(found) >= 2 else ("المكسيك", "كوريا الجنوبية")
+                obj = _v11_parse_google_match_data(data, req1, req2, source_name="Google Sports")
+                if obj:
+                    lines.append(f"✅ قرأت المباراة: {obj['team1']} {obj['score1']} - {obj['score2']} {obj['team2']}")
+                    lines.append(f"الحالة: {obj.get('status','')}")
+                    sc = _v9_sanitize_scorers(obj.get("scorers") or [])
+                    if sc:
+                        lines.append("الهدافون: " + "، ".join(sc[:4]))
+                else:
+                    lines.append("⚠️ وصلنا لقوقل لكن لم أقرأ نتيجة مؤكدة من البنية الحالية")
+        else:
+            lines.append("⚠️ لم يظهر sports_results")
+        await msg.edit_text("\n".join(lines[:18]))
+    except Exception as e:
+        await msg.edit_text(f"❌ فشل فحص قوقل: {str(e)[:220]}")
+
+
+# ==================== V13 AGREED STABLE PATCH ====================
+# اعتماد V13:
+# - يبقى المصدر خارج الصور وفي الكابشن فقط.
+# - يمنع أسماء ملفات الأعلام من دخول بحث /مباشر.
+# - يحسن قراءة sports_results.rankings من قوقل حتى لو كانت البنية نصوص/قوائم مختلفة.
+# - أسفل لوحة المتأهلين والمجموعات: المصيف يضعكم بالحدث.
+# - يقبل أسماء متغيرات توكن إضافية: TELEGRAM_BOT_TOKEN / TELEGRAM_TOKEN.
+
+
+def _v13_is_noise_token(x):
+    s = normalize_name(str(x or ""))
+    if not s:
+        return True
+    low = s.lower()
+    if low.startswith("http") or any(ext in low for ext in [".png", ".jpg", ".jpeg", ".webp", ".svg"]):
+        return True
+    if len(s) > 80:
+        return True
+    if any(b in low for b in ["thumbnail", "image", "logo", "flag", "google", "fifa.com", "watch"]):
+        return True
+    return False
+
+
+def _v13_flat_tokens(obj):
+    tokens = []
+    def walk(node):
+        if isinstance(node, dict):
+            # Prefer visible/semantic values first, then the rest.
+            preferred = ["title", "name", "team", "displayName", "shortName", "abbreviation", "rank", "position", "played", "wins", "draws", "losses", "points", "pts", "value", "displayValue", "text", "label"]
+            for k in preferred:
+                if k in node:
+                    walk(node.get(k))
+            for k, v in node.items():
+                if k not in preferred:
+                    walk(v)
+        elif isinstance(node, (list, tuple)):
+            for it in node:
+                walk(it)
+        elif isinstance(node, (str, int, float)) and not isinstance(node, bool):
+            s = normalize_name(str(node))
+            if not _v13_is_noise_token(s):
+                tokens.append(s)
+    walk(obj)
+    return tokens
+
+
+def _v13_team_from_token(token):
+    s = _v12_strip_file_token(token)
+    if not s:
+        return None
+    # Direct canonical lookup
+    t = canonical_team_name(s)
+    if t in WORLD_CUP_TEAMS:
+        return t
+    sk = simple_key(s)
+    for team in WORLD_CUP_TEAMS:
+        keys = [simple_key(team)]
+        try:
+            keys.extend(simple_key(x) for x in TEAM_SEARCH_EN.get(team, []))
+        except Exception:
+            pass
+        # accept containments only when not too short
+        for k in keys:
+            if k and len(k) >= 4 and (sk == k or k in sk or sk in k):
+                return team
+    return None
+
+
+def _v13_nums_near(tokens, idx, max_ahead=14):
+    nums = []
+    # collect only until another official team appears; this makes each row local.
+    for j in range(idx + 1, min(len(tokens), idx + 1 + max_ahead)):
+        if _v13_team_from_token(tokens[j]) and j != idx + 1:
+            break
+        v = _v11_to_int(tokens[j], None)
+        if v is not None and -30 <= v <= 99:
+            nums.append(v)
+    return nums
+
+
+def _v13_parse_flat_rankings(rankings):
+    tokens = _v13_flat_tokens(rankings)
+    rows = []
+    seen = set()
+    for i, tok in enumerate(tokens):
+        team = _v13_team_from_token(tok)
+        if not team or team in seen:
+            continue
+        nums = _v13_nums_near(tokens, i)
+        # Common Google standings order after team: played, wins, draws, losses, GF, GA, points
+        # Some locales include rank before team; we collect after team so rank is usually absent.
+        if len(nums) >= 7:
+            played = nums[0]
+            try:
+                gd = int(nums[4]) - int(nums[5])
+            except Exception:
+                gd = nums[-2]
+            pts = nums[6]
+        elif len(nums) >= 5:
+            played = nums[0]
+            pts = nums[-1]
+            gd = nums[-2] if len(nums) >= 2 else 0
+        elif len(nums) >= 2:
+            played = nums[0]
+            pts = nums[-1]
+            gd = 0
+        else:
+            continue
+        # sanity: group stage played should be small, points reasonable
+        if played > 3 or pts > 12:
+            # try to locate a smaller played value and a plausible points value
+            smalls = [n for n in nums if 0 <= n <= 3]
+            pts_candidates = [n for n in nums if 0 <= n <= 9]
+            if smalls and pts_candidates:
+                played = smalls[0]
+                pts = pts_candidates[-1]
+            else:
+                continue
+        rows.append((team, int(played), int(gd), int(pts)))
+        seen.add(team)
+    return rows
+
+
+def _v13_groups_from_flat_rankings(rankings):
+    rows = _v13_parse_flat_rankings(rankings)
+    return _v11_group_rows_by_official_groups(rows)
+
+
+_V13_PREV_EXTRACT_GROUPS_FROM_GOOGLE_JSON = _v11_extract_groups_from_google_json
+
+
+def _v11_extract_groups_from_google_json(data):
+    """V13 robust Google standings parser: normal parser first, then flat-token fallback from rankings."""
+    try:
+        groups = _V13_PREV_EXTRACT_GROUPS_FROM_GOOGLE_JSON(data)
+        if groups and (len(groups) >= 2 or sum(len(r) for _t, r in groups) >= 8):
+            return groups[:12]
+    except Exception:
+        groups = []
+    sr = data.get("sports_results") if isinstance(data, dict) else None
+    candidates = []
+    if isinstance(sr, dict):
+        if "rankings" in sr:
+            candidates.extend(_v13_groups_from_flat_rankings(sr.get("rankings")))
+        # also try the full sports_results tree because Google may put text at the top level.
+        candidates.extend(_v13_groups_from_flat_rankings(sr))
+    candidates.extend(_v13_groups_from_flat_rankings(data))
+    order = {g: i for i, (g, _) in enumerate(WORLD_CUP_GROUPS)}
+    out, seen = [], set()
+    for title, rows in candidates:
+        clean = []
+        for r in rows:
+            if r and r[0] in WORLD_CUP_TEAMS and r[0] not in [x[0] for x in clean]:
+                clean.append((r[0], int(r[1]), int(r[2]), int(r[3])))
+        if len(clean) < 2:
+            continue
+        gl = _v11_group_letter_from_title(title) or (V11_GROUP_BY_TEAM.get(clean[0][0]) or "")
+        title = _v11_group_title_from_letter(gl) if gl else title or "المجموعة"
+        clean.sort(key=lambda r: (r[3], r[2], r[1]), reverse=True)
+        key = title + "|" + ",".join(r[0] for r in clean[:4])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((title, clean[:4]))
+    out.sort(key=lambda item: order.get(_v11_group_letter_from_title(item[0]), 99))
+    return out[:12]
+
+
+_V13_PREV_GOOGLE_DEBUG_COMMAND = google_search_debug_command
+
+
+async def google_search_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = parse_command_body_lines(update.message.text)
+    query = " ".join(body).strip() or "مباراة المكسيك كوريا الجنوبية"
+    msg = await update.message.reply_text(f"⏳ أفحص قوقل: {query}")
+    try:
+        data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(serpapi_search_json, query, "ar", "sa", 10), timeout=16)
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        lines = ["نتيجة فحص قوقل:", f"query: {query}"]
+        if isinstance(sr, dict):
+            lines.append("✅ sports_results موجود")
+            lines.append("مفاتيح: " + "، ".join(list(sr.keys())[:12]))
+            if "rankings" in sr:
+                groups = _v11_extract_groups_from_google_json(data)
+                if groups:
+                    lines.append(f"✅ قرأت ترتيب المجموعات: {len(groups)} مجموعة")
+                    for title, rows in groups[:5]:
+                        lines.append(f"{title}: " + "، ".join([f"{r[0]} {r[3]}" for r in rows[:4]]))
+                else:
+                    lines.append("⚠️ rankings موجود لكن لم أقرأ صفوف ترتيب مؤكدة")
+                    toks = _v13_flat_tokens(sr.get("rankings"))[:35]
+                    if toks:
+                        lines.append("أول نصوص rankings: " + " | ".join(toks[:14]))
+            else:
+                txt = normalize_name(query)
+                found = []
+                for tm in WORLD_CUP_TEAMS:
+                    if simple_key(tm) in simple_key(txt):
+                        found.append(tm)
+                    if len(found) >= 2:
+                        break
+                req1, req2 = (found[0], found[1]) if len(found) >= 2 else ("المكسيك", "كوريا الجنوبية")
+                obj = _v11_parse_google_match_data(data, req1, req2, source_name="Google Sports")
+                if obj:
+                    lines.append(f"✅ قرأت المباراة: {obj['team1']} {obj['score1']} - {obj['score2']} {obj['team2']}")
+                    lines.append(f"الحالة: {obj.get('status','')}")
+                    sc = _v9_sanitize_scorers(obj.get("scorers") or [])
+                    if sc:
+                        lines.append("الهدافون: " + "، ".join(sc[:4]))
+                else:
+                    lines.append("⚠️ وصلنا لقوقل لكن لم أقرأ نتيجة مؤكدة من البنية الحالية")
+        else:
+            lines.append("⚠️ لم يظهر sports_results")
+        await msg.edit_text("\n".join(lines[:20]))
+    except Exception as e:
+        await msg.edit_text(f"❌ فشل فحص قوقل: {str(e)[:220]}")
+
+
+_V13_PREV_RENDER_QUALIFIED32_BOARD = render_qualified32_board
+
+
+def render_qualified32_board(teams):
+    """V13: نفس لوحة المتأهلين + توقيع المصيف يضعكم بالحدث أسفل التصميم."""
+    path = _V13_PREV_RENDER_QUALIFIED32_BOARD(teams)
+    try:
+        img = Image.open(path).convert("RGB")
+        d = ImageDraw.Draw(img)
+        w, h = img.size
+        # Draw a small readable footer without covering last row names.
+        rounded_rect(d, (w//2-245, h-53, w//2+245, h-12), radius=16, fill="#061633D8", outline="#FFFFFF55", width=1)
+        draw_text(d, (w//2, h-32), "المصيف يضعكم بالحدث", get_font(22), fill="#FDE68A", max_width=440)
+        img.save(path, quality=96)
+    except Exception:
+        pass
+    return path
+
+# ==================== END V13 AGREED STABLE PATCH ====================
+
+# ==================== END V12 FINAL PATCH ====================
 
 # ==================== END V11 FINAL PATCH ====================
 
