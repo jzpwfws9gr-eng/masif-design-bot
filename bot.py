@@ -13679,7 +13679,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_مجمعة(?:\s|$)"), admin_only(fixtures_combined_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات(?:\s|$)"), admin_only(fixtures_command)))
     app.add_handler(CallbackQueryHandler(fixtures_callback, pattern=r"^fx\|"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(fixtures_update_text_handler)))
+    # مهم: لا نخلي معالج تحديث المباريات يلقط أوامر السلاش العربية مثل /استيراد_ملف و /إضافة_متسابق
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.Regex(r"^/"), admin_only(fixtures_update_text_handler)))
 
     # استيراد ونسخ
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:استيراد_ملف|استيراد\s+ملف|استيراد|استيراد_اكسل|استيراد_إكسل|استيراد_excel)(?:\s|$)"), admin_only(import_excel_file)))
