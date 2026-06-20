@@ -15399,9 +15399,10 @@ def _v17_open_google_standings_with_playwright(query=None, screenshot_name=None)
                     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
                 ),
             )
-            page.goto(url, wait_until="domcontentloaded", timeout=35000)
+            page.set_default_timeout(12000)
+            page.goto(url, wait_until="domcontentloaded", timeout=20000)
             try:
-                page.wait_for_load_state("networkidle", timeout=12000)
+                page.wait_for_load_state("networkidle", timeout=4000)
             except Exception:
                 pass
             # حاول الضغط على الترتيب إذا ظهر الزر كنص
@@ -15409,15 +15410,15 @@ def _v17_open_google_standings_with_playwright(query=None, screenshot_name=None)
                 try:
                     loc = page.get_by_text(label, exact=True)
                     if loc.count() > 0:
-                        loc.first.click(timeout=2500)
-                        page.wait_for_timeout(1800)
+                        loc.first.click(timeout=1200)
+                        page.wait_for_timeout(800)
                         break
                 except Exception:
                     pass
             # أحيانًا يحتاج انتظار بسيط حتى تظهر الجداول
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(1200)
             try:
-                text = page.locator("body").inner_text(timeout=9000)
+                text = page.locator("body").inner_text(timeout=3000)
             except Exception:
                 text = ""
             try:
@@ -15494,11 +15495,11 @@ async def current_groups_now_command(update: Update, context: ContextTypes.DEFAU
         mode = m.group(1) if m else "latest"
     payload = {"kind": "standings"}
     kb = source_keyboard(context, payload) if 'source_keyboard' in globals() else None
-    wait = await update.message.reply_text("⏳ أفتح قوقل مباشرة وأسحب ترتيب المجموعات...")
+    wait = await update.message.reply_text("⏳ أفتح قوقل مباشرة وآخذ لقطة ترتيب المجموعات...")
 
     try:
         groups, source_label, screenshot_path, diag = await _asyncio_v6.wait_for(
-            _asyncio_v6.to_thread(fetch_standings_from_playwright_google), timeout=55
+            _asyncio_v6.to_thread(fetch_standings_from_playwright_google), timeout=35
         )
     except Exception as e:
         groups, source_label, screenshot_path, diag = [], "Google مباشر / Playwright", "", repr(e)
@@ -15525,7 +15526,7 @@ async def current_groups_now_command(update: Update, context: ContextTypes.DEFAU
             pass
         cap = (
             "ترتيب المجموعات من قوقل مباشرة 📊\n"
-            "لم أستطع تحويل الجدول إلى تصميم بسبب تغيّر بنية قوقل، فأرسلت لك لقطة قوقل نفسها.\n"
+            "أرسلت لك لقطة مباشرة من قوقل، وبعدها نقدر نحسن تحويلها لتصميم.\n"
             "المصدر: Google مباشر / Playwright"
         )
         await send_photo_path_markup(update.message, screenshot_path, cap, kb)
@@ -15559,7 +15560,7 @@ async def google_search_debug_command(update: Update, context: ContextTypes.DEFA
     query = " ".join(body).strip() or "ترتيبات كأس العالم"
     msg = await update.message.reply_text(f"⏳ أفحص قوقل مباشرة: {query}")
     try:
-        res = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(_v17_open_google_standings_with_playwright, query), timeout=55)
+        res = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(_v17_open_google_standings_with_playwright, query), timeout=35)
     except Exception as e:
         await msg.edit_text(f"❌ فشل فتح قوقل مباشرة: {e}")
         return
