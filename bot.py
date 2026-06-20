@@ -16060,5 +16060,329 @@ async def current_groups_now_command(update: Update, context: ContextTypes.DEFAU
 
 # ==================== END V22 HARD STABLE PATCH ====================
 
+
+
+# ==================== V24 STABLE PATCH: fixtures design + safe commands ====================
+# - إصلاح إرسال الصور مع update/message/callback message.
+# - ربط /مباريات و/مباريات_مجمعة وزر تصميم اليوم بدالة التصميم فعليًا.
+# - عدم السكوت عند الخطأ: كل أمر يرسل انتظار وخطأ واضح.
+# - فحص API بمهلات قصيرة.
+# - استيراد ملف Excel برسالة انتظار وخطأ واضح.
+
+async def send_photo_path(target, path, caption=None):
+    """يرسل صورة سواء كان الهدف Update أو Message."""
+    msg = getattr(target, "message", None) or target
+    if not msg:
+        raise RuntimeError("لا يوجد هدف صالح لإرسال الصورة")
+    if not path or not os.path.exists(path):
+        raise FileNotFoundError(str(path))
+    with open(path, "rb") as f:
+        await msg.reply_photo(photo=f, caption=caption or "")
+
+
+async def send_photo_path_markup(target, path, caption=None, reply_markup=None):
+    """يرسل صورة مع أزرار سواء كان الهدف Update أو Message."""
+    msg = getattr(target, "message", None) or target
+    if not msg:
+        raise RuntimeError("لا يوجد هدف صالح لإرسال الصورة")
+    if not path or not os.path.exists(path):
+        raise FileNotFoundError(str(path))
+    with open(path, "rb") as f:
+        await msg.reply_photo(photo=f, caption=caption or "", reply_markup=reply_markup)
+
+
+def _v24_dates_from_text(text):
+    dates = _extract_fixture_dates_from_text(text or "")
+    # إزالة التكرار مع الحفاظ على الترتيب
+    out = []
+    for d in dates:
+        if d not in out:
+            out.append(d)
+    return out
+
+
+async def _v24_send_fixture_day(target, date):
+    msg = getattr(target, "message", None) or target
+    paths = render_fixtures_day_images(date)
+    if not paths:
+        await msg.reply_text(f"ما فيه مباريات بتاريخ {date}")
+        return 0
+    sent = 0
+    for p in paths:
+        await send_photo_path(msg, p, _fixtures_caption(_fixture_title(date)))
+        sent += 1
+    return sent
+
+
+async def _v24_send_fixture_combo(target, dates):
+    msg = getattr(target, "message", None) or target
+    paths = render_fixtures_combined_images(dates)
+    if not paths:
+        await msg.reply_text("ما لقيت مباريات للتواريخ المطلوبة.")
+        return 0
+    sent = 0
+    for p in paths:
+        await send_photo_path(msg, p, _fixtures_caption("مباريات مجمعة"))
+        sent += 1
+    return sent
+
+
+async def fixtures_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _v24_dates_from_text(update.message.text)
+    if dates:
+        wait = await update.message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+        try:
+            total = 0
+            for d in dates:
+                total += await _v24_send_fixture_day(update.message, d)
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+            if total == 0:
+                await update.message.reply_text("ما لقيت مباريات للتواريخ المطلوبة.")
+        except Exception as e:
+            await wait.edit_text(f"تعذر تصميم مباريات اليوم ❌\nالسبب: {str(e)[:300]}")
+        return
+    await update.message.reply_text("اختر اليوم أو استخدم /مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+
+
+async def fixtures_combined_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _v24_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text("اكتبها كذا:\n/مباريات_مجمعة 20/06 21/06 22/06")
+        return
+    wait = await update.message.reply_text("⏳ جاري تصميم المباريات المجمعة...")
+    try:
+        total = await _v24_send_fixture_combo(update.message, dates)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        if total == 0:
+            await update.message.reply_text("ما لقيت مباريات للتواريخ المطلوبة.")
+    except Exception as e:
+        await wait.edit_text(f"تعذر تصميم المباريات المجمعة ❌\nالسبب: {str(e)[:300]}")
+
+
+async def fixtures_review_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _v24_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text("اكتبها كذا:\n/مراجعة_مباراة 20/07")
+        return
+    for d in dates:
+        await update.message.reply_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+
+
+async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    if not is_admin_user(update):
+        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else ""
+    try:
+        if action == "menu":
+            await q.message.edit_text("اختر اليوم أو استخدم /مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+            return
+        if action == "multi":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+        if action == "toggle" and len(parts) >= 3:
+            d = parts[2]
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if d in sel:
+                sel.remove(d)
+            else:
+                sel.append(d)
+            context.user_data["fx_selected_dates"] = sel
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", sel))
+            return
+        if action == "clear":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+        if action == "day" and len(parts) >= 3:
+            d = parts[2]
+            await q.message.edit_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+            return
+        if action == "render" and len(parts) >= 3:
+            d = parts[2]
+            wait = await q.message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+            try:
+                await _v24_send_fixture_day(q.message, d)
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+            except Exception as e:
+                await wait.edit_text(f"تعذر تصميم اليوم ❌\nالسبب: {str(e)[:300]}")
+            return
+        if action in ["render_each", "render_combo"]:
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if not sel:
+                await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+                return
+            wait = await q.message.reply_text("⏳ جاري التصميم...")
+            try:
+                if action == "render_combo":
+                    await _v24_send_fixture_combo(q.message, sel)
+                else:
+                    for d in sel:
+                        await _v24_send_fixture_day(q.message, d)
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+            except Exception as e:
+                await wait.edit_text(f"تعذر التصميم ❌\nالسبب: {str(e)[:300]}")
+            return
+        if action == "upd" and len(parts) >= 3:
+            mid = parts[2]
+            m = _fixture_by_id(mid)
+            if not m:
+                await q.message.reply_text("لم أجد المباراة.")
+                return
+            context.user_data["fixture_update_match_id"] = mid
+            await q.message.reply_text(
+                f"اكتب طرفي المباراة لـ {mid} ({m.get('date')} {m.get('time')}) كذا:\n"
+                "الفريق الأول * الفريق الثاني\n\n"
+                "مثال: المكسيك * أستراليا\n"
+                "ملاحظة: سيتم الحفظ فقط، ولن يتم التصميم إلا عندما تطلب /مباريات التاريخ."
+            )
+            return
+        await q.message.reply_text("تعذر قراءة الخيار.")
+    except Exception as e:
+        await q.message.reply_text(f"تعذر تنفيذ خيار المباريات ❌\n{str(e)[:300]}")
+
+
+async def api_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("⏳ أفحص مصادر النتائج...")
+    lines = ["فحص مصادر النتائج:", ""]
+    if _serpapi_key():
+        try:
+            data = await asyncio.wait_for(asyncio.to_thread(serpapi_search_json, "مباراة المكسيك كوريا الجنوبية", "ar", "sa", 8), timeout=12)
+            lines.append("✅ SERPAPI_KEY موجود والاتصال بقوقل شغال")
+            if isinstance(data, dict) and isinstance(data.get("sports_results"), dict):
+                lines.append("✅ Google Sports ظهر في نتيجة الفحص")
+            else:
+                lines.append("⚠️ الاتصال شغال، لكن لم يظهر كرت Google Sports في هذا الفحص")
+        except Exception as e:
+            lines.append(f"❌ SerpApi موجود لكن فشل الاتصال: {str(e)[:160]}")
+    else:
+        lines.append("❌ SERPAPI_KEY غير موجود")
+    if _api_football_key():
+        try:
+            status = await asyncio.wait_for(asyncio.to_thread(_api_football_get, "/status", {}), timeout=8)
+            lines.append("✅ API_FOOTBALL_KEY موجود والاتصال شغال")
+        except Exception as e:
+            lines.append(f"❌ API-Football فشل: {str(e)[:160]}")
+    else:
+        lines.append("❌ API_FOOTBALL_KEY غير موجود")
+    await msg.edit_text("\n".join(lines))
+
+
+async def import_excel_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    document = update.message.document
+    if document:
+        filename = document.file_name or "import.xlsx"
+        if not filename.lower().endswith((".xlsx", ".xlsm")):
+            await update.message.reply_text("الملف لازم يكون Excel بصيغة .xlsx أو .xlsm")
+            return
+        local_path, _ = await _download_document_to_folder(update, context, "imports")
+        LAST_UPLOADED_FILES.setdefault(chat_id, {})["excel"] = local_path
+    else:
+        local_path = LAST_UPLOADED_FILES.get(chat_id, {}).get("excel")
+        if not local_path or not os.path.exists(local_path):
+            await update.message.reply_text("ما لقيت ملف Excel محفوظ. أرسل ملف الإكسل لحاله أولًا، وبعدها اكتب:\n/استيراد_ملف")
+            return
+    wait = await update.message.reply_text("⏳ جاري قراءة ملف الإكسل...")
+    try:
+        imported = await asyncio.wait_for(asyncio.to_thread(parse_import_excel, local_path), timeout=45)
+    except Exception as e:
+        await wait.edit_text(f"صار خطأ أثناء قراءة الإكسل ❌\n{str(e)[:400]}")
+        return
+    if not imported:
+        await wait.edit_text("ما قدرت أستخرج أيام من الملف. تأكد أن الصفحات باسم: يوم 1، يوم 2 ...")
+        return
+    PENDING_IMPORTS[chat_id] = {"path": local_path, "data": imported}
+    await wait.edit_text(import_summary_text(imported))
+
+
+async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    wait = await update.message.reply_text("جاري إنشاء ملف الإحصائيات... ⏳")
+    try:
+        nums = get_numbers(update.message.text)
+        if len(nums) >= 2:
+            start_day, end_day = nums[0], nums[1]
+            if start_day > end_day:
+                start_day, end_day = end_day, start_day
+        elif len(nums) == 1:
+            start_day, end_day = 1, nums[0]
+        else:
+            start_day, end_day = 1, 31
+        file_name, stats = await asyncio.wait_for(asyncio.to_thread(create_dashboard, start_day, end_day), timeout=70)
+        if not stats.get("days"):
+            await wait.edit_text("ما لقيت أيام لإحصائيات الداشبورد.")
+            return
+        try:
+            add_matchups_sheet_to_dashboard(file_name, start_day, end_day)
+        except Exception:
+            pass
+        caption = (
+            "تم إنشاء ملف الإحصائيات الكامل ✅\n"
+            f"النطاق: من اليوم {start_day} إلى اليوم {end_day}\n"
+            f"الأيام المحسوبة: {', '.join(map(str, stats['days']))}"
+        )
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        with open(file_name, "rb") as file:
+            await update.message.reply_document(document=file, filename=file_name, caption=caption)
+    except Exception as e:
+        await wait.edit_text(f"صار خطأ أثناء إنشاء الإحصائيات ❌\n\nالسبب:\n{str(e)[:500]}")
+
+
+async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    team1, team2, mode, date_hint = parse_live_command_text(update.message.text)
+    if mode_override:
+        mode = _norm_source_mode(mode_override)
+    if not team1 or not team2:
+        await update.message.reply_text("اكتبها كذا:\n/مباشر البرازيل * هايتي * قوقل\nأو:\n/مباشر البرازيل * هايتي * رسمي")
+        return
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
+    kb = source_keyboard(context, payload)
+    wait = await update.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}")
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(fetch_live_match_data, team1, team2, mode, date_hint), timeout=22)
+    except Exception as e:
+        data = None
+        err = str(e)[:160]
+    if not data:
+        await wait.edit_text(
+            f"تعذر جلب المباراة من مصدر {mode_label_ar(mode)} ❌\n"
+            f"مباراة: {team1} × {team2}\n"
+            f"جرب مصدر ثاني من الأزرار.",
+            reply_markup=kb,
+        )
+        return
+    try:
+        path = render_live_match_card(data, mode_label_ar(mode))
+        await send_photo_path_markup(update.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await wait.edit_text(f"تم جلب النتيجة لكن تعذر تصميم الصورة ❌\n{str(e)[:180]}\n\n" + build_live_caption(data, mode_label_ar(mode)), reply_markup=kb)
+
+# ==================== END V24 STABLE PATCH ====================
+
 if __name__ == "__main__":
     main()
