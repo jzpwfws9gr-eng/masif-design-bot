@@ -3,6 +3,7 @@ import re
 import json
 import shutil
 import asyncio
+import time
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 import difflib
@@ -5301,7 +5302,7 @@ def create_matches_template_image(day_name, matches, use_template=True):
         rounded_rect(draw, (92, y, width-92, y+row_h), radius=28, fill="#0B1020", outline=accent, width=2)
         cy = y + row_h//2
 
-        # V17: تكبير الأعلام
+        # V18: تكبير الأعلام
         flag_w = min(150, max(94, row_h - 18))
         paste_flag(img, a, (width-238, cy-flag_w//2, width-238+flag_w, cy+flag_w//2))
         paste_flag(img, b, (238-flag_w, cy-flag_w//2, 238, cy+flag_w//2))
@@ -5390,10 +5391,10 @@ def create_group_standing_image(group_title, rows, use_template=True):
         rounded_rect(draw, (92, y, width-92, y+row_h), radius=26, fill="#0B1020", outline=accent, width=2)
         cy = y + row_h//2
 
-        # V17: الرقم داخل أكثر من الحافة
+        # V18: الرقم داخل أكثر من الحافة
         draw_text(draw, (1062, cy), str(i), get_font(max(28, name_size)), fill="#FDE68A" if i == 1 else "#FFFFFF")
 
-        # V17: تكبير أعلام الترتيب
+        # V18: تكبير أعلام الترتيب
         flag_w = min(120, max(76, row_h-18))
         paste_flag(img, team, (900, cy-flag_w//2, 900+flag_w, cy+flag_w//2))
 
@@ -5429,10 +5430,10 @@ def create_top_scorers_template_image(items, use_template=True):
         rounded_rect(draw, (92, y, width-92, y+row_h), radius=26, fill=fill, outline=accent, width=2)
         cy = y + row_h//2
 
-        # V17: الرقم داخل أكثر من الحافة
+        # V18: الرقم داخل أكثر من الحافة
         draw_text(draw, (1062, cy), str(i), get_font(max(30, name_size+4)), fill="#FDE68A")
 
-        # V17: تكبير العلم
+        # V18: تكبير العلم
         if team:
             flag_w = min(110, max(68, row_h-18))
             paste_flag(img, team, (885, cy-flag_w//2, 885+flag_w, cy+flag_w//2))
@@ -15201,12 +15202,12 @@ except Exception:
 # ==================== END V14 SAFE START PATCH ====================
 
 
-# ==================== V17 PLAYWRIGHT GOOGLE STANDINGS PATCH ====================
+# ==================== V18 PLAYWRIGHT GOOGLE STANDINGS PATCH ====================
 # الاعتماد الجديد: ترتيب المجموعات يُسحب من صفحة قوقل نفسها عبر متصفح Chromium مخفي.
 # إذا قدرنا نحول النص إلى جدول: نصمم ترتيب المجموعات بهوية البوت.
 # إذا تغيّرت بنية قوقل أو النص كان غير قابل للتحويل: نرسل Screenshot من قوقل مباشرة بدل الرفض.
 
-_V17_GOOGLE_STANDINGS_QUERIES = [
+_V18_GOOGLE_STANDINGS_QUERIES = [
     "ترتيبات كأس العالم",
     "ترتيب مجموعات كأس العالم 2026",
     "FIFA World Cup 2026 standings",
@@ -15214,7 +15215,7 @@ _V17_GOOGLE_STANDINGS_QUERIES = [
 ]
 
 # خريطة حروف المجموعات العربية إلى الإنجليزية المستخدمة داخل التصميم
-_V17_GROUP_LETTERS_AR = {
+_V18_GROUP_LETTERS_AR = {
     "أ": "A", "ا": "A", "ب": "B", "ج": "C", "د": "D", "هـ": "E", "ه": "E", "و": "F",
     "ز": "G", "ح": "H", "ط": "I", "ي": "J", "ك": "K", "ل": "L",
 }
@@ -15250,7 +15251,7 @@ def _v17_group_key_from_title(line):
     m = re.search(r"المجموعة\s*([أابجدهـهوزحطيكلA-L])", s, re.I)
     if m:
         ch = m.group(1)
-        return _V17_GROUP_LETTERS_AR.get(ch, ch.upper())
+        return _V18_GROUP_LETTERS_AR.get(ch, ch.upper())
     m = re.search(r"Group\s*([A-L])", s, re.I)
     if m:
         return m.group(1).upper()
@@ -15360,7 +15361,7 @@ def _v17_parse_google_standings_text(text):
 
 def _v17_open_google_standings_with_playwright(query=None, screenshot_name=None):
     """يفتح قوقل فعليًا عبر Chromium. يرجع dict فيه: groups/text/screenshot/error/query."""
-    query = query or _V17_GOOGLE_STANDINGS_QUERIES[0]
+    query = query or _V18_GOOGLE_STANDINGS_QUERIES[0]
     ensure_generated_dir()
     screenshot_name = screenshot_name or f"google_standings_{int(time.time())}.png"
     screenshot_path = os.path.join(GENERATED_DIR, screenshot_name)
@@ -15452,7 +15453,7 @@ def _v17_open_google_standings_with_playwright(query=None, screenshot_name=None)
 def fetch_standings_from_playwright_google():
     """يحاول كل استعلامات قوقل. يرجع groups, source, screenshot_path, diagnostic."""
     last = None
-    for q in _V17_GOOGLE_STANDINGS_QUERIES:
+    for q in _V18_GOOGLE_STANDINGS_QUERIES:
         res = _v17_open_google_standings_with_playwright(q)
         last = res
         if res.get("groups"):
@@ -15468,9 +15469,9 @@ def fetch_standings_from_playwright_google():
 
 
 try:
-    _V17_OLD_FETCH_CURRENT_GROUPS = fetch_current_groups
+    _V18_OLD_FETCH_CURRENT_GROUPS = fetch_current_groups
 except Exception:
-    _V17_OLD_FETCH_CURRENT_GROUPS = None
+    _V18_OLD_FETCH_CURRENT_GROUPS = None
 
 
 def fetch_current_groups(mode="latest"):
@@ -15480,8 +15481,8 @@ def fetch_current_groups(mode="latest"):
         groups, src, _shot, _diag = fetch_standings_from_playwright_google()
         if groups:
             return groups, src
-    if _V17_OLD_FETCH_CURRENT_GROUPS:
-        return _V17_OLD_FETCH_CURRENT_GROUPS(mode)
+    if _V18_OLD_FETCH_CURRENT_GROUPS:
+        return _V18_OLD_FETCH_CURRENT_GROUPS(mode)
     return [], ""
 
 
@@ -15584,7 +15585,7 @@ async def google_search_debug_command(update: Update, context: ContextTypes.DEFA
         except Exception:
             pass
 
-# ==================== END V17 PLAYWRIGHT GOOGLE STANDINGS PATCH ====================
+# ==================== END V18 PLAYWRIGHT GOOGLE STANDINGS PATCH ====================
 
 if __name__ == "__main__":
     main()
