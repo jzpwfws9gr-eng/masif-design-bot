@@ -29,6 +29,7 @@ PARTICIPANTS = [
     "عادل عيد", "فهد فارس", "نواف فارس", "خالد عبدالرحمن",
     "محمد عبدالرحمن", "سلطان رباح", "فارس سالم", "عبدالرحمن سالم",
     "ممدوح غزاي", "محمد محسن", "طلال عبدالله", "مشعل غزاي",
+    "عبدالعزيز حمود",
 ]
 
 HEADERS = [
@@ -13669,8 +13670,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملخص_اليوم"), summary_day_command))
 
     # V31 + جدول PDF الجديد — الأوامر الجديدة فقط
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم2(?:\s|$)"), admin_only(matches_today_v31_clean_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم(?:\s|$)"), admin_only(matches_today_v31_full_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم2(?:\s|$)"), matches_today_v31_clean_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم(?:\s|$)"), matches_today_v31_full_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الأيام10(?:\s|$)"), admin_only(multi_days_matches10_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الايام10(?:\s|$)"), admin_only(multi_days_matches10_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الأيام(?:\s|$)"), admin_only(multi_days_matches_command)))
@@ -13734,11 +13735,11 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المنتخبات(?:\s|$)"), admin_only(teams_supported_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المجموعات(?:\s|$)"), admin_only(groups_points_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قالب_المجموعات(?:\s|$)"), admin_only(groups_template_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/لوحة_المتأهلين(?:\s|$)"), admin_only(qualified_show_board_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/لوحة_المتأهلين(?:\s|$)"), qualified_show_board_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إعادة_المتأهلين(?:\s|$)"), admin_only(qualified_reset_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعادة_المتأهلين(?:\s|$)"), admin_only(qualified_reset_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/حذف_متأهل(?:\s|$)"), admin_only(qualified_remove_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/متأهلين(?:\s|$)"), admin_only(qualified_add_many_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/متأهلين(?:\s|$)"), qualified_list_or_add_many_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/متأهل(?:\s|$)"), admin_only(qualified_add_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تأهل(?:\s|$)"), admin_only(qualified_news_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إقصاء(?:\s|$)"), admin_only(eliminated_news_command)))
@@ -13747,6 +13748,16 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/خبر(?:\s|$)"), admin_only(news_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_المجموعات_الان(?:\s|$)"), current_groups_now_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباشر(?:\s|$)"), live_match_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:القائمة|menu|Menu)(?:\s|$)"), public_menu_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:الهدافين|هدافين_البطولة|هدافين_كاس_العالم)(?:\s|$)"), public_top_scorers_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تحديث_المتأهلين(?:\s|$)"), admin_only(auto_update_status_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/لوحة_المغادرين(?:\s|$)"), eliminated_show_board_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المغادرين(?:\s|$)"), eliminated_list_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/حذف_مغادر(?:\s|$)"), admin_only(eliminated_remove_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مغادر(?:\s|$)"), admin_only(eliminated_add_command)))
+    app.add_handler(CallbackQueryHandler(public_menu_callback, pattern=r"^mainmenu\|"))
+    app.add_handler(CallbackQueryHandler(public_status_callback, pattern=r"^status\|"))
+    app.add_handler(CallbackQueryHandler(fantasy_menu_callback, pattern=r"^fantasy\|"))
     app.add_handler(CallbackQueryHandler(sports_source_callback, pattern=r"^sportsrc\|"))
     app.add_handler(CallbackQueryHandler(live_today_callback, pattern=r"^livefx\|"))
     app.add_handler(CallbackQueryHandler(groups_menu_callback, pattern=r"^grp\|"))
@@ -20188,6 +20199,650 @@ async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== END V26 FINAL OVERRIDE ====================
 
 # ==================== END V24 STABLE PATCH ====================
+
+
+
+# ==================== V29+ PUBLIC MENU + QUALIFIED/ELIMINATED FINAL MERGE ====================
+# اعتماد فهد: القائمة للمستخدمين، المتأهلون والمغادرون بتصميم + نص، مع إضافة/حذف يدوي وأولوية لليدوي.
+
+STATUS_STATE_FILE = "qualification_status_state.json"
+ELIMINATED_FILE = "eliminated_teams_state.json"
+
+
+def _now_riyadh_text():
+    try:
+        return (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M") + " بتوقيت مكة"
+    except Exception:
+        return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _unique_teams(seq, limit=None):
+    out = []
+    for raw in seq or []:
+        team = canonical_team_name(raw) or normalize_name(raw)
+        if team and team not in out:
+            out.append(team)
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
+def _status_default_state():
+    return {
+        "qualified_auto": [],
+        "qualified_manual_added": [],
+        "qualified_manual_removed": [],
+        "eliminated_auto": [],
+        "eliminated_manual_added": [],
+        "eliminated_manual_removed": [],
+        "updated_at": "-",
+        "source": "يدوي",
+    }
+
+
+def load_status_state():
+    state = _status_default_state()
+    if os.path.exists(STATUS_STATE_FILE):
+        try:
+            with open(STATUS_STATE_FILE, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            if isinstance(obj, dict):
+                state.update(obj)
+        except Exception:
+            pass
+    # ترحيل تلقائي من ملف V29 القديم للمتأهلين إن وجد.
+    if not state.get("qualified_manual_added") and os.path.exists(QUALIFIED32_FILE):
+        try:
+            with open(QUALIFIED32_FILE, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            teams = obj.get("teams", []) if isinstance(obj, dict) else []
+            if teams:
+                state["qualified_manual_added"] = _unique_teams(teams, 32)
+        except Exception:
+            pass
+    # ترحيل من ملف مغادرين قديم إن وجد.
+    if not state.get("eliminated_manual_added") and os.path.exists(ELIMINATED_FILE):
+        try:
+            with open(ELIMINATED_FILE, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            teams = obj.get("teams", []) if isinstance(obj, dict) else []
+            if teams:
+                state["eliminated_manual_added"] = _unique_teams(teams)
+        except Exception:
+            pass
+    for key in ["qualified_auto", "qualified_manual_added", "qualified_manual_removed", "eliminated_auto", "eliminated_manual_added", "eliminated_manual_removed"]:
+        state[key] = _unique_teams(state.get(key, []), 32 if key.startswith("qualified") else None)
+    return state
+
+
+def save_status_state(state):
+    clean = _status_default_state()
+    clean.update(state or {})
+    for key in ["qualified_auto", "qualified_manual_added", "qualified_manual_removed", "eliminated_auto", "eliminated_manual_added", "eliminated_manual_removed"]:
+        clean[key] = _unique_teams(clean.get(key, []), 32 if key.startswith("qualified") else None)
+    with open(STATUS_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(clean, f, ensure_ascii=False, indent=2)
+    # نحافظ على ملف V29 القديم عشان أي دالة قديمة ما تتأثر.
+    try:
+        with open(QUALIFIED32_FILE, "w", encoding="utf-8") as f:
+            json.dump({"teams": _status_effective_teams("qualified", clean)}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    try:
+        with open(ELIMINATED_FILE, "w", encoding="utf-8") as f:
+            json.dump({"teams": _status_effective_teams("eliminated", clean)}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _status_effective_teams(kind="qualified", state=None):
+    state = state or load_status_state()
+    prefix = "qualified" if kind == "qualified" else "eliminated"
+    manual = _unique_teams(state.get(f"{prefix}_manual_added", []))
+    auto = _unique_teams(state.get(f"{prefix}_auto", []))
+    removed = set(_unique_teams(state.get(f"{prefix}_manual_removed", [])))
+    teams = []
+    # اليدوي أولاً وله أولوية في الترتيب.
+    for team in manual + auto:
+        if team and team not in removed and team not in teams:
+            teams.append(team)
+    return teams[:32] if kind == "qualified" else teams
+
+
+# إعادة تعريف دوال V29 القديمة بحيث تستعمل الحالة الجديدة بدون كسر أوامر المتأهلين.
+def load_qualified32_state():
+    return _status_effective_teams("qualified")
+
+
+def save_qualified32_state(teams):
+    state = load_status_state()
+    state["qualified_manual_added"] = _unique_teams(teams, 32)
+    state["updated_at"] = _now_riyadh_text()
+    state["source"] = "تعديل يدوي من الإدارة"
+    save_status_state(state)
+
+
+def _status_caption(kind, teams, state=None):
+    state = state or load_status_state()
+    if kind == "qualified":
+        title = "✅ المتأهلون رسميًا إلى دور 32 حتى الآن"
+        count = f"{len(teams)}/32"
+    else:
+        title = "🚪 المنتخبات المغادرة من البطولة حتى الآن"
+        count = str(len(teams))
+    lines = [title, f"العدد: {count}", f"آخر تحديث: {state.get('updated_at') or '-'}", f"المصدر: {state.get('source') or 'يدوي'}"]
+    if state.get(f"{kind}_manual_added"):
+        lines.append("مع اعتماد/تعديلات إدارة المصيف")
+    return "\n".join(lines)
+
+
+def _render_status_board(kind, teams):
+    if kind == "qualified":
+        return render_qualified32_board(teams)
+    return render_eliminated_board(teams)
+
+
+def render_eliminated_board(teams):
+    ensure_generated_dir()
+    width, height = 1080, 1350
+    try:
+        img, draw = _games_day_background(width, height)
+    except Exception:
+        img = Image.new("RGB", (width, height), "#071426")
+        draw = ImageDraw.Draw(img, "RGBA")
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (55, 55, width-55, height-55), radius=46, fill="#06152FCC", outline="#FFFFFF33", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img, "RGBA")
+    draw_text(draw, (width//2, 95), "MONDIAL AL MASEEF 2026", _v31_latin_font(34) if '_v31_latin_font' in globals() else get_font(34), fill="#FFFFFF", max_width=860)
+    draw_text(draw, (width//2, 165), "ELIMINATED TEAMS", _v31_latin_font(62) if '_v31_latin_font' in globals() else get_font(58), fill="#FFFFFF", max_width=940)
+    draw_text(draw, (width//2, 230), "المغادرون من البطولة", get_font(42), fill="#FBBF24", max_width=830)
+
+    cols = 3
+    card_w, card_h = 290, 128
+    gap_x, gap_y = 36, 28
+    start_x = (width - (cols*card_w + (cols-1)*gap_x)) // 2
+    start_y = 310
+    teams = _unique_teams(teams)
+    if not teams:
+        rounded_rect(draw, (130, 520, width-130, 675), radius=28, fill="#061633E6", outline="#FFFFFF44", width=2)
+        draw_text(draw, (width//2, 598), "لم يتم تسجيل أي منتخب مغادر حتى الآن", get_font(34), fill="#FFFFFF", max_width=760)
+    for idx, team in enumerate(teams[:24]):
+        row = idx // cols
+        col_from_right = idx % cols
+        # نعبّي من اليمين لليسار
+        col = cols - 1 - col_from_right
+        x = start_x + col*(card_w+gap_x)
+        y = start_y + row*(card_h+gap_y)
+        rounded_rect(draw, (x, y, x+card_w, y+card_h), radius=24, fill="#111827E8", outline="#EF4444AA", width=2)
+        try:
+            paste_flag(img, team, (x+card_w-95, y+24, x+card_w-25, y+76))
+        except Exception:
+            pass
+        draw_text(draw, (x+card_w-110, y+50), team, _fit_font_to_width(draw, team, 28, 165, min_size=18), fill="#FFFFFF", anchor="rm", max_width=165)
+        draw_text(draw, (x+card_w-30, y+101), f"#{idx+1}", get_font(24), fill="#FBBF24", anchor="rm")
+        draw_text(draw, (x+38, y+101), "غادر", get_font(22), fill="#FCA5A5")
+    draw.line((250, height-120, width-250, height-120), fill="#FFFFFF77", width=2)
+    draw_text(draw, (width//2, height-72), "المصيف يضعكم بالحدث", get_font(34), fill="#FBBF24", max_width=720)
+    path = os.path.join(GENERATED_DIR, "eliminated_teams_board.png")
+    img.save(path, quality=95)
+    return path
+
+
+def _parse_team_from_command(text, command_names):
+    s = normalize_name(text or "")
+    for cmd in command_names:
+        if s.startswith(cmd):
+            return normalize_name(s[len(cmd):])
+    parts = s.split(maxsplit=1)
+    return normalize_name(parts[1]) if len(parts) > 1 else ""
+
+
+async def _status_add_command(update, context, kind):
+    if kind == "qualified":
+        raw = _parse_team_from_command(update.message.text, ["/متأهل"])
+        example = "/متأهل المكسيك"
+        limit = 32
+    else:
+        raw = _parse_team_from_command(update.message.text, ["/مغادر"])
+        example = "/مغادر نيوزيلندا"
+        limit = None
+    if not raw:
+        await update.message.reply_text(f"اكتبها كذا:\n{example}")
+        return
+    team = canonical_team_name(raw)
+    if not team:
+        await update.message.reply_text(unsupported_team_message(raw))
+        return
+    state = load_status_state()
+    prefix = "qualified" if kind == "qualified" else "eliminated"
+    manual = _unique_teams(state.get(f"{prefix}_manual_added", []), limit)
+    removed = _unique_teams(state.get(f"{prefix}_manual_removed", []))
+    if team in removed:
+        removed = [x for x in removed if x != team]
+    if team not in manual:
+        if limit and len(_status_effective_teams(kind, state)) >= limit:
+            await update.message.reply_text("القائمة مكتملة ✅")
+            return
+        manual.append(team)
+    state[f"{prefix}_manual_added"] = manual
+    state[f"{prefix}_manual_removed"] = removed
+    state["updated_at"] = _now_riyadh_text()
+    state["source"] = "تعديل يدوي من الإدارة + ESPN عند التحديث"
+    save_status_state(state)
+    teams = _status_effective_teams(kind, state)
+    path = _render_status_board(kind, teams)
+    await send_photo_path(update, path, f"تمت إضافة {team} ✅\n\n" + _status_caption(kind, teams, state))
+
+
+async def _status_remove_command(update, context, kind):
+    if kind == "qualified":
+        raw = _parse_team_from_command(update.message.text, ["/حذف_متأهل"])
+        example = "/حذف_متأهل المكسيك"
+    else:
+        raw = _parse_team_from_command(update.message.text, ["/حذف_مغادر"])
+        example = "/حذف_مغادر نيوزيلندا"
+    if not raw:
+        await update.message.reply_text(f"اكتبها كذا:\n{example}")
+        return
+    team = canonical_team_name(raw)
+    if not team:
+        await update.message.reply_text(unsupported_team_message(raw))
+        return
+    state = load_status_state()
+    prefix = "qualified" if kind == "qualified" else "eliminated"
+    state[f"{prefix}_manual_added"] = [x for x in _unique_teams(state.get(f"{prefix}_manual_added", [])) if x != team]
+    removed = _unique_teams(state.get(f"{prefix}_manual_removed", []))
+    if team not in removed:
+        removed.append(team)
+    state[f"{prefix}_manual_removed"] = removed
+    state["updated_at"] = _now_riyadh_text()
+    state["source"] = "تعديل يدوي من الإدارة + ESPN عند التحديث"
+    save_status_state(state)
+    teams = _status_effective_teams(kind, state)
+    path = _render_status_board(kind, teams)
+    await send_photo_path(update, path, f"تم حذف {team} ✅\n\n" + _status_caption(kind, teams, state))
+
+
+async def qualified_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _status_add_command(update, context, "qualified")
+
+
+async def qualified_remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _status_remove_command(update, context, "qualified")
+
+
+async def eliminated_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _status_add_command(update, context, "eliminated")
+
+
+async def eliminated_remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _status_remove_command(update, context, "eliminated")
+
+
+async def qualified_show_board_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = load_status_state()
+    teams = _status_effective_teams("qualified", state)
+    path = render_qualified32_board(teams)
+    await send_photo_path(update, path, _status_caption("qualified", teams, state))
+
+
+async def eliminated_show_board_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = load_status_state()
+    teams = _status_effective_teams("eliminated", state)
+    path = render_eliminated_board(teams)
+    await send_photo_path(update, path, _status_caption("eliminated", teams, state))
+
+
+async def eliminated_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = load_status_state()
+    teams = _status_effective_teams("eliminated", state)
+    lines = [_status_caption("eliminated", teams, state), ""]
+    lines += [f"{i}. {t}" for i, t in enumerate(teams, start=1)] or ["لا يوجد منتخبات مغادرة مسجلة حتى الآن."]
+    await update.message.reply_text("\n".join(lines))
+
+
+async def qualified_list_or_add_many_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = parse_command_body_lines(update.message.text)
+    # بدون أسماء: عرض عام للمستخدمين. مع أسماء: إضافة جماعية للمشرف فقط.
+    if not body:
+        state = load_status_state()
+        teams = _status_effective_teams("qualified", state)
+        lines = [_status_caption("qualified", teams, state), ""]
+        lines += [f"{i}. {t}" for i, t in enumerate(teams, start=1)] or ["لا يوجد منتخبات متأهلة مسجلة حتى الآن."]
+        await update.message.reply_text("\n".join(lines))
+        return
+    if not is_admin_user(update):
+        await update.message.reply_text("إضافة المتأهلين للمشرفين فقط 🔒")
+        return
+    # إضافة جماعية متوافقة مع V29 القديم.
+    state = load_status_state()
+    names = []
+    if len(body) == 1 and ("," in body[0] or "،" in body[0]):
+        names = [normalize_name(x) for x in re.split(r"[,،]", body[0]) if normalize_name(x)]
+    else:
+        names = body
+    added, invalid, skipped = [], [], []
+    manual = _unique_teams(state.get("qualified_manual_added", []), 32)
+    removed = _unique_teams(state.get("qualified_manual_removed", []))
+    for raw in names:
+        team = canonical_team_name(raw)
+        if not team:
+            invalid.append(raw)
+            continue
+        if team in removed:
+            removed = [x for x in removed if x != team]
+        if team in manual:
+            skipped.append(team)
+            continue
+        if len(_unique_teams(manual + state.get("qualified_auto", []), 32)) >= 32:
+            break
+        manual.append(team)
+        added.append(team)
+    state["qualified_manual_added"] = manual
+    state["qualified_manual_removed"] = removed
+    state["updated_at"] = _now_riyadh_text()
+    state["source"] = "إضافة جماعية يدوية من الإدارة"
+    save_status_state(state)
+    teams = _status_effective_teams("qualified", state)
+    path = render_qualified32_board(teams)
+    cap = [_status_caption("qualified", teams, state)]
+    if added:
+        cap.append("\nتمت الإضافة:\n- " + "\n- ".join(added))
+    if skipped:
+        cap.append("\nموجود مسبقًا:\n- " + "\n- ".join(skipped[:8]))
+    if invalid:
+        cap.append("\nتعذر التعرف على:\n- " + "\n- ".join(invalid[:8]))
+    await send_photo_path(update, path, "\n".join(cap))
+
+
+def _status_row_to_values(row):
+    try:
+        team = row[0]
+        played = int(row[1]) if len(row) > 1 else 0
+        diff = int(row[2]) if len(row) > 2 else 0
+        pts = int(row[3]) if len(row) > 3 else 0
+        return team, played, diff, pts
+    except Exception:
+        return "", 0, 0, 0
+
+
+def _auto_status_from_groups(groups):
+    qualified, eliminated = [], []
+    third_rows = []
+    all_groups_complete = True
+    for title, rows in groups or []:
+        clean_rows = []
+        for row in rows[:4]:
+            team, played, diff, pts = _status_row_to_values(row)
+            if team:
+                clean_rows.append((team, played, diff, pts))
+        if len(clean_rows) < 4:
+            all_groups_complete = False
+            continue
+        group_complete = all(p >= 3 for _team, p, _diff, _pts in clean_rows)
+        if not group_complete:
+            all_groups_complete = False
+            continue
+        # ESPN يعطينا الترتيب جاهز: الأول والثاني متأهلان رسميًا بعد نهاية المجموعة.
+        qualified.extend([clean_rows[0][0], clean_rows[1][0]])
+        third_rows.append(clean_rows[2])
+        eliminated.append(clean_rows[3][0])
+    if all_groups_complete and len(third_rows) >= 12:
+        # أفضل 8 ثوالث لدور 32، والباقي يغادر. نستخدم النقاط ثم الفارق ثم الاسم كترتيب محافظ.
+        ranked_thirds = sorted(third_rows, key=lambda x: (x[3], x[2], x[0]), reverse=True)
+        qualified.extend([x[0] for x in ranked_thirds[:8]])
+        eliminated.extend([x[0] for x in ranked_thirds[8:]])
+    return _unique_teams(qualified, 32), _unique_teams(eliminated)
+
+
+async def auto_update_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    wait = await update.message.reply_text("⏳ أحدث المتأهلين والمغادرين من ESPN بشكل محافظ...")
+    try:
+        groups, source_label = await asyncio.wait_for(asyncio.to_thread(fetch_current_groups, "espn"), timeout=40)
+    except Exception as e:
+        await wait.edit_text(f"تعذر جلب ترتيب ESPN ❌\n{str(e)[:250]}")
+        return
+    if not groups:
+        await wait.edit_text("تعذر جلب ترتيب المجموعات من ESPN حاليًا.")
+        return
+    q_auto, e_auto = _auto_status_from_groups(groups)
+    state = load_status_state()
+    state["qualified_auto"] = q_auto
+    state["eliminated_auto"] = e_auto
+    state["updated_at"] = _now_riyadh_text()
+    state["source"] = f"ESPN Standings — تحديث تلقائي محافظ"
+    save_status_state(state)
+    q_eff = _status_effective_teams("qualified", state)
+    e_eff = _status_effective_teams("eliminated", state)
+    await wait.edit_text(
+        "تم تحديث القوائم ✅\n"
+        f"المتأهلون: {len(q_eff)}/32\n"
+        f"المغادرون: {len(e_eff)}\n"
+        "ملاحظة: اليدوي له أولوية، والتلقائي لا يعتمد شيء غير واضح قبل اكتمال المجموعة."
+    )
+
+
+def _public_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📺 مباشر الآن", callback_data="mainmenu|live"), InlineKeyboardButton("📅 مباريات اليوم", callback_data="mainmenu|fixtures")],
+        [InlineKeyboardButton("📊 ترتيب المجموعات", callback_data="mainmenu|groups"), InlineKeyboardButton("🏆 هدافين البطولة", callback_data="mainmenu|scorers")],
+        [InlineKeyboardButton("✅ المتأهلون لدور 32", callback_data="status|qualified"), InlineKeyboardButton("🚪 المغادرون من البطولة", callback_data="status|eliminated")],
+        [InlineKeyboardButton("📋 نتائج المباريات", callback_data="mainmenu|results"), InlineKeyboardButton("🎮 فانتزي المصيف", callback_data="mainmenu|fantasy")],
+        [InlineKeyboardButton("ℹ️ طريقة الاستخدام", callback_data="mainmenu|help")],
+    ])
+
+
+def _fantasy_public_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏆 الترتيب العام", callback_data="fantasy|ranking")],
+        [InlineKeyboardButton("🔥 نقاط اليوم", callback_data="fantasy|today_points")],
+        [InlineKeyboardButton("⭐ أساطير الفانتزي", callback_data="fantasy|legends")],
+        [InlineKeyboardButton("📋 نموذج المشاركة", callback_data="fantasy|template")],
+        [InlineKeyboardButton("⬅️ رجوع للقائمة", callback_data="mainmenu|home")],
+    ])
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "حيّاك في بوت مونديال المصيف 2026 🏆\n"
+        "اختر من القائمة، وكل شخص يضغط الزر ويطلع له الرد لحاله بالخاص:",
+        reply_markup=_public_main_keyboard(),
+    )
+
+
+async def public_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await start(update, context)
+
+
+async def _send_public_matches_today(message):
+    d = _v29_active_fixture_date() if '_v29_active_fixture_date' in globals() else None
+    if not d:
+        await message.reply_text("ما لقيت مباريات في ملف PDF.")
+        return
+    wait = await message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+    try:
+        rows = _v26_dedupe_fixture_matches(_fixtures_for_date(d)) if '_v26_dedupe_fixture_matches' in globals() else _fixtures_for_date(d)
+        if not rows:
+            await wait.edit_text("لا توجد مباريات لهذا اليوم.")
+            return
+        title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+        path = create_matches_today_v31_full_image(title, rows)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        await send_photo_path(message, path, build_matches_today_v31_caption(title, rows))
+    except Exception as e:
+        await wait.edit_text(f"تعذر تجهيز مباريات اليوم ❌\n{str(e)[:300]}")
+
+
+async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    wait = await update.message.reply_text("⏳ أسحب هدافين البطولة من ESPN...")
+    try:
+        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers), timeout=35)
+        path = render_top_scorers_v29(items)
+        await send_photo_path(update, path, "هدافين البطولة ✅\nالمصدر: ESPN Scoring Stats")
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await wait.edit_text(f"تعذر جلب هدافين البطولة ❌\n{str(e)[:300]}")
+
+
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    action = (q.data or "").split("|", 1)[1] if "|" in (q.data or "") else "home"
+    if action == "home":
+        await q.message.reply_text("القائمة الرئيسية:", reply_markup=_public_main_keyboard())
+        return
+    if action == "live":
+        d = _v29_active_fixture_date() if '_v29_active_fixture_date' in globals() else None
+        await q.message.reply_text(_v29_live_today_text(d), reply_markup=_v29_live_today_keyboard(d))
+        return
+    if action == "fixtures":
+        await _send_public_matches_today(q.message)
+        return
+    if action == "groups":
+        await q.message.reply_text("اختر المجموعة أو جميع المجموعات:", reply_markup=_v29_group_menu_keyboard())
+        return
+    if action == "scorers":
+        wait = await q.message.reply_text("⏳ أسحب هدافين البطولة من ESPN...")
+        try:
+            items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers), timeout=35)
+            path = render_top_scorers_v29(items)
+            await send_photo_path(q.message, path, "هدافين البطولة ✅\nالمصدر: ESPN Scoring Stats")
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب هدافين البطولة ❌\n{str(e)[:300]}")
+        return
+    if action == "results":
+        prev = _v28_previous_result_dates() if '_v28_previous_result_dates' in globals() else []
+        if not prev:
+            await q.message.reply_text("ما فيه أيام سابقة للنتائج حتى الآن.")
+            return
+        await q.message.reply_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        return
+    if action == "fantasy":
+        await q.message.reply_text("قائمة فانتزي المصيف:", reply_markup=_fantasy_public_keyboard())
+        return
+    if action == "help":
+        await q.message.reply_text(
+            "طريقة الاستخدام ℹ️\n\n"
+            "اضغط الزر المطلوب من القائمة، والرد يطلع لك لحالك في الخاص.\n"
+            "للمتابعة المباشرة: اختر 📺 مباشر الآن ثم اختر المباراة.\n"
+            "لترتيب المجموعات: اختر 📊 ترتيب المجموعات ثم اختر المجموعة أو جميع المجموعات.\n"
+            "للفانتزي: اختر 🎮 فانتزي المصيف ثم نوع التقرير.\n\n"
+            "لإظهار القائمة مرة ثانية اكتب /القائمة"
+        )
+        return
+    await q.message.reply_text("تعذر قراءة الخيار.")
+
+
+async def public_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    kind = (q.data or "").split("|", 1)[1] if "|" in (q.data or "") else "qualified"
+    state = load_status_state()
+    if kind == "qualified":
+        teams = _status_effective_teams("qualified", state)
+        path = render_qualified32_board(teams)
+        await send_photo_path(q.message, path, _status_caption("qualified", teams, state))
+    elif kind == "eliminated":
+        teams = _status_effective_teams("eliminated", state)
+        path = render_eliminated_board(teams)
+        await send_photo_path(q.message, path, _status_caption("eliminated", teams, state))
+    else:
+        await q.message.reply_text("تعذر قراءة الخيار.")
+
+
+def _latest_fantasy_day():
+    days = get_existing_days(1, 99)
+    return max(days) if days else None
+
+
+async def fantasy_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    action = (q.data or "").split("|", 1)[1] if "|" in (q.data or "") else "menu"
+    if action == "ranking":
+        days = get_existing_days(1, 99)
+        end_day = max(days) if days else 31
+        stats = collect_stats(1, end_day)
+        if not stats.get("days"):
+            await q.message.reply_text("ما فيه أيام فانتزي محسوبة حتى الآن.", reply_markup=_fantasy_public_keyboard())
+            return
+        await q.message.reply_text(build_ranking_text(stats, 1, end_day), reply_markup=_fantasy_public_keyboard())
+        return
+    if action == "today_points":
+        day = _latest_fantasy_day()
+        if not day:
+            await q.message.reply_text("ما فيه ملف نقاط لليوم حتى الآن.", reply_markup=_fantasy_public_keyboard())
+            return
+        rows = sorted(read_day_rows(day), key=lambda r: r.get("total", 0), reverse=True)
+        lines = [f"🔥 نقاط اليوم {ordinal_day(day)}", ""]
+        for i, r in enumerate(rows, start=1):
+            lines.append(f"{i}. {r['participant']} — {r['total']} نقطة")
+        await q.message.reply_text("\n".join(lines), reply_markup=_fantasy_public_keyboard())
+        return
+    if action == "legends":
+        days = get_existing_days(1, 99)
+        end_day = max(days) if days else 31
+        stats = collect_stats(1, end_day)
+        wins = stats.get("daily_wins", {})
+        ordered = sorted([(n, wins[n]) for n in PARTICIPANTS if wins.get(n, 0) > 0], key=lambda x: x[1], reverse=True)
+        lines = ["⭐ أساطير الفانتزي", ""]
+        lines += [f"{i}. {n} — {c} مرة" for i, (n, c) in enumerate(ordered, start=1)] or ["لا يوجد أساطير مسجلين حتى الآن."]
+        await q.message.reply_text("\n".join(lines), reply_markup=_fantasy_public_keyboard())
+        return
+    if action == "template":
+        day = _latest_fantasy_day()
+        next_day = (int(day) + 1) if day else ""
+        await q.message.reply_text(
+            "📋 نموذج المشاركة الرسمي المعتمد\n"
+            f"🏆 تشكيلة الفانتزي - اليوم ( {next_day} )\n"
+            "🧤 الحارس: \n"
+            "اللاعب 1: \n"
+            "اللاعب 2: \n"
+            "اللاعب 3: \n"
+            "👑 الكابتن: ",
+            reply_markup=_fantasy_public_keyboard(),
+        )
+        return
+    await q.message.reply_text("قائمة فانتزي المصيف:", reply_markup=_fantasy_public_keyboard())
+
+
+# نتائج المباريات للمستخدمين: أزرار النتائج عامة وليست للمشرف فقط.
+async def previous_results_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    if len(parts) >= 3 and parts[1] == "day":
+        d = parts[2]
+        wait = await q.message.reply_text("⏳ أسحب النتائج والهدافين من ESPN...")
+        try:
+            text = await asyncio.wait_for(asyncio.to_thread(_v28_result_text_for_date, d), timeout=35)
+            await wait.edit_text(text)
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب نتائج هذا اليوم ❌\n{str(e)[:400]}")
+        return
+
+# ==================== END V29+ PUBLIC MENU + QUALIFIED/ELIMINATED FINAL MERGE ====================
+
 
 if __name__ == "__main__":
     main()
