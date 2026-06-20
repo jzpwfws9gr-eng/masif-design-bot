@@ -13683,6 +13683,7 @@ def main():
     app.add_handler(CallbackQueryHandler(fixtures_callback, pattern=r"^fx\|"))
     app.add_handler(CallbackQueryHandler(previous_results_callback, pattern=r"^res\|"))
     # مهم: لا نخلي معالج تحديث المباريات يلقط أوامر السلاش العربية مثل /استيراد_ملف و /إضافة_متسابق
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^(?:📺 مباشر الآن|📅 مباريات اليوم|📅 المباريات القادمة|📊 ترتيب المجموعات|🏆 هدافين البطولة|✅ المتأهلون لدور 32|🚪 المغادرون من البطولة|📋 نتائج المباريات|🎮 فانتزي المصيف|ℹ️ طريقة الاستخدام|(?:↩️\s*)?إلغاء|الغاء)$"), public_reply_menu_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.Regex(r"^/"), admin_only(fixtures_update_text_handler)))
 
     # استيراد ونسخ
@@ -13749,7 +13750,6 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_المجموعات_الان(?:\s|$)"), current_groups_now_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباشر(?:\s|$)"), live_match_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:القائمة|menu|Menu)(?:\s|$)"), public_menu_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^(?:📺 مباشر الآن|📅 مباريات اليوم|📅 المباريات القادمة|📊 ترتيب المجموعات|🏆 هدافين البطولة|✅ المتأهلون لدور 32|🚪 المغادرون من البطولة|📋 نتائج المباريات|🎮 فانتزي المصيف|ℹ️ طريقة الاستخدام|(?:↩️\s*)?إلغاء|الغاء)$"), public_reply_menu_router))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:الهدافين|هدافين_البطولة|هدافين_كاس_العالم)(?:\s|$)"), public_top_scorers_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تحديث_المتأهلين(?:\s|$)"), admin_only(auto_update_status_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/لوحة_المغادرين(?:\s|$)"), eliminated_show_board_command))
