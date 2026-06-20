@@ -12549,6 +12549,7 @@ async def google_search_debug_command(update: Update, context: ContextTypes.DEFA
 
 # ==================== END V6 HOTFIX ====================
 
+
 def main():
     if not TOKEN:
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
@@ -12556,11 +12557,12 @@ def main():
     ensure_design_assets()
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # أساسيات
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:من_انا|معرفي)"), who_am_i))
     app.add_handler(MessageHandler(filters.Document.ALL, remember_last_file))
 
-    # صور وتقارير
+    # صور وتقارير الفانتزي المعتمدة
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تفعيل_الصور_التلقائية"), admin_only(enable_auto_images)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إيقاف_الصور_التلقائية"), admin_only(disable_auto_images)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ايقاف_الصور_التلقائية"), admin_only(disable_auto_images)))
@@ -12570,50 +12572,24 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), dashboard_sheet_image_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), all_dashboard_images_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:ملف_الاحصائيات|ملف_الإحصائيات|ملف_احصائيات|ملف_إحصائيات|pdf_الاحصائيات|PDF_الاحصائيات)(?:\s|$)"), statistics_pdf_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اختبار_pdf|اختبار_PDF|اختبار_ملف)(?:\s|$)"), test_pdf_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بطاقة"), participant_card_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تقرير_الفترة"), period_report_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعلان_اليوم"), announcement_day_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملخص_اليوم"), summary_day_command))
 
-    # ستايل وتصاميم مختصرة — الأطول قبل الأقصر
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_ستايل(?:\s|$)"), admin_only(set_style_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الستايل(?:\s|$)"), admin_only(get_style_command)))
-
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_تلقائي(?:\s|$)"), admin_only(short_matches_auto_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/انتهت_تلقائي(?:\s|$)"), admin_only(short_results_auto_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مجموعة_تلقائي(?:\s|$)"), admin_only(short_group_auto_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/هدافين_تلقائي(?:\s|$)"), admin_only(short_scorers_auto_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/كل_المجموعات_تلقائي(?:\s|$)"), admin_only(short_all_groups_auto_command)))
-
+    # V31 + جدول PDF الجديد — الأوامر الجديدة فقط
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم2(?:\s|$)"), admin_only(matches_today_v31_clean_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم(?:\s|$)"), admin_only(matches_today_v31_full_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الأيام10(?:\s|$)"), admin_only(multi_days_matches10_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الايام10(?:\s|$)"), admin_only(multi_days_matches10_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الأيام(?:\s|$)"), admin_only(multi_days_matches_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_الايام(?:\s|$)"), admin_only(multi_days_matches_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات(?:\s|$)"), admin_only(short_matches_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/انتهت(?:\s|$)"), admin_only(short_results_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/كل_المجموعات(?:\s|$)"), admin_only(short_all_groups_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مجموعة(?:\s|$)"), admin_only(short_group_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/هدافين(?:\s|$)"), admin_only(short_scorers_command)))
-
-    # أوامر التصميم القديمة + ستايلات قديمة
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات_ستايل2(?:\s|$)"), admin_only(design_matches_style2_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات_ستايل2(?:\s|$)"), admin_only(design_match_results_style2_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين_ستايل2(?:\s|$)"), admin_only(design_scorers_style2_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_ترتيب_مجموعة_ستايل2(?:\s|$)"), admin_only(design_group_style2_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات_اطار(?:\s|$)"), admin_only(design_matches_frame_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات_اطار(?:\s|$)"), admin_only(design_results_frame_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_جميع_المجموعات(?:\s|$)"), admin_only(design_all_groups_command)))
-
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات_تلقائي(?:\s|$)"), admin_only(design_matches_auto_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات_تلقائي(?:\s|$)"), admin_only(design_match_results_auto_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_ترتيب_مجموعة_تلقائي(?:\s|$)"), admin_only(design_group_standing_auto_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين_تلقائي(?:\s|$)"), admin_only(design_scorers_auto_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_مباريات(?:\s|$)"), admin_only(design_matches_template_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_نتائج_مباريات(?:\s|$)"), admin_only(design_match_results_template_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_ترتيب_مجموعة(?:\s|$)"), admin_only(design_group_standing_template_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تصميم_هدافين(?:\s|$)"), admin_only(design_scorers_template_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_مباريات_اليوم(?:\s|$)"), admin_only(design_match_results_template_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_ناقصة(?:\s|$)"), admin_only(fixtures_missing_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مراجعة_مباراة(?:\s|$)"), admin_only(fixtures_review_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_مجمعة(?:\s|$)"), admin_only(fixtures_combined_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات(?:\s|$)"), admin_only(fixtures_command)))
+    app.add_handler(CallbackQueryHandler(fixtures_callback, pattern=r"^fx\|"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(fixtures_update_text_handler)))
 
     # استيراد ونسخ
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استيراد_ملف"), admin_only(import_excel_file)))
@@ -12626,7 +12602,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الايام"), admin_only(clean_days)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الملفات"), admin_only(clean_temp_files)))
 
-    # الكأس
+    # الكأس الداخلية محفوظة حسب اعتمادك
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بدء_الكاس(?:\s|$)"), admin_only(start_cup_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/حالة_الكاس(?:\s|$)"), admin_only(cup_status_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_الكاس(?:\s|$)"), admin_only(cup_results_command)))
@@ -12636,12 +12612,10 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الغاء_الكاس(?:\s|$)"), admin_only(cancel_cup_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إلغاء_الكاس(?:\s|$)"), admin_only(cancel_cup_command)))
 
-    # فانتزي أساسي
-    # إدارة المتسابقين
+    # فانتزي أساسي + إدارة المتسابقين
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:إضافة_متسابق|اضافة_متسابق)(?:\s|$)"), admin_only(add_participant_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:حذف_متسابق|ازالة_متسابق|إزالة_متسابق)(?:\s|$)"), admin_only(remove_participant_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المتسابقين(?:\s|$)"), admin_only(participants_list_command)))
-
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه"), admin_only(add_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_نتائج(?:\s|$)"), admin_only(approve_results_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), admin_only(results_day)))
@@ -12660,8 +12634,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
 
-
-    # الأخبار والمتأهلين والمباشر V2
+    # الأخبار والمتأهلين والمباشر والترتيب
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فحص_api(?:\s|$)"), admin_only(api_check_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بحث_قوقل(?:\s|$)"), admin_only(google_search_debug_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المنتخبات(?:\s|$)"), admin_only(teams_supported_command)))
@@ -12673,20 +12646,14 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/حذف_متأهل(?:\s|$)"), admin_only(qualified_remove_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/متأهلين(?:\s|$)"), admin_only(qualified_add_many_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/متأهل(?:\s|$)"), admin_only(qualified_add_command)))
-
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تأهل(?:\s|$)"), admin_only(qualified_news_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/إقصاء(?:\s|$)"), admin_only(eliminated_news_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اقصاء(?:\s|$)"), admin_only(eliminated_news_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/عاجل(?:\s|$)"), admin_only(urgent_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/خبر(?:\s|$)"), admin_only(news_command)))
-
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_المجموعات_الان(?:\s|$)"), admin_only(current_groups_now_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباشر(?:\s|$)"), admin_only(live_match_command)))
     app.add_handler(CallbackQueryHandler(sports_source_callback, pattern=r"^sportsrc\|"))
-
-    # V31 — مباريات اليوم بالتصميم الجديد
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم2(?:\s|$)"), admin_only(matches_today_v31_clean_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_اليوم(?:\s|$)"), admin_only(matches_today_v31_full_command)))
 
     app.run_polling()
 
@@ -15395,6 +15362,701 @@ async def google_search_debug_command(update: Update, context: ContextTypes.DEFA
     except Exception:
         pass
     await update.message.reply_text("استخدم /ترتيب_المجموعات_الان لترتيب المجموعات أو /مباشر للمباريات.")
+
+
+# ==================== V23 CLEAN FIXTURES + STANDINGS PAGES + ESPN GOALS PATCH ====================
+# - حذف تفعيل أوامر التصميم القديمة من main.
+# - جدول المباريات من ملف PDF يبدأ من السبت 20 يونيو 2026.
+# - /مباريات: أزرار الأيام + تحديث مباريات تحدد لاحقًا بدون تصميم مباشر.
+# - /مباريات_مجمعة: أكثر من يوم في تصميم واحد، وإذا كثرت الأيام يقسم تلقائيًا.
+# - /ترتيب_المجموعات_الان: صورة شاملة + 3 صور واضحة.
+# - تحسين محاولة سحب الهدافين من تفاصيل ESPN Summary.
+
+FIXTURES_UPDATES_FILE = os.path.join("data", "fixture_updates.json")
+
+_GROUP_AR = {
+    1: "المجموعة أ", 2: "المجموعة ب", 3: "المجموعة ج", 4: "المجموعة د",
+    5: "المجموعة هـ", 6: "المجموعة و", 7: "المجموعة ز", 8: "المجموعة ح",
+    9: "المجموعة ط", 10: "المجموعة ي", 11: "المجموعة ك", 12: "المجموعة ل",
+}
+
+# جدول ثابت من ملف PDF — البداية المعتمدة: السبت 20 يونيو 2026.
+# الوقت كما في الملف: توقيت السعودية.
+TOURNAMENT_FIXTURES = [
+    # دور المجموعات — من 20 يونيو
+    {"id":"G20-1","date":"20/06/2026","day":"السبت","time":"8:00 م","team1":"هولندا","team2":"السويد","stage":"دور المجموعات","group":"المجموعة و"},
+    {"id":"G20-2","date":"20/06/2026","day":"السبت","time":"11:00 م","team1":"ألمانيا","team2":"ساحل العاج","stage":"دور المجموعات","group":"المجموعة هـ"},
+    {"id":"G20-3","date":"20/06/2026","day":"السبت","time":"3:00 فجراً","team1":"الإكوادور","team2":"كوراساو","stage":"دور المجموعات","group":"المجموعة هـ"},
+    {"id":"G20-4","date":"20/06/2026","day":"السبت","time":"7:00 صباحاً","team1":"تونس","team2":"اليابان","stage":"دور المجموعات","group":"المجموعة و"},
+
+    {"id":"G21-1","date":"21/06/2026","day":"الأحد","time":"7:00 م","team1":"إسبانيا","team2":"السعودية","stage":"دور المجموعات","group":"المجموعة ح"},
+    {"id":"G21-2","date":"21/06/2026","day":"الأحد","time":"10:00 م","team1":"بلجيكا","team2":"إيران","stage":"دور المجموعات","group":"المجموعة ز"},
+    {"id":"G21-3","date":"21/06/2026","day":"الأحد","time":"1:00 فجراً","team1":"الأوروغواي","team2":"الرأس الأخضر","stage":"دور المجموعات","group":"المجموعة ح"},
+    {"id":"G21-4","date":"21/06/2026","day":"الأحد","time":"4:00 فجراً","team1":"نيوزيلندا","team2":"مصر","stage":"دور المجموعات","group":"المجموعة ز"},
+
+    {"id":"G22-1","date":"22/06/2026","day":"الإثنين","time":"8:00 م","team1":"الأرجنتين","team2":"النمسا","stage":"دور المجموعات","group":"المجموعة ي"},
+    {"id":"G22-2","date":"22/06/2026","day":"الإثنين","time":"12:00 منتصف الليل","team1":"فرنسا","team2":"العراق","stage":"دور المجموعات","group":"المجموعة ط"},
+    {"id":"G22-3","date":"22/06/2026","day":"الإثنين","time":"3:00 فجراً","team1":"النرويج","team2":"السنغال","stage":"دور المجموعات","group":"المجموعة ط"},
+    {"id":"G22-4","date":"22/06/2026","day":"الإثنين","time":"6:00 صباحاً","team1":"الأردن","team2":"الجزائر","stage":"دور المجموعات","group":"المجموعة ي"},
+
+    {"id":"G23-1","date":"23/06/2026","day":"الثلاثاء","time":"8:00 م","team1":"البرتغال","team2":"أوزبكستان","stage":"دور المجموعات","group":"المجموعة ك"},
+    {"id":"G23-2","date":"23/06/2026","day":"الثلاثاء","time":"11:00 م","team1":"إنجلترا","team2":"غانا","stage":"دور المجموعات","group":"المجموعة ل"},
+    {"id":"G23-3","date":"23/06/2026","day":"الثلاثاء","time":"2:00 فجراً","team1":"بنما","team2":"كرواتيا","stage":"دور المجموعات","group":"المجموعة ل"},
+    {"id":"G23-4","date":"23/06/2026","day":"الثلاثاء","time":"5:00 فجراً","team1":"كولومبيا","team2":"الكونغو الديمقراطية","stage":"دور المجموعات","group":"المجموعة ك"},
+
+    {"id":"G24-1","date":"24/06/2026","day":"الأربعاء","time":"10:00 م","team1":"سويسرا","team2":"كندا","stage":"دور المجموعات","group":"المجموعة ب"},
+    {"id":"G24-2","date":"24/06/2026","day":"الأربعاء","time":"10:00 م","team1":"البوسنة والهرسك","team2":"قطر","stage":"دور المجموعات","group":"المجموعة ب"},
+    {"id":"G24-3","date":"24/06/2026","day":"الأربعاء","time":"1:00 فجراً","team1":"اسكتلندا","team2":"البرازيل","stage":"دور المجموعات","group":"المجموعة ج"},
+    {"id":"G24-4","date":"24/06/2026","day":"الأربعاء","time":"1:00 فجراً","team1":"المغرب","team2":"هايتي","stage":"دور المجموعات","group":"المجموعة ج"},
+    {"id":"G24-5","date":"24/06/2026","day":"الأربعاء","time":"4:00 فجراً","team1":"التشيك","team2":"المكسيك","stage":"دور المجموعات","group":"المجموعة أ"},
+    {"id":"G24-6","date":"24/06/2026","day":"الأربعاء","time":"4:00 فجراً","team1":"جنوب أفريقيا","team2":"كوريا الجنوبية","stage":"دور المجموعات","group":"المجموعة أ"},
+
+    {"id":"G25-1","date":"25/06/2026","day":"الخميس","time":"11:00 م","team1":"كوراساو","team2":"ساحل العاج","stage":"دور المجموعات","group":"المجموعة هـ"},
+    {"id":"G25-2","date":"25/06/2026","day":"الخميس","time":"11:00 م","team1":"الإكوادور","team2":"ألمانيا","stage":"دور المجموعات","group":"المجموعة هـ"},
+    {"id":"G25-3","date":"25/06/2026","day":"الخميس","time":"2:00 فجراً","team1":"اليابان","team2":"السويد","stage":"دور المجموعات","group":"المجموعة و"},
+    {"id":"G25-4","date":"25/06/2026","day":"الخميس","time":"2:00 فجراً","team1":"تونس","team2":"هولندا","stage":"دور المجموعات","group":"المجموعة و"},
+    {"id":"G25-5","date":"25/06/2026","day":"الخميس","time":"5:00 فجراً","team1":"تركيا","team2":"الولايات المتحدة","stage":"دور المجموعات","group":"المجموعة د"},
+    {"id":"G25-6","date":"25/06/2026","day":"الخميس","time":"5:00 فجراً","team1":"باراغواي","team2":"أستراليا","stage":"دور المجموعات","group":"المجموعة د"},
+
+    {"id":"G26-1","date":"26/06/2026","day":"الجمعة","time":"10:00 م","team1":"النرويج","team2":"فرنسا","stage":"دور المجموعات","group":"المجموعة ط"},
+    {"id":"G26-2","date":"26/06/2026","day":"الجمعة","time":"10:00 م","team1":"السنغال","team2":"العراق","stage":"دور المجموعات","group":"المجموعة ط"},
+    {"id":"G26-3","date":"26/06/2026","day":"الجمعة","time":"3:00 فجراً","team1":"الرأس الأخضر","team2":"السعودية","stage":"دور المجموعات","group":"المجموعة ح"},
+    {"id":"G26-4","date":"26/06/2026","day":"الجمعة","time":"3:00 فجراً","team1":"الأوروغواي","team2":"إسبانيا","stage":"دور المجموعات","group":"المجموعة ح"},
+    {"id":"G26-5","date":"26/06/2026","day":"الجمعة","time":"6:00 صباحاً","team1":"مصر","team2":"إيران","stage":"دور المجموعات","group":"المجموعة ز"},
+    {"id":"G26-6","date":"26/06/2026","day":"الجمعة","time":"6:00 صباحاً","team1":"نيوزيلندا","team2":"بلجيكا","stage":"دور المجموعات","group":"المجموعة ز"},
+
+    {"id":"G27-1","date":"27/06/2026","day":"السبت","time":"12:00 منتصف الليل","team1":"بنما","team2":"إنجلترا","stage":"دور المجموعات","group":"المجموعة ل"},
+    {"id":"G27-2","date":"27/06/2026","day":"السبت","time":"12:00 منتصف الليل","team1":"كرواتيا","team2":"غانا","stage":"دور المجموعات","group":"المجموعة ل"},
+    {"id":"G27-3","date":"27/06/2026","day":"السبت","time":"2:30 فجراً","team1":"كولومبيا","team2":"البرتغال","stage":"دور المجموعات","group":"المجموعة ك"},
+    {"id":"G27-4","date":"27/06/2026","day":"السبت","time":"2:30 فجراً","team1":"الكونغو الديمقراطية","team2":"أوزبكستان","stage":"دور المجموعات","group":"المجموعة ك"},
+    {"id":"G27-5","date":"27/06/2026","day":"السبت","time":"5:00 فجراً","team1":"الجزائر","team2":"النمسا","stage":"دور المجموعات","group":"المجموعة ي"},
+    {"id":"G27-6","date":"27/06/2026","day":"السبت","time":"5:00 فجراً","team1":"الأردن","team2":"الأرجنتين","stage":"دور المجموعات","group":"المجموعة ي"},
+
+    # دور الـ32 — أطراف قابلة للتحديث من داخل البوت
+    {"id":"R32-1","date":"28/06/2026","day":"الأحد","time":"10:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"ثاني المجموعة أ × ثاني المجموعة ب"},
+    {"id":"R32-2","date":"29/06/2026","day":"الإثنين","time":"8:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة ج × ثاني المجموعة و"},
+    {"id":"R32-3","date":"29/06/2026","day":"الإثنين","time":"10:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة هـ × ثالث مؤهل"},
+    {"id":"R32-4","date":"30/06/2026","day":"الثلاثاء","time":"4:00 فجراً","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة و × ثاني المجموعة ج"},
+    {"id":"R32-5","date":"30/06/2026","day":"الثلاثاء","time":"8:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"ثاني المجموعة هـ × ثاني المجموعة ط"},
+    {"id":"R32-6","date":"01/07/2026","day":"الأربعاء","time":"12:00 منتصف الليل","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة ط × ثالث مؤهل"},
+    {"id":"R32-7","date":"01/07/2026","day":"الأربعاء","time":"4:00 فجراً","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة أ × ثالث مؤهل"},
+    {"id":"R32-8","date":"01/07/2026","day":"الأربعاء","time":"7:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة ل × ثالث مؤهل"},
+    {"id":"R32-9","date":"01/07/2026","day":"الأربعاء","time":"11:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة ز × ثالث مؤهل"},
+    {"id":"R32-10","date":"02/07/2026","day":"الخميس","time":"3:00 فجراً","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة د × ثالث مؤهل"},
+    {"id":"R32-11","date":"02/07/2026","day":"الخميس","time":"10:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة ح × ثاني المجموعة ي"},
+    {"id":"R32-12","date":"03/07/2026","day":"الجمعة","time":"2:00 فجراً","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"ثاني المجموعة ك × ثاني المجموعة ل"},
+    {"id":"R32-13","date":"03/07/2026","day":"الجمعة","time":"6:00 صباحاً","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة ب × ثالث مؤهل"},
+    {"id":"R32-14","date":"03/07/2026","day":"الجمعة","time":"9:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"ثاني المجموعة د × ثاني المجموعة ز"},
+    {"id":"R32-15","date":"04/07/2026","day":"السبت","time":"1:00 فجراً","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة ي × ثاني المجموعة ح"},
+    {"id":"R32-16","date":"04/07/2026","day":"السبت","time":"4:30 فجراً","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ32","note":"أول المجموعة ك × ثالث مؤهل"},
+
+    # دور الـ16 وما بعده — يتم تحديثها لاحقًا من داخل البوت
+    {"id":"R16-1","date":"04/07/2026","day":"السبت","time":"8:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ16","note":"الفائز من مباراة 1 × الفائز من مباراة 3"},
+    {"id":"R16-2","date":"05/07/2026","day":"الأحد","time":"12:00 منتصف الليل","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ16","note":"الفائز من مباراة 2 × الفائز من مباراة 5"},
+    {"id":"R16-3","date":"05/07/2026","day":"الأحد","time":"11:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ16","note":"الفائز من مباراة 4 × الفائز من مباراة 6"},
+    {"id":"R16-4","date":"06/07/2026","day":"الإثنين","time":"3:00 فجراً","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ16","note":"الفائز من مباراة 7 × الفائز من مباراة 8"},
+    {"id":"R16-5","date":"06/07/2026","day":"الإثنين","time":"10:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ16","note":"الفائز من مباراة 11 × الفائز من مباراة 12"},
+    {"id":"R16-6","date":"07/07/2026","day":"الثلاثاء","time":"3:00 فجراً","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ16","note":"الفائز من مباراة 9 × الفائز من مباراة 10"},
+    {"id":"R16-7","date":"07/07/2026","day":"الثلاثاء","time":"7:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ16","note":"الفائز من مباراة 13 × الفائز من مباراة 15"},
+    {"id":"R16-8","date":"07/07/2026","day":"الثلاثاء","time":"11:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"دور الـ16","note":"الفائز من مباراة 14 × الفائز من مباراة 16"},
+    {"id":"QF-1","date":"09/07/2026","day":"الخميس","time":"11:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"الدور ربع النهائي","note":"الفائز من ثمن النهائي الأول × الفائز من ثمن النهائي الثاني"},
+    {"id":"QF-2","date":"10/07/2026","day":"الجمعة","time":"10:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"الدور ربع النهائي","note":"الفائز من ثمن النهائي الخامس × الفائز من ثمن النهائي السادس"},
+    {"id":"QF-3","date":"12/07/2026","day":"الأحد","time":"12:00 منتصف الليل","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"الدور ربع النهائي","note":"الفائز من ثمن النهائي الثالث × الفائز من ثمن النهائي الرابع"},
+    {"id":"QF-4","date":"12/07/2026","day":"الأحد","time":"4:00 فجراً","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"الدور ربع النهائي","note":"الفائز من ثمن النهائي السابع × الفائز من ثمن النهائي الثامن"},
+    {"id":"SF-1","date":"14/07/2026","day":"الثلاثاء","time":"10:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"الدور نصف النهائي","note":"الفائز من ربع النهائي الأول × الفائز من ربع النهائي الثاني"},
+    {"id":"SF-2","date":"15/07/2026","day":"الأربعاء","time":"10:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"الدور نصف النهائي","note":"الفائز من ربع النهائي الثالث × الفائز من ربع النهائي الرابع"},
+    {"id":"3RD","date":"19/07/2026","day":"الأحد","time":"12:00 منتصف الليل","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"مباراة تحديد المركز الثالث","note":"الخاسر من نصف النهائي الأول × الخاسر من نصف النهائي الثاني"},
+    {"id":"FINAL","date":"19/07/2026","day":"الأحد","time":"10:00 م","team1":"تحدد لاحقًا","team2":"تحدد لاحقًا","stage":"المباراة النهائية","note":"الفائز من نصف النهائي الأول × الفائز من نصف النهائي الثاني"},
+]
+
+
+def _ensure_data_dir():
+    os.makedirs("data", exist_ok=True)
+    os.makedirs(GENERATED_DIR, exist_ok=True)
+
+
+def _load_fixture_updates():
+    _ensure_data_dir()
+    try:
+        if os.path.exists(FIXTURES_UPDATES_FILE):
+            with open(FIXTURES_UPDATES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_fixture_updates(data):
+    _ensure_data_dir()
+    tmp = FIXTURES_UPDATES_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data or {}, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, FIXTURES_UPDATES_FILE)
+
+
+def _fixture_by_id(match_id):
+    for m in TOURNAMENT_FIXTURES:
+        if str(m.get("id")) == str(match_id):
+            return dict(m)
+    return None
+
+
+def _apply_fixture_updates(match):
+    m = dict(match)
+    upd = _load_fixture_updates().get(m.get("id"), {})
+    if isinstance(upd, dict):
+        for k in ["team1", "team2", "time", "note"]:
+            if upd.get(k):
+                m[k] = upd[k]
+    return m
+
+
+def _all_fixtures():
+    return [_apply_fixture_updates(m) for m in TOURNAMENT_FIXTURES]
+
+
+def _date_key(d):
+    try:
+        a,b,c = str(d).split("/")
+        return (int(c), int(b), int(a))
+    except Exception:
+        return (9999, 99, 99)
+
+
+def _fixture_dates():
+    seen = {}
+    for m in TOURNAMENT_FIXTURES:
+        d = m["date"]
+        if d not in seen:
+            seen[d] = m.get("day", "")
+    return sorted(seen.items(), key=lambda x: _date_key(x[0]))
+
+
+def _normalize_date_arg(x):
+    s = str(x or "").strip()
+    s = s.replace("-", "/")
+    m = re.search(r"(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?", s)
+    if not m:
+        return ""
+    d, mo, y = m.groups()
+    y = y or "2026"
+    if len(y) == 2:
+        y = "20" + y
+    return f"{int(d):02d}/{int(mo):02d}/{int(y):04d}"
+
+
+def _extract_fixture_dates_from_text(text):
+    body = re.sub(r"^/\S+", "", text or "").strip()
+    found = []
+    for m in re.finditer(r"\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?", body):
+        d = _normalize_date_arg(m.group(0))
+        if d and d not in found:
+            found.append(d)
+    # مدى: /مباريات 20/06 إلى 24/06
+    if any(w in body for w in ["إلى", "الى", "لحد", "حتى"] ) and len(found) >= 2:
+        start, end = found[0], found[1]
+        dates = [d for d,_day in _fixture_dates() if _date_key(start) <= _date_key(d) <= _date_key(end)]
+        return dates
+    return found
+
+
+def _fixtures_for_date(date):
+    d = _normalize_date_arg(date)
+    return [m for m in _all_fixtures() if m.get("date") == d]
+
+
+def _has_unknown(m):
+    return "تحدد" in str(m.get("team1")) or "تحدد" in str(m.get("team2"))
+
+
+def _fixtures_caption(date_or_title, source="PDF جدول البطولة"):
+    return f"{date_or_title}\nالمصدر: {source}\nالمصيف يضعكم بالحدث"
+
+
+def _fixture_title(date):
+    d = _normalize_date_arg(date)
+    day = ""
+    for x, dy in _fixture_dates():
+        if x == d:
+            day = dy
+            break
+    return f"{day} {d[:5]}".strip()
+
+
+def _draw_fixture_card(draw, img, box, m, idx=1):
+    x0,y0,x1,y1 = box
+    try:
+        draw.rounded_rectangle(box, radius=24, fill=(5,24,58,228), outline=(38,151,255,220), width=3)
+    except Exception:
+        draw.rectangle(box, fill=(5,24,58), outline=(38,151,255), width=3)
+    header = f"{m.get('stage','')}" + (f" | {m.get('group')}" if m.get('group') else "")
+    draw_text(draw, ((x0+x1)//2, y0+28), header, get_font(24), fill="#FBBF24", max_width=x1-x0-40)
+    # flags
+    fw, fh = 82, 58
+    try:
+        paste_flag(img, m.get("team1"), (x0+34, y0+56, x0+34+fw, y0+56+fh))
+        paste_flag(img, m.get("team2"), (x1-34-fw, y0+56, x1-34, y0+56+fh))
+    except Exception:
+        pass
+    draw_text(draw, (x0+150, y0+88), m.get("team1"), get_font(30), fill="#FFFFFF", anchor="lm", max_width=230)
+    draw_text(draw, (x1-150, y0+88), m.get("team2"), get_font(30), fill="#FFFFFF", anchor="rm", max_width=230)
+    draw_text(draw, ((x0+x1)//2, y0+88), "×", get_font(42), fill="#FBBF24")
+    draw_text(draw, ((x0+x1)//2, y0+138), m.get("time", ""), get_font(28), fill="#FFFFFF")
+    if _has_unknown(m) and m.get("note"):
+        draw_text(draw, ((x0+x1)//2, y0+176), m.get("note"), get_font(22), fill="#CBD5E1", max_width=x1-x0-50)
+
+
+def _fixture_bg(w=1080, h=1350):
+    # نستخدم خلفية مباريات اليوم V31 إن وجدت
+    for p in ["games_v31_full_bg.png", "games_v31_clean_bg.png", os.path.join("assets", "templates", "games_v31_full_bg.png")]:
+        if os.path.exists(p):
+            try:
+                bg = Image.open(p).convert("RGB").resize((w,h))
+                ov = Image.new("RGBA", (w,h), (0,10,30,92))
+                bg = Image.alpha_composite(bg.convert("RGBA"), ov).convert("RGB")
+                return bg
+            except Exception:
+                pass
+    bg = Image.new("RGB", (w,h), "#071329")
+    return bg
+
+
+def render_fixtures_day_images(date, matches=None):
+    matches = matches if matches is not None else _fixtures_for_date(date)
+    if not matches:
+        return []
+    chunks = [matches[i:i+6] for i in range(0, len(matches), 6)]
+    paths = []
+    for page, chunk in enumerate(chunks, 1):
+        img = _fixture_bg(1080, 1350)
+        draw = ImageDraw.Draw(img, "RGBA")
+        draw_text(draw, (540, 86), "MONDIAL AL MASEEF 2026", get_font(34), fill="#FFFFFF")
+        draw_text(draw, (540, 132), "GAMES OF THE DAY", get_font(56), fill="#FFFFFF")
+        title = _fixture_title(date)
+        if len(chunks) > 1:
+            title += f"  |  {page}/{len(chunks)}"
+        draw_text(draw, (540, 188), title, get_font(36), fill="#FBBF24")
+        y = 245
+        card_h = 165 if len(chunk) > 4 else 190
+        for idx, m in enumerate(chunk, 1):
+            _draw_fixture_card(draw, img, (70, y, 1010, y+card_h-12), m, idx)
+            y += card_h
+        draw.line((250, 1242, 830, 1242), fill=(255,255,255,180), width=2)
+        draw_text(draw, (540, 1284), "المصيف يضعكم بالحدث", get_font(28), fill="#FBBF24")
+        path = os.path.join(GENERATED_DIR, f"fixtures_{date.replace('/','_')}_{page}.png")
+        img.save(path, quality=95)
+        paths.append(path)
+    return paths
+
+
+def render_fixtures_combined_images(dates):
+    dates = [_normalize_date_arg(d) for d in dates if _normalize_date_arg(d)]
+    dates = [d for d in dates if _fixtures_for_date(d)]
+    if not dates:
+        return []
+    # كل صورة تجمع حتى 3 أيام لتبقى مقروءة
+    date_chunks = [dates[i:i+3] for i in range(0, len(dates), 3)]
+    paths = []
+    for page, dchunk in enumerate(date_chunks, 1):
+        rows = []
+        for d in dchunk:
+            rows.append(("date", d))
+            for m in _fixtures_for_date(d):
+                rows.append(("match", m))
+        h = max(1350, 250 + len(rows)*118 + 120)
+        h = min(h, 2400)
+        img = _fixture_bg(1080, h)
+        draw = ImageDraw.Draw(img, "RGBA")
+        draw_text(draw, (540, 74), "MONDIAL AL MASEEF 2026", get_font(32), fill="#FFFFFF")
+        draw_text(draw, (540, 120), "GAMES SCHEDULE", get_font(54), fill="#FFFFFF")
+        if len(date_chunks) > 1:
+            draw_text(draw, (540, 172), f"صفحة {page}/{len(date_chunks)}", get_font(28), fill="#FBBF24")
+        y = 220
+        for kind, val in rows:
+            if y > h - 140:
+                break
+            if kind == "date":
+                draw.rounded_rectangle((90,y,990,y+50), radius=18, fill=(251,191,36,235))
+                draw_text(draw, (540,y+25), _fixture_title(val), get_font(30), fill="#061329")
+                y += 68
+            else:
+                m = val
+                draw.rounded_rectangle((80,y,1000,y+92), radius=18, fill=(5,24,58,225), outline=(38,151,255,180), width=2)
+                draw_text(draw, (910,y+27), m.get("time"), get_font(24), fill="#FBBF24", anchor="rm")
+                draw_text(draw, (540,y+28), f"{m.get('team1')}  ×  {m.get('team2')}", get_font(28), fill="#FFFFFF", max_width=620)
+                draw_text(draw, (540,y+66), m.get("stage") + (f" | {m.get('group')}" if m.get("group") else ""), get_font(20), fill="#CBD5E1", max_width=760)
+                y += 108
+        draw.line((250, h-88, 830, h-88), fill=(255,255,255,180), width=2)
+        draw_text(draw, (540, h-48), "المصيف يضعكم بالحدث", get_font(28), fill="#FBBF24")
+        path = os.path.join(GENERATED_DIR, f"fixtures_combined_{page}_{datetime.now().strftime('%H%M%S')}.png")
+        img.save(path, quality=95)
+        paths.append(path)
+    return paths
+
+
+def _fixtures_dates_keyboard(mode="single", selected=None):
+    selected = set(selected or [])
+    rows = []
+    row = []
+    for d, day in _fixture_dates():
+        label = f"{'✅ ' if d in selected else ''}{day} {d[:5]}"
+        data = f"fx|toggle|{d}" if mode == "multi" else f"fx|day|{d}"
+        row.append(InlineKeyboardButton(label, callback_data=data))
+        if len(row) == 2:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    if mode == "multi":
+        rows.append([InlineKeyboardButton("تصميم كل يوم", callback_data="fx|render_each"), InlineKeyboardButton("تصميم واحد", callback_data="fx|render_combo")])
+        rows.append([InlineKeyboardButton("تصفير الاختيار", callback_data="fx|clear"), InlineKeyboardButton("رجوع", callback_data="fx|menu")])
+    else:
+        rows.append([InlineKeyboardButton("اختيار أكثر من يوم", callback_data="fx|multi")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fixtures_day_keyboard(date):
+    rows = [[InlineKeyboardButton("تصميم اليوم", callback_data=f"fx|render|{date}")]]
+    miss = [m for m in _fixtures_for_date(date) if _has_unknown(m)]
+    for i, m in enumerate(miss, 1):
+        rows.append([InlineKeyboardButton(f"تحديث مباراة {i} — {m.get('time')}", callback_data=f"fx|upd|{m.get('id')}")])
+    rows.append([InlineKeyboardButton("رجوع للأيام", callback_data="fx|menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fixtures_day_text(date):
+    matches = _fixtures_for_date(date)
+    if not matches:
+        return "ما فيه مباريات لهذا التاريخ."
+    lines = [f"{_fixture_title(date)}", ""]
+    for i,m in enumerate(matches,1):
+        lines.append(f"{i}) {m.get('team1')} × {m.get('team2')} — {m.get('time')}")
+        lines.append(f"   {m.get('stage')}" + (f" | {m.get('group')}" if m.get('group') else ""))
+        if _has_unknown(m) and m.get('note'):
+            lines.append(f"   {m.get('note')}")
+    return "\n".join(lines)
+
+
+async def fixtures_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if dates:
+        for d in dates:
+            paths = render_fixtures_day_images(d)
+            if not paths:
+                await update.message.reply_text(f"ما فيه مباريات بتاريخ {d}")
+                continue
+            for p in paths:
+                await send_photo_path(update.message, p, _fixtures_caption(_fixture_title(d)))
+        return
+    await update.message.reply_text("اختر اليوم أو استخدم /مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+
+
+async def fixtures_combined_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text("اكتبها كذا:\n/مباريات_مجمعة 20/06 21/06 22/06")
+        return
+    paths = render_fixtures_combined_images(dates)
+    if not paths:
+        await update.message.reply_text("ما لقيت مباريات للتواريخ المطلوبة.")
+        return
+    for p in paths:
+        await send_photo_path(update.message, p, _fixtures_caption("مباريات مجمعة"))
+
+
+async def fixtures_review_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text("اكتبها كذا:\n/مراجعة_مباراة 20/07")
+        return
+    for d in dates:
+        await update.message.reply_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+
+
+async def fixtures_missing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    missing = [m for m in _all_fixtures() if _has_unknown(m)]
+    if not missing:
+        await update.message.reply_text("كل المباريات محدثة ✅")
+        return
+    lines = ["المباريات التي تحتاج تحديث:", ""]
+    rows = []
+    for m in missing[:40]:
+        lines.append(f"{m.get('id')} | {m.get('date')} | {m.get('time')} | {m.get('stage')} | {m.get('note','')}")
+        rows.append([InlineKeyboardButton(f"تحديث {m.get('id')} — {m.get('date')} {m.get('time')}", callback_data=f"fx|upd|{m.get('id')}")])
+    await update.message.reply_text("\n".join(lines[:45]), reply_markup=InlineKeyboardMarkup(rows[:25]))
+
+
+async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    if not is_admin_user(update):
+        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else ""
+    if action == "menu":
+        await q.message.edit_text("اختر اليوم أو استخدم /مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+        return
+    if action == "multi":
+        context.user_data["fx_selected_dates"] = []
+        await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+        return
+    if action == "toggle" and len(parts) >= 3:
+        d = parts[2]
+        sel = list(context.user_data.get("fx_selected_dates") or [])
+        if d in sel:
+            sel.remove(d)
+        else:
+            sel.append(d)
+        context.user_data["fx_selected_dates"] = sel
+        await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", sel))
+        return
+    if action == "clear":
+        context.user_data["fx_selected_dates"] = []
+        await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+        return
+    if action in ["render_each", "render_combo"]:
+        sel = list(context.user_data.get("fx_selected_dates") or [])
+        if not sel:
+            await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+            return
+        if action == "render_combo":
+            paths = render_fixtures_combined_images(sel)
+            for p in paths:
+                await send_photo_path(q.message, p, _fixtures_caption("مباريات مجمعة"))
+        else:
+            for d in sel:
+                for p in render_fixtures_day_images(d):
+                    await send_photo_path(q.message, p, _fixtures_caption(_fixture_title(d)))
+        return
+    if action == "day" and len(parts) >= 3:
+        d = parts[2]
+        await q.message.edit_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+        return
+    if action == "render" and len(parts) >= 3:
+        d = parts[2]
+        paths = render_fixtures_day_images(d)
+        if not paths:
+            await q.message.reply_text("ما فيه مباريات لهذا اليوم.")
+            return
+        for p in paths:
+            await send_photo_path(q.message, p, _fixtures_caption(_fixture_title(d)))
+        return
+    if action == "upd" and len(parts) >= 3:
+        mid = parts[2]
+        m = _fixture_by_id(mid)
+        if not m:
+            await q.message.reply_text("لم أجد المباراة.")
+            return
+        context.user_data["fixture_update_match_id"] = mid
+        await q.message.reply_text(
+            f"اكتب طرفي المباراة لـ {mid} ({m.get('date')} {m.get('time')}) كذا:\n"
+            "الفريق الأول * الفريق الثاني\n\n"
+            "مثال: المكسيك * أستراليا\n"
+            "ملاحظة: سيتم الحفظ فقط، ولن يتم التصميم إلا عندما تطلب /مباريات التاريخ."
+        )
+        return
+
+
+async def fixtures_update_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mid = context.user_data.get("fixture_update_match_id")
+    if not mid:
+        return
+    text = (update.message.text or "").strip()
+    if "*" in text:
+        a,b = [x.strip() for x in text.split("*",1)]
+    elif "×" in text:
+        a,b = [x.strip() for x in text.split("×",1)]
+    elif "-" in text:
+        a,b = [x.strip() for x in text.split("-",1)]
+    else:
+        await update.message.reply_text("اكتبها كذا: الفريق الأول * الفريق الثاني")
+        return
+    if not a or not b:
+        await update.message.reply_text("اكتب اسم الفريقين كاملين.")
+        return
+    data = _load_fixture_updates()
+    data.setdefault(mid, {})
+    data[mid]["team1"] = canonical_team_name(a) or normalize_name(a)
+    data[mid]["team2"] = canonical_team_name(b) or normalize_name(b)
+    _save_fixture_updates(data)
+    context.user_data.pop("fixture_update_match_id", None)
+    m = _apply_fixture_updates(_fixture_by_id(mid) or {"id":mid})
+    await update.message.reply_text(
+        f"✅ تم حفظ تحديث المباراة\n"
+        f"{m.get('team1')} × {m.get('team2')} — {m.get('time','')}\n\n"
+        f"لن أصمم الآن. وقت ما تبيها اكتب:\n/مباريات {m.get('date','')}"
+    )
+
+
+# تحسين ESPN: نسحب الهدافين من summary/event details إذا المصدر وفرها.
+def _v23_extract_goal_strings_from_node(obj):
+    out = []
+    for node in _walk_json(obj) if '_walk_json' in globals() else []:
+        if not isinstance(node, dict):
+            continue
+        blob = json.dumps(node, ensure_ascii=False).lower()
+        if not any(k in blob for k in ["goal", "scored", "scores", "هدف"]):
+            continue
+        txt = node.get("text") or node.get("description") or node.get("headline") or node.get("displayText") or node.get("detail") or ""
+        athlete = node.get("athlete") or node.get("player") or node.get("competitor") or {}
+        name = ""
+        if isinstance(athlete, dict):
+            name = athlete.get("displayName") or athlete.get("shortName") or athlete.get("name") or ""
+        clock = node.get("clock") or node.get("time") or node.get("minute") or {}
+        minute = ""
+        if isinstance(clock, dict):
+            minute = clock.get("displayValue") or clock.get("value") or ""
+        else:
+            minute = str(clock or "")
+        txt = normalize_name(txt)
+        name = normalize_name(name)
+        if not name:
+            # أحيانًا النص نفسه: Alex Freeman Goal - 43'
+            name = txt
+        if name and len(name) < 80:
+            item = name
+            if minute and "'" not in item:
+                item += f" {minute}"
+            out.append(item)
+    return _v9_sanitize_scorers(out) if '_v9_sanitize_scorers' in globals() else out[:8]
+
+
+def _fetch_espn_summary_goals(event_id):
+    if not event_id or not requests:
+        return []
+    urls = [
+        f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}",
+        f"https://site.web.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}",
+        f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event={event_id}",
+    ]
+    for url in urls:
+        try:
+            r = _requests_get(url, timeout=12)
+            if int(getattr(r, "status_code", 200) or 200) >= 400:
+                continue
+            data = r.json()
+            goals = _v23_extract_goal_strings_from_node(data)
+            if goals:
+                return goals
+        except Exception:
+            continue
+    return []
+
+
+def _parse_espn_match_from_event(event):
+    try:
+        comp = (event.get("competitions") or [event])[0]
+        competitors = comp.get("competitors") or []
+        if len(competitors) < 2:
+            return None
+        a = competitors[0]
+        b = competitors[1]
+        team1 = canonical_team_name(a.get("team", {}).get("displayName")) or normalize_name(a.get("team", {}).get("displayName"))
+        team2 = canonical_team_name(b.get("team", {}).get("displayName")) or normalize_name(b.get("team", {}).get("displayName"))
+        score1 = str(a.get("score", 0))
+        score2 = str(b.get("score", 0))
+        status = comp.get("status") or event.get("status") or {}
+        detail = normalize_name(((status.get("type") or {}).get("detail")) or status.get("displayClock") or "")
+        short_detail = normalize_name(((status.get("type") or {}).get("shortDetail")) or "")
+        state = normalize_name(((status.get("type") or {}).get("name")) or ((status.get("type") or {}).get("state")) or "")
+        status_ar = _normalize_status_text(detail or short_detail or state)
+        scorers = []
+        for d in comp.get("details", []) or []:
+            if isinstance(d, dict):
+                txt = normalize_name(d.get("text") or d.get("detail") or d.get("description") or "")
+                if txt:
+                    scorers.append(txt)
+        event_id = str(event.get("id") or comp.get("id") or "")
+        if not scorers and event_id:
+            scorers = _fetch_espn_summary_goals(event_id)
+        return {
+            "team1": team1, "team2": team2,
+            "score1": score1, "score2": score2,
+            "status": status_ar,
+            "minute": detail or short_detail,
+            "scorers": scorers[:8],
+            "goals_source": "ESPN" if scorers else "",
+            "event_id": event_id,
+            "source": "ESPN",
+        }
+    except Exception:
+        return None
+
+
+# ترتيب المجموعات: نرسل صورة شاملة + 3 صور مقروءة، بدون النص الطويل.
+def _standings_page_image(groups, page_no=1, total_pages=3):
+    chunk = groups[(page_no-1)*4:page_no*4]
+    img = _fixture_bg(1080, 1350)
+    draw = ImageDraw.Draw(img, "RGBA")
+    draw_text(draw, (540, 76), "MONDIAL AL MASEEF 2026", get_font(32), fill="#FFFFFF")
+    draw_text(draw, (540, 122), "GROUP STANDINGS", get_font(54), fill="#FFFFFF")
+    draw_text(draw, (540, 174), f"ترتيب المجموعات | {page_no}/{total_pages}", get_font(30), fill="#FBBF24")
+    positions = [(60,230,510,680),(570,230,1020,680),(60,715,510,1165),(570,715,1020,1165)]
+    for (title, rows), box in zip(chunk, positions):
+        x0,y0,x1,y1 = box
+        draw.rounded_rectangle(box, radius=26, fill=(5,24,58,230), outline=(38,151,255,210), width=3)
+        draw.rounded_rectangle((x0+16,y0+14,x1-16,y0+58), radius=16, fill=(251,191,36,240))
+        draw_text(draw, ((x0+x1)//2,y0+36), title, get_font(28), fill="#061329")
+        yy = y0 + 85
+        draw_text(draw, (x1-32, yy), "نقاط", get_font(20), fill="#FBBF24", anchor="rm")
+        draw_text(draw, (x1-110, yy), "فارق", get_font(20), fill="#FBBF24", anchor="rm")
+        draw_text(draw, (x1-185, yy), "لعب", get_font(20), fill="#FBBF24", anchor="rm")
+        draw_text(draw, (x0+34, yy), "المنتخب", get_font(20), fill="#FBBF24", anchor="lm")
+        yy += 36
+        for i,r in enumerate(rows[:4],1):
+            name, played, gd, pts = r[0], r[1], r[2], r[3]
+            draw.line((x0+20, yy-16, x1-20, yy-16), fill=(255,255,255,45), width=1)
+            draw_text(draw, (x1-34, yy), str(pts), get_font(24), fill="#FFFFFF", anchor="rm")
+            draw_text(draw, (x1-112, yy), f"{gd:+d}" if isinstance(gd,int) else str(gd), get_font(22), fill="#CBD5E1", anchor="rm")
+            draw_text(draw, (x1-188, yy), str(played), get_font(22), fill="#CBD5E1", anchor="rm")
+            draw_text(draw, (x0+34, yy), f"{i}. {name}", get_font(23), fill="#FFFFFF", anchor="lm", max_width=245)
+            yy += 67
+    draw.line((250, 1242, 830, 1242), fill=(255,255,255,180), width=2)
+    draw_text(draw, (540, 1284), "المصيف يضعكم بالحدث", get_font(28), fill="#FBBF24")
+    path = os.path.join(GENERATED_DIR, f"group_standings_page_{page_no}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def create_all_groups_three_page_images(groups):
+    return [_standings_page_image(groups, i, 3) for i in range(1,4)]
+
+
+async def current_groups_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    payload = {"kind": "standings"}
+    kb = source_keyboard(context, payload)
+    wait = await update.message.reply_text("⏳ أسحب نتائج المجموعات من ESPN وأحسب الترتيب...")
+    try:
+        groups, source_label = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_current_groups, "espn"), timeout=35)
+    except Exception as e:
+        groups, source_label = [], ""
+        await wait.edit_text(f"تعذر جلب ترتيب المجموعات ❌\n{str(e)[:250]}", reply_markup=kb)
+        return
+    if not groups:
+        await wait.edit_text(_source_help_text("standings", "espn") + "\n\nاختر مصدر آخر:", reply_markup=kb)
+        return
+    try:
+        await wait.delete()
+    except Exception:
+        pass
+    caption_all = "ترتيب المجموعات الآن ✅\nالمصدر: ESPN — محسوب من نتائج المباريات المباشرة"
+    try:
+        all_path = create_all_groups_newlook_image(groups) if 'create_all_groups_newlook_image' in globals() else create_all_groups_image(groups)
+        if all_path and os.path.exists(all_path):
+            await send_photo_path_markup(update.message, all_path, caption_all, kb)
+    except Exception:
+        pass
+    try:
+        for i, p in enumerate(create_all_groups_three_page_images(groups), 1):
+            await send_photo_path(update.message, p, f"ترتيب المجموعات الآن — صورة {i}/3\nالمصدر: ESPN Live Results")
+    except Exception:
+        # إذا فشل تقسيم الصور نكتفي بالصورة الشاملة.
+        pass
+
+# ==================== END V23 CLEAN FIXTURES PATCH ====================
 
 # ==================== END V22 HARD STABLE PATCH ====================
 
