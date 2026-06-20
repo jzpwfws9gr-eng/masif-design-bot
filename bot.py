@@ -7078,7 +7078,8 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه(?:\s|$)"), admin_only(add_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_نتائج(?:\s|$)"), admin_only(approve_results_day)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), admin_only(results_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:نتائج_المباريات|نتايج_المباريات)(?:\s|$)"), previous_results_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج(?:\s|$)"), admin_only(results_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), overall))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_نص"), ranking_text))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/?(?:احصائيات|إحصائيات)(?:\s|$)"), dashboard))
@@ -13677,8 +13678,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_ناقصة(?:\s|$)"), admin_only(fixtures_missing_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مراجعة_مباراة(?:\s|$)"), admin_only(fixtures_review_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات_مجمعة(?:\s|$)"), admin_only(fixtures_combined_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات(?:\s|$)"), admin_only(fixtures_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباريات(?:\s|$)"), fixtures_command))
     app.add_handler(CallbackQueryHandler(fixtures_callback, pattern=r"^fx\|"))
+    app.add_handler(CallbackQueryHandler(previous_results_callback, pattern=r"^res\|"))
     # مهم: لا نخلي معالج تحديث المباريات يلقط أوامر السلاش العربية مثل /استيراد_ملف و /إضافة_متسابق
     app.add_handler(MessageHandler(filters.TEXT & ~filters.Regex(r"^/"), admin_only(fixtures_update_text_handler)))
 
@@ -13709,7 +13711,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المتسابقين(?:\s|$)"), admin_only(participants_list_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه(?:\s|$)"), admin_only(add_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_نتائج(?:\s|$)"), admin_only(approve_results_day)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج"), admin_only(results_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:نتائج_المباريات|نتايج_المباريات)(?:\s|$)"), previous_results_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج(?:\s|$)"), admin_only(results_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), overall))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_نص"), ranking_text))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/?(?:احصائيات|إحصائيات)(?:\s|$)"), dashboard))
@@ -13742,9 +13745,11 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اقصاء(?:\s|$)"), admin_only(eliminated_news_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/عاجل(?:\s|$)"), admin_only(urgent_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/خبر(?:\s|$)"), admin_only(news_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_المجموعات_الان(?:\s|$)"), admin_only(current_groups_now_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباشر(?:\s|$)"), admin_only(live_match_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_المجموعات_الان(?:\s|$)"), current_groups_now_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباشر(?:\s|$)"), live_match_command))
     app.add_handler(CallbackQueryHandler(sports_source_callback, pattern=r"^sportsrc\|"))
+    app.add_handler(CallbackQueryHandler(live_today_callback, pattern=r"^livefx\|"))
+    app.add_handler(CallbackQueryHandler(groups_menu_callback, pattern=r"^grp\|"))
 
     app.run_polling()
 
@@ -18853,6 +18858,1332 @@ async def remember_last_file(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     await update.message.reply_text("وصل الملف ✅")
+
+
+# ==================== V28 RESULTS + ESPN SCORERS + RTL STANDINGS ====================
+# الاعتماد:
+# - /مباريات: يعرض من تاريخ اليوم فما بعد فقط.
+# - /نتائج_المباريات: يعرض الأيام السابقة فقط، ولا يحذف السابق.
+# - النتائج والهدافين من ESPN، والتواريخ/المباريات من PDF.
+# - /مباشر: يثري الهدافين من ESPN.
+# - ترتيب المجموعات يبدأ من اليمين، وداخل الجدول: المنتخب | لعب | فارق | نقاط.
+
+def _v28_riyadh_today():
+    try:
+        return (datetime.utcnow() + timedelta(hours=3)).date()
+    except Exception:
+        return datetime.now().date()
+
+
+def _v28_date_tuple(d):
+    try:
+        d = _normalize_date_arg(d)
+        a, b, c = d.split("/")
+        return (int(c), int(b), int(a))
+    except Exception:
+        return (9999, 99, 99)
+
+
+def _v28_today_tuple():
+    t = _v28_riyadh_today()
+    return (t.year, t.month, t.day)
+
+
+def _v28_is_past_date(d):
+    return _v28_date_tuple(d) < _v28_today_tuple()
+
+
+def _v28_is_today_or_future_date(d):
+    return _v28_date_tuple(d) >= _v28_today_tuple()
+
+
+def _v28_espn_date(d):
+    d = _normalize_date_arg(d)
+    try:
+        day, mo, year = d.split("/")
+        return f"{int(year):04d}{int(mo):02d}{int(day):02d}"
+    except Exception:
+        return ""
+
+
+def _v28_short_time(t):
+    try:
+        return _v26_short_time(t)
+    except Exception:
+        return str(t or "").strip()
+
+
+def _v28_team_same(a, b):
+    ca = canonical_team_name(a) or normalize_name(a)
+    cb = canonical_team_name(b) or normalize_name(b)
+    if ca == cb:
+        return True
+    try:
+        sa = simple_key(ca)
+        sb = simple_key(cb)
+        return sa == sb or sa in sb or sb in sa
+    except Exception:
+        return False
+
+
+def _v28_event_competitors(event):
+    try:
+        comp = (event.get("competitions") or [event])[0]
+        return comp, comp.get("competitors") or []
+    except Exception:
+        return {}, []
+
+
+def _v28_event_match_obj(event, req1, req2):
+    comp, competitors = _v28_event_competitors(event)
+    if len(competitors) < 2:
+        return None
+
+    teams = []
+    for c in competitors:
+        name = ((c.get("team") or {}).get("displayName")
+                or (c.get("team") or {}).get("shortDisplayName")
+                or (c.get("team") or {}).get("name")
+                or c.get("displayName")
+                or "")
+        teams.append((name, c))
+
+    if not _teams_match(teams[0][0], teams[1][0], req1, req2):
+        return None
+
+    s1 = s2 = None
+    for name, c in teams:
+        score = c.get("score", "")
+        if isinstance(score, dict):
+            score = score.get("value") or score.get("displayValue") or score.get("score")
+        score = str(score if score is not None else "")
+        if _v28_team_same(name, req1):
+            s1 = score
+        elif _v28_team_same(name, req2):
+            s2 = score
+
+    if s1 is None:
+        s1 = str(teams[0][1].get("score", "0"))
+    if s2 is None:
+        s2 = str(teams[1][1].get("score", "0"))
+
+    status = comp.get("status") or event.get("status") or {}
+    st_type = status.get("type") or {}
+    detail = normalize_name(st_type.get("detail") or status.get("displayClock") or "")
+    short_detail = normalize_name(st_type.get("shortDetail") or "")
+    state = normalize_name(st_type.get("name") or st_type.get("state") or "")
+    status_ar = _normalize_status_text(detail or short_detail or state) if '_normalize_status_text' in globals() else (detail or short_detail or state)
+
+    event_id = str(event.get("id") or comp.get("id") or "")
+    obj = {
+        "team1": canonical_team_name(req1) or normalize_name(req1),
+        "team2": canonical_team_name(req2) or normalize_name(req2),
+        "score1": s1 or "0",
+        "score2": s2 or "0",
+        "status": status_ar,
+        "minute": detail or short_detail or "",
+        "event_id": event_id,
+        "source": "ESPN",
+        "actual_source": "ESPN",
+        "goals_source": "",
+        "scorers": [],
+        "summary_url": f"https://www.espn.com/soccer/match/_/gameId/{event_id}" if event_id else "",
+    }
+
+    scorers = []
+    # أحيانًا تكون بعض الأحداث داخل scoreboard
+    try:
+        for d in comp.get("details", []) or []:
+            txt = normalize_name(d.get("text") or d.get("detail") or d.get("description") or "")
+            if txt and re.search(r"\bgoal\b|هدف|scores", txt, re.I):
+                scorers.append(txt)
+    except Exception:
+        pass
+
+    if event_id:
+        scorers2 = _v28_fetch_espn_scorers(event_id)
+        if scorers2:
+            scorers = scorers2
+
+    obj["scorers"] = _v28_sanitize_scorers(scorers)
+    obj["goals_source"] = "ESPN" if obj["scorers"] else "غير متوفر"
+    return obj
+
+
+def _v28_walk_json(obj):
+    stack = [obj]
+    while stack:
+        x = stack.pop()
+        yield x
+        if isinstance(x, dict):
+            stack.extend(x.values())
+        elif isinstance(x, list):
+            stack.extend(x)
+
+
+def _v28_clean_scorer_name(name):
+    name = str(name or "").strip()
+    name = re.sub(r"\s+", " ", name)
+    name = re.sub(r"^(Goal|Penalty Goal|Own Goal)\s*[-:]\s*", "", name, flags=re.I).strip()
+    name = re.sub(r"\s+(Goal|scores|scored).*$", "", name, flags=re.I).strip()
+    name = name.strip(" -–—:•|،")
+    if len(name) < 2 or len(name) > 60:
+        return ""
+    bad = ["goal", "scores", "world cup", "fifa", "team", "match", "highlight", "video", "espn"]
+    if name.lower() in bad:
+        return ""
+    return name
+
+
+def _v28_extract_minutes(text):
+    text = str(text or "")
+    vals = []
+    for m in re.finditer(r"(\d{1,3}(?:\+\d{1,2})?)\s*['’]", text):
+        vals.append(m.group(1) + "'")
+    # أحيانًا الدقيقة رقم بدون علامة بجانب كلمة goal
+    if not vals:
+        for m in re.finditer(r"(?:minute|min|دقيقة|الدقيقة)\s*(\d{1,3}(?:\+\d{1,2})?)", text, re.I):
+            vals.append(m.group(1) + "'")
+    return vals
+
+
+def _v28_records_to_lines(records):
+    by = {}
+    for name, minutes in records:
+        name = _v28_clean_scorer_name(name)
+        if not name:
+            continue
+        by.setdefault(name, [])
+        if isinstance(minutes, str):
+            minutes = _v28_extract_minutes(minutes) or ([minutes] if minutes.strip() else [])
+        for mn in minutes or []:
+            mn = str(mn).strip()
+            if mn and not mn.endswith("'") and re.fullmatch(r"\d{1,3}(?:\+\d{1,2})?", mn):
+                mn += "'"
+            if mn and mn not in by[name]:
+                by[name].append(mn)
+
+    lines = []
+    for name, mins in by.items():
+        if mins:
+            lines.append(f"{name} — {'، '.join(mins)}")
+        else:
+            lines.append(name)
+    return lines[:10]
+
+
+def _v28_extract_scorers_from_json(data):
+    records = []
+
+    # 1) صيغ نصية مباشرة مثل: Brian Brobbey - 5', 17'
+    try:
+        dump = json.dumps(data, ensure_ascii=False)
+    except Exception:
+        dump = str(data)
+    for m in re.finditer(r"([A-Z][A-Za-zÀ-ÖØ-öø-ÿ'\-. ]{2,60})\s*[-–—]\s*((?:\d{1,3}(?:\+\d{1,2})?['’]\s*,?\s*)+)", dump):
+        name = _v28_clean_scorer_name(m.group(1))
+        mins = _v28_extract_minutes(m.group(2))
+        if name and mins:
+            records.append((name, mins))
+
+    # 2) تفاصيل أحداث ESPN
+    for node in _v28_walk_json(data):
+        if not isinstance(node, dict):
+            continue
+
+        # نص الحدث ونوعه
+        fields = []
+        for k in ["text", "description", "detail", "displayText", "shortText", "headline", "summary", "type", "playType", "eventType"]:
+            v = node.get(k)
+            if isinstance(v, dict):
+                fields.extend(str(v.get(x, "")) for x in ["name", "displayName", "text", "description"])
+            elif v is not None:
+                fields.append(str(v))
+        type_obj = node.get("type")
+        if isinstance(type_obj, dict):
+            fields.extend(str(type_obj.get(x, "")) for x in ["name", "displayName", "text", "description", "abbreviation"])
+        blob = " ".join(fields)
+        if not re.search(r"\bgoal\b|\bscores\b|\bscored\b|هدف", blob, re.I):
+            continue
+        if re.search(r"goals against|goals for|total goals|expected goals", blob, re.I):
+            continue
+
+        # اسم اللاعب من athlete/player/participant أو من النص
+        name = ""
+        for k in ["athlete", "player", "participant", "scorer"]:
+            v = node.get(k)
+            if isinstance(v, dict):
+                name = v.get("displayName") or v.get("shortName") or v.get("name") or ""
+                if name:
+                    break
+        if not name:
+            # Brian Brobbey Goal - Header - 5'
+            m = re.search(r"([A-Z][A-Za-zÀ-ÖØ-öø-ÿ'\-. ]{2,60})\s+(?:Goal|scores|scored)\b", blob, re.I)
+            if m:
+                name = m.group(1)
+        if not name:
+            m = re.search(r"([A-Z][A-Za-zÀ-ÖØ-öø-ÿ'\-. ]{2,60})\s*[-–—]\s*\d{1,3}", blob)
+            if m:
+                name = m.group(1)
+
+        minutes = []
+        for k in ["clock", "time", "minute", "displayTime", "shortDisplayTime", "gameTime"]:
+            v = node.get(k)
+            if isinstance(v, dict):
+                v = v.get("displayValue") or v.get("value") or v.get("text") or ""
+            if v is not None:
+                minutes.extend(_v28_extract_minutes(str(v)))
+                if not minutes and re.fullmatch(r"\d{1,3}(?:\+\d{1,2})?", str(v).strip()):
+                    minutes.append(str(v).strip() + "'")
+        minutes.extend(_v28_extract_minutes(blob))
+
+        if name:
+            records.append((name, minutes))
+
+    return _v28_records_to_lines(records)
+
+
+def _v28_fetch_json_urls(urls, timeout=14):
+    if not requests:
+        return None
+    for url in urls:
+        try:
+            r = _requests_get(url, timeout=timeout)
+            if int(getattr(r, "status_code", 200) or 200) >= 400:
+                continue
+            return r.json()
+        except Exception:
+            continue
+    return None
+
+
+def _v28_fetch_espn_scorers(event_id):
+    if not event_id:
+        return []
+    urls = [
+        f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}",
+        f"https://site.web.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}",
+        f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event={event_id}",
+        f"https://site.web.api.espn.com/apis/site/v2/sports/soccer/all/summary?event={event_id}",
+    ]
+    data = _v28_fetch_json_urls(urls, timeout=14)
+    if not data:
+        return []
+    return _v28_extract_scorers_from_json(data)
+
+
+def _v28_sanitize_scorers(items):
+    out = []
+    for item in items or []:
+        s = normalize_name(item)
+        s = re.sub(r"\s+", " ", s).strip()
+        # نسمح بالإنجليزي لأن ESPN يرجع أسماء اللاعبين بالإنجليزي غالبًا
+        if not s or len(s) > 90:
+            continue
+        if re.search(r"goals against|goals for|expected goals|highlight|video|ملخص", s, re.I):
+            continue
+        if s not in out:
+            out.append(s)
+    return out[:10]
+
+
+def _v28_espn_date_candidates(date_hint=None):
+    dates = []
+    if date_hint:
+        d = _normalize_date_arg(date_hint)
+        if d:
+            dates.append(_v28_espn_date(d))
+        elif re.fullmatch(r"\d{8}", str(date_hint or "")):
+            dates.append(str(date_hint))
+    today = _v28_riyadh_today()
+    for off in range(-4, 3):
+        dates.append((today + timedelta(days=off)).strftime("%Y%m%d"))
+    # نضيف أيام ملف PDF القريبة فقط عشان لا يطول البحث
+    try:
+        pdf_dates = [d for d, _dy in _fixture_dates()]
+        pdf_dates = sorted(pdf_dates, key=_v28_date_tuple)
+        for d in pdf_dates:
+            if abs((_v28_date_tuple(d)[0]*372 + _v28_date_tuple(d)[1]*31 + _v28_date_tuple(d)[2]) - (today.year*372 + today.month*31 + today.day)) <= 10:
+                dates.append(_v28_espn_date(d))
+    except Exception:
+        pass
+    out, seen = [], set()
+    for d in dates:
+        if d and d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+def _v28_fetch_espn_match(team1, team2, date_hint=None):
+    for d in _v28_espn_date_candidates(date_hint):
+        for event in _fetch_espn_events_by_date(d):
+            obj = _v28_event_match_obj(event, team1, team2)
+            if obj:
+                return obj
+    return None
+
+
+def _v28_fetch_espn_match_by_fixture(date, fixture):
+    espn_date = _v28_espn_date(date)
+    for event in _fetch_espn_events_by_date(espn_date):
+        obj = _v28_event_match_obj(event, fixture.get("team1"), fixture.get("team2"))
+        if obj:
+            return obj
+    return None
+
+
+_v28_old_fetch_live_match_data = fetch_live_match_data
+
+def fetch_live_match_data(team1, team2, mode="google", date_hint=None):
+    """
+    نستخدم المنطق القديم للنتيجة، ثم نثري الهدافين من ESPN إذا توفروا.
+    """
+    old_obj = None
+    try:
+        old_obj = _v28_old_fetch_live_match_data(team1, team2, mode, date_hint)
+    except Exception:
+        old_obj = None
+
+    espn_obj = None
+    try:
+        espn_obj = _v28_fetch_espn_match(team1, team2, date_hint)
+    except Exception:
+        espn_obj = None
+
+    if old_obj:
+        scorers = _v28_sanitize_scorers(old_obj.get("scorers") or [])
+        if (not scorers) and espn_obj and espn_obj.get("scorers"):
+            old_obj["scorers"] = espn_obj.get("scorers")
+            old_obj["goals_source"] = "ESPN"
+            if espn_obj.get("summary_url"):
+                old_obj["summary_url"] = espn_obj.get("summary_url")
+        elif scorers:
+            old_obj["scorers"] = scorers
+        return old_obj
+
+    return espn_obj
+
+
+def _v28_previous_result_dates():
+    out = []
+    for d, day in _fixture_dates():
+        if _v28_is_past_date(d):
+            out.append((d, day))
+    return out
+
+
+def _v28_previous_results_keyboard():
+    rows, row = [], []
+    for d, day in _v28_previous_result_dates():
+        row.append(InlineKeyboardButton(f"{day} {d[:5]}", callback_data=f"res|day|{d}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(rows)
+
+
+def _v28_result_text_for_date(date):
+    d = _normalize_date_arg(date)
+    matches = _v26_dedupe_fixture_matches(_fixtures_for_date(d)) if '_v26_dedupe_fixture_matches' in globals() else _fixtures_for_date(d)
+    if not matches:
+        return f"ما فيه مباريات بتاريخ {d}"
+
+    title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+    lines = [f"🏆 نتائج مباريات {title} 🏆", "المصدر: ESPN", ""]
+
+    for i, m in enumerate(matches, start=1):
+        obj = _v28_fetch_espn_match_by_fixture(d, m)
+        if obj:
+            lines.append(f"{i}) {m.get('team1')} {obj.get('score1','-')} - {obj.get('score2','-')} {m.get('team2')}")
+            scorers = _v28_sanitize_scorers(obj.get("scorers") or [])
+            if scorers:
+                lines.append("⚽ الهدافون:")
+                for s in scorers[:8]:
+                    lines.append(f"- {s}")
+            else:
+                lines.append("⚽ الهدافون: غير متوفرين حاليًا")
+        else:
+            lines.append(f"{i}) {m.get('team1')} × {m.get('team2')} — لم تتوفر النتيجة بعد")
+            lines.append("⚽ الهدافون: غير متوفرين حاليًا")
+        lines.append("")
+
+    lines.append("المصيف يضعكم بالحدث")
+    return "\n".join(lines).strip()
+
+
+async def previous_results_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if dates:
+        d = dates[0]
+        wait = await update.message.reply_text("⏳ أسحب النتائج والهدافين من ESPN...")
+        try:
+            text = await asyncio.wait_for(asyncio.to_thread(_v28_result_text_for_date, d), timeout=35)
+            await wait.edit_text(text)
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب نتائج هذا اليوم ❌\n{str(e)[:400]}")
+        return
+
+    prev = _v28_previous_result_dates()
+    if not prev:
+        await update.message.reply_text("ما فيه أيام سابقة للنتائج حتى الآن.")
+        return
+
+    await update.message.reply_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+
+
+async def previous_results_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    if not is_admin_user(update):
+        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+    parts = (q.data or "").split("|")
+    if len(parts) >= 3 and parts[1] == "day":
+        d = parts[2]
+        wait = await q.message.reply_text("⏳ أسحب النتائج والهدافين من ESPN...")
+        try:
+            text = await asyncio.wait_for(asyncio.to_thread(_v28_result_text_for_date, d), timeout=35)
+            await wait.edit_text(text)
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب نتائج هذا اليوم ❌\n{str(e)[:400]}")
+        return
+
+
+def _fixtures_dates_keyboard(mode="single", selected=None):
+    """
+    /مباريات يعرض من تاريخ اليوم الحالي فما بعد فقط.
+    """
+    selected = set(selected or [])
+    rows = []
+    row = []
+
+    source_dates = []
+    for d, day in _fixture_dates():
+        if mode == "multi":
+            if _v28_is_today_or_future_date(d):
+                source_dates.append((d, day))
+        else:
+            if _v28_is_today_or_future_date(d):
+                source_dates.append((d, day))
+
+    for d, day in source_dates:
+        label = f"{'✅ ' if d in selected else ''}{day} {d[:5]}"
+        data = f"fx|toggle|{d}" if mode == "multi" else f"fx|day|{d}"
+        row.append(InlineKeyboardButton(label, callback_data=data))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+
+    if row:
+        rows.append(row)
+
+    if mode == "multi":
+        rows.append([
+            InlineKeyboardButton("تصميم جديد", callback_data="fx|render_combo_new"),
+            InlineKeyboardButton("تصميم 10 مباريات", callback_data="fx|render_combo_10"),
+        ])
+        rows.append([
+            InlineKeyboardButton("تصفير الاختيار", callback_data="fx|clear"),
+            InlineKeyboardButton("رجوع", callback_data="fx|menu"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton("اختيار أكثر من يوم", callback_data="fx|multi")])
+
+    return InlineKeyboardMarkup(rows)
+
+
+def _v28_standings_card(draw, img, box, title, rows, compact=False):
+    x, y, x2, y2 = box
+    w = x2 - x
+    try:
+        rounded_rect(draw, (x, y, x2, y2), radius=28, fill="#0638A5E8", outline="#14B8F5", width=3)
+        rounded_rect(draw, (x+16, y+16, x2-16, y+66), radius=16, fill="#FBBF24", outline="#00000055", width=1)
+    except Exception:
+        draw.rectangle((x, y, x2, y2), fill="#0638A5", outline="#14B8F5")
+        draw.rectangle((x+16, y+16, x2-16, y+66), fill="#FBBF24")
+    gt = clean_group_title_for_design(title) if 'clean_group_title_for_design' in globals() else str(title)
+    if not str(gt).startswith("المجموعة"):
+        gt = f"المجموعة {gt}"
+    draw_text(draw, (x+w//2, y+41), gt, get_font(28 if compact else 29), fill="#061633", max_width=w-44)
+
+    label_y = y + 88
+    # الأعمدة من اليمين: المنتخب | لعب | فارق | نقاط
+    team_x = x2 - 34
+    played_x = x2 - 245
+    diff_x = x2 - 330
+    pts_x = x2 - 415
+    draw_text(draw, (team_x, label_y), "المنتخب", get_font(18), fill="#FDE68A", anchor="rm")
+    draw_text(draw, (played_x, label_y), "لعب", get_font(18), fill="#FDE68A")
+    draw_text(draw, (diff_x, label_y), "فارق", get_font(18), fill="#FDE68A")
+    draw_text(draw, (pts_x, label_y), "نقاط", get_font(18), fill="#FDE68A")
+
+    yy = y + 108
+    row_h = 62 if not compact else 67
+    row_gap = 8 if not compact else 0
+    for pos, r in enumerate(rows[:4], start=1):
+        team, played, diff, pts = r[0], r[1], r[2], r[3]
+        try:
+            rounded_rect(draw, (x+16, yy, x2-16, yy+row_h), radius=15, fill="#061633B8", outline="#FFFFFF30", width=1)
+        except Exception:
+            draw.rectangle((x+16, yy, x2-16, yy+row_h), fill="#061633")
+        cy = yy + row_h//2
+        team_name = f"{pos}. {_clean_display_name(team)}"
+        team_font = _fit_font_to_width(draw, team_name, 23 if not compact else 21, 185 if not compact else 160, min_size=16)
+        draw_text(draw, (team_x, cy), team_name, team_font, fill="#FFFFFF", anchor="rm", max_width=190 if not compact else 165)
+        draw_text(draw, (played_x, cy), str(played), get_font(23 if not compact else 21), fill="#FFFFFF")
+        draw_text(draw, (diff_x, cy), f"{int(diff):+d}" if isinstance(diff, int) else str(diff), get_font(22 if not compact else 20), fill="#E5E7EB")
+        draw_text(draw, (pts_x, cy), str(pts), get_font(29 if not compact else 24), fill="#FBBF24")
+        yy += row_h + row_gap
+
+
+def create_all_groups_newlook_image(groups, style=2):
+    ensure_generated_dir()
+    groups = list(groups or [])[:12]
+    width = 1800
+    cols = 3
+    margin_x, gap_x = 72, 34
+    card_w = (width - 2*margin_x - (cols-1)*gap_x) // cols
+    row_h, row_gap, grid_gap_y = 62, 8, 32
+    min_card_h, header_h, label_h, bottom_pad = 285, 74, 34, 24
+    row_heights = []
+    for r in range(4):
+        chunk = groups[r*cols:(r+1)*cols]
+        max_rows = max([min(len(rows), 4) for _title, rows in chunk] + [1])
+        ch = header_h + label_h + 18 + max_rows * row_h + max(0, max_rows-1) * row_gap + bottom_pad
+        row_heights.append(max(min_card_h, ch))
+    start_y, footer_space = 300, 110
+    height = int(start_y + sum(row_heights) + grid_gap_y*(len(row_heights)-1) + footer_space)
+    height = max(1640, min(height, 2320))
+    img, draw = _games_day_background(width, height)
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (45, 40, width-45, height-45), radius=40, fill="#06152F55", outline="#FFFFFF22", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    draw_text(draw, (width//2, 82), "MONDIAL AL MASEEF 2026", _v31_latin_font(42) if '_v31_latin_font' in globals() else get_font(40), fill="#FFFFFF", max_width=900)
+    draw_text(draw, (width//2, 160), "ALL GROUP STANDINGS", _v31_latin_font(74) if '_v31_latin_font' in globals() else get_font(72), fill="#FFFFFF", max_width=width-170)
+    draw_text(draw, (width//2, 230), "ترتيب جميع المجموعات", get_font(40), fill="#FBBF24", max_width=800)
+
+    y_cursor = start_y
+    for idx, (title, rows) in enumerate(groups):
+        c = idx % cols
+        r = idx // cols
+        if c == 0 and idx != 0:
+            y_cursor += row_heights[r-1] + grid_gap_y
+        # RTL: أول مجموعة يمين
+        x = margin_x + (cols - 1 - c) * (card_w + gap_x)
+        y = y_cursor
+        card_h = row_heights[r]
+        _v28_standings_card(draw, img, (x, y, x+card_w, y+card_h), title, rows, compact=False)
+    draw_text(draw, (width//2, height-50), "المصيف ينقل لكم الحدث", get_font(38), fill="#FBBF24", max_width=700)
+    path = os.path.join(GENERATED_DIR, f"all_groups_rtl_v28.png")
+    img.save(path, quality=95)
+    return path
+
+
+def _standings_page_image(groups, page_no=1, total_pages=3):
+    chunk = groups[(page_no-1)*4:page_no*4]
+    img = _fixture_bg(1080, 1350)
+    draw = ImageDraw.Draw(img, "RGBA")
+    draw_text(draw, (540, 76), "MONDIAL AL MASEEF 2026", get_font(32), fill="#FFFFFF")
+    draw_text(draw, (540, 122), "GROUP STANDINGS", get_font(54), fill="#FFFFFF")
+    draw_text(draw, (540, 174), f"ترتيب المجموعات | {page_no}/{total_pages}", get_font(30), fill="#FBBF24")
+    # RTL: أعلى يمين ثم أعلى يسار، أسفل يمين ثم أسفل يسار
+    positions = [(570,230,1020,680),(60,230,510,680),(570,715,1020,1165),(60,715,510,1165)]
+    for (title, rows), box in zip(chunk, positions):
+        _v28_standings_card(draw, img, box, title, rows, compact=True)
+    draw.line((250, 1242, 830, 1242), fill=(255,255,255,180), width=2)
+    draw_text(draw, (540, 1284), "المصيف يضعكم بالحدث", get_font(28), fill="#FBBF24")
+    path = os.path.join(GENERATED_DIR, f"group_standings_page_rtl_v28_{page_no}.png")
+    img.save(path, quality=95)
+    return path
+
+# ==================== V29 PUBLIC BOT + LIVE BUTTONS + GROUP MENU + ESPN TOP SCORERS ====================
+# - البوت صار يخدم أكثر من مستخدم في الخاص: الأوامر العامة مفتوحة، والإدارية تبقى ADMIN_IDS.
+# - /مباشر بدون تحديد مباراة: أزرار مباريات اليوم النشط من PDF.
+# - اليوم النشط يتغير قبل أول مباراة في اليوم الجديد بساعة.
+# - كل ضغطة على مباراة ترسل بطاقة واحدة فقط.
+# - /ترتيب_المجموعات_الان صار قائمة أزرار: كل مجموعة لحال + جميع المجموعات + هدافين البطولة.
+
+GROUP_BUTTONS_V29 = [
+    ("أ", "المجموعة أ"), ("ب", "المجموعة ب"), ("ج", "المجموعة ج"), ("د", "المجموعة د"),
+    ("هـ", "المجموعة هـ"), ("و", "المجموعة و"), ("ز", "المجموعة ز"), ("ح", "المجموعة ح"),
+    ("ط", "المجموعة ط"), ("ي", "المجموعة ي"), ("ك", "المجموعة ك"), ("ل", "المجموعة ل"),
+]
+
+
+def _v29_is_admin_action(action):
+    return action in {"upd", "save", "delete", "edit"}
+
+
+def _v29_parse_fixture_time_to_datetime(date_str, time_str):
+    """تحويل وقت PDF المحلي إلى datetime تقريبي بتوقيت السعودية."""
+    try:
+        d = _normalize_date_arg(date_str)
+        day, month, year = [int(x) for x in d.split("/")]
+        s = normalize_name(time_str)
+        m = re.search(r"(\d{1,2})(?::(\d{2}))?", s)
+        if not m:
+            return datetime(year, month, day, 0, 0)
+        hh = int(m.group(1))
+        mm = int(m.group(2) or "0")
+        is_pm = bool(re.search(r"\bم\b|مساء|ليلا|ليلًا|ليلاً|PM", s, re.I))
+        is_am = bool(re.search(r"\bص\b|صباح|فجر|منتصف|AM", s, re.I))
+        if is_pm and hh < 12:
+            hh += 12
+        if is_am and hh == 12:
+            hh = 0
+        return datetime(year, month, day, hh, mm)
+    except Exception:
+        return datetime.utcnow() + timedelta(hours=3)
+
+
+def _v29_day_first_datetime(date_str):
+    rows = _v26_dedupe_fixture_matches(_fixtures_for_date(date_str)) if '_v26_dedupe_fixture_matches' in globals() else _fixtures_for_date(date_str)
+    if not rows:
+        return None
+    # أول مباراة حسب ترتيب ملف PDF، وليس أصغر ساعة، لأن اليوم قد يمتد للفجر.
+    return _v29_parse_fixture_time_to_datetime(date_str, rows[0].get("time"))
+
+
+def _v29_active_fixture_date(now=None):
+    """اليوم يتغير قبل أول مباراة في اليوم الجديد بساعة."""
+    now = now or (datetime.utcnow() + timedelta(hours=3))
+    dates = [d for d, _dy in _fixture_dates()]
+    dates = sorted(dates, key=_v28_date_tuple if '_v28_date_tuple' in globals() else _date_key)
+    if not dates:
+        return None
+
+    active = dates[0]
+    for d in dates:
+        first_dt = _v29_day_first_datetime(d)
+        if not first_dt:
+            continue
+        switch_dt = first_dt - timedelta(hours=1)
+        if now >= switch_dt:
+            active = d
+        else:
+            break
+    return active
+
+
+def _v29_live_today_keyboard(date_str=None):
+    d = date_str or _v29_active_fixture_date()
+    rows = _v26_dedupe_fixture_matches(_fixtures_for_date(d)) if '_v26_dedupe_fixture_matches' in globals() else _fixtures_for_date(d)
+    kb_rows = []
+    for m in rows:
+        if _has_unknown(m):
+            label = f"{_v26_short_time(m.get('time'))} — {m.get('note','تحدد لاحقًا')}"
+        else:
+            label = f"{m.get('team1')} × {m.get('team2')}"
+        kb_rows.append([InlineKeyboardButton(label[:58], callback_data=f"livefx|match|{m.get('id')}")])
+    return InlineKeyboardMarkup(kb_rows)
+
+
+def _v29_live_today_text(date_str=None):
+    d = date_str or _v29_active_fixture_date()
+    title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else str(d)
+    rows = _v26_dedupe_fixture_matches(_fixtures_for_date(d)) if '_v26_dedupe_fixture_matches' in globals() else _fixtures_for_date(d)
+    lines = [
+        "اختر مباراة للمتابعة المباشرة:",
+        f"اليوم النشط: {title}",
+        "",
+        "ملاحظة: اليوم يتغير قبل أول مباراة في اليوم الجديد بساعة.",
+    ]
+    if not rows:
+        lines.append("لا توجد مباريات في ملف PDF لهذا اليوم.")
+    return "\n".join(lines)
+
+
+async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    team1, team2, mode, date_hint = parse_live_command_text(update.message.text)
+    if mode_override:
+        mode = _norm_source_mode(mode_override)
+
+    # /مباشر بدون مباراة = أزرار مباريات اليوم النشط
+    if not team1 or not team2:
+        d = _v29_active_fixture_date()
+        if not d:
+            await update.message.reply_text("ما لقيت مباريات في ملف PDF.")
+            return
+        await update.message.reply_text(_v29_live_today_text(d), reply_markup=_v29_live_today_keyboard(d))
+        return
+
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
+    kb = source_keyboard(context, payload)
+    wait = await update.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}")
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(fetch_live_match_data, team1, team2, mode, date_hint), timeout=26)
+    except Exception as e:
+        data = None
+    if not data:
+        await wait.edit_text(
+            f"تعذر جلب المباراة من مصدر {mode_label_ar(mode)} ❌\n"
+            f"مباراة: {team1} × {team2}\n"
+            "جرب مصدر ثاني من الأزرار.",
+            reply_markup=kb,
+        )
+        return
+    try:
+        path = render_live_match_card(data, mode_label_ar(mode))
+        await send_photo_path_markup(update.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await wait.edit_text(f"تم جلب النتيجة لكن تعذر تصميم الصورة ❌\n{str(e)[:180]}\n\n" + build_live_caption(data, mode_label_ar(mode)), reply_markup=kb)
+
+
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    if len(parts) < 3:
+        await q.message.reply_text("تعذر قراءة اختيار المباراة.")
+        return
+    action, mid = parts[1], parts[2]
+    if action != "match":
+        return
+    m = _fixture_by_id(mid)
+    if not m:
+        await q.message.reply_text("لم أجد المباراة في ملف PDF.")
+        return
+    if _has_unknown(m):
+        await q.message.reply_text("أطراف المباراة لم تتحدد بعد.")
+        return
+    team1, team2 = m.get("team1"), m.get("team2")
+    date_hint = _v28_espn_date(m.get("date")) if '_v28_espn_date' in globals() else m.get("date")
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
+    kb = source_keyboard(context, payload)
+    wait = await q.message.reply_text(f"⏳ أجهز بطاقة {team1} × {team2} من ESPN...")
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(fetch_live_match_data, team1, team2, "espn", date_hint), timeout=26)
+    except Exception:
+        data = None
+    if not data:
+        await wait.edit_text(f"تعذر جلب المباراة من ESPN ❌\n{team1} × {team2}", reply_markup=kb)
+        return
+    try:
+        path = render_live_match_card(data, "ESPN")
+        await send_photo_path_markup(q.message, path, build_live_caption(data, "ESPN"), kb)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await wait.edit_text(f"تم جلب البيانات لكن تعذر تصميم البطاقة ❌\n{str(e)[:180]}\n\n" + build_live_caption(data, "ESPN"), reply_markup=kb)
+
+
+def _v29_group_menu_keyboard():
+    rows = []
+    for i in range(0, len(GROUP_BUTTONS_V29), 3):
+        rows.append([InlineKeyboardButton(label, callback_data=f"grp|one|{code}") for code, label in GROUP_BUTTONS_V29[i:i+3]])
+    rows.append([InlineKeyboardButton("ترتيب جميع المجموعات", callback_data="grp|all")])
+    rows.append([InlineKeyboardButton("هدافين البطولة", callback_data="grp|scorers")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def current_groups_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    await update.message.reply_text(
+        "اختر اللي تبيه من ترتيب المجموعات:",
+        reply_markup=_v29_group_menu_keyboard(),
+    )
+
+
+def _v29_find_group(groups, code):
+    target_variants = {code, f"المجموعة {code}", f"مجموعة {code}"}
+    if code == "هـ":
+        target_variants.update({"ه", "المجموعة ه", "المجموعة هـ"})
+    for title, rows in groups or []:
+        t = normalize_name(title)
+        for v in target_variants:
+            if normalize_name(v) == t or normalize_name(v) in t:
+                return title, rows
+    # fallback حسب ترتيب الأزرار
+    order = [c for c, _l in GROUP_BUTTONS_V29]
+    if code in order:
+        idx = order.index(code)
+        if idx < len(groups):
+            return groups[idx]
+    return None, []
+
+
+def _v29_render_single_group_image(title, rows):
+    ensure_generated_dir()
+    width, height = 1080, 1200
+    try:
+        img, draw = _games_day_background(width, height)
+    except Exception:
+        img = _fixture_bg(width, height)
+        draw = ImageDraw.Draw(img, "RGBA")
+    overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (50, 50, width-50, height-50), radius=42, fill="#06152F66", outline="#FFFFFF22", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    draw_text(draw, (width//2, 90), "MONDIAL AL MASEEF 2026", _v31_latin_font(34) if '_v31_latin_font' in globals() else get_font(34), fill="#FFFFFF", max_width=800)
+    draw_text(draw, (width//2, 155), "GROUP STANDINGS", _v31_latin_font(58) if '_v31_latin_font' in globals() else get_font(58), fill="#FFFFFF", max_width=950)
+    _v28_standings_card(draw, img, (110, 250, width-110, 890), title, rows, compact=False)
+    draw.line((240, 1030, width-240, 1030), fill="#FFFFFF88", width=2)
+    draw_text(draw, (width//2, 1085), "المصيف يضعكم بالحدث", get_font(34), fill="#FBBF24", max_width=700)
+    path = os.path.join(GENERATED_DIR, f"group_single_{_safe_filename(str(title))}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def _v29_scoring_stats_urls():
+    return [
+        "https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&season=2026&limit=50&sort=goals:desc",
+        "https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&limit=50&sort=goals:desc",
+        "https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics?region=us&lang=en&contentorigin=espn&season=2026",
+        "https://www.espn.com/soccer/stats/_/league/FIFA.WORLD/season/2026",
+        "https://www.espn.com/soccer/stats/_/league/FIFA.WORLD",
+    ]
+
+
+def _v29_pick_stat_value(obj, names=("goals", "goal", "G")):
+    if not isinstance(obj, dict):
+        return None
+    for k, v in obj.items():
+        lk = str(k).lower()
+        if any(str(n).lower() == lk or str(n).lower() in lk for n in names):
+            if isinstance(v, (int, float, str)) and str(v).strip() != "":
+                try:
+                    return int(float(str(v).strip()))
+                except Exception:
+                    pass
+            if isinstance(v, dict):
+                for kk in ["value", "displayValue", "display", "stat"]:
+                    if kk in v:
+                        try:
+                            return int(float(str(v[kk]).strip()))
+                        except Exception:
+                            pass
+    return None
+
+
+def _v29_extract_top_scorers_from_json(data):
+    items = []
+    for node in _v28_walk_json(data) if '_v28_walk_json' in globals() else []:
+        if not isinstance(node, dict):
+            continue
+        # احصل على اسم اللاعب
+        name = ""
+        for k in ["athlete", "player", "participant"]:
+            v = node.get(k)
+            if isinstance(v, dict):
+                name = v.get("displayName") or v.get("shortName") or v.get("name") or ""
+                if name:
+                    break
+        if not name:
+            name = node.get("displayName") or node.get("name") or ""
+        if not name or len(str(name)) > 60:
+            continue
+
+        # الفريق
+        team = ""
+        for k in ["team", "club", "competitor"]:
+            v = node.get(k)
+            if isinstance(v, dict):
+                team = v.get("displayName") or v.get("shortDisplayName") or v.get("name") or ""
+                if team:
+                    break
+        team = canonical_team_name(team) or normalize_name(team)
+
+        # إحصائيات
+        goals = _v29_pick_stat_value(node, ("goals", "goal", "G"))
+        played = _v29_pick_stat_value(node, ("appearances", "gamesPlayed", "games", "P"))
+
+        # بعض API يحط statistics كقائمة
+        if goals is None:
+            stats = node.get("statistics") or node.get("stats") or []
+            if isinstance(stats, list):
+                for st in stats:
+                    if not isinstance(st, dict):
+                        continue
+                    nm = str(st.get("name") or st.get("displayName") or st.get("abbreviation") or "").lower()
+                    if "goal" in nm or nm == "g":
+                        try:
+                            goals = int(float(str(st.get("value") or st.get("displayValue") or 0)))
+                        except Exception:
+                            pass
+                    if nm in ["p", "gp"] or "appearance" in nm or "games" in nm:
+                        try:
+                            played = int(float(str(st.get("value") or st.get("displayValue") or 0)))
+                        except Exception:
+                            pass
+
+        if goals is None or goals <= 0:
+            continue
+
+        item = {
+            "name": normalize_name(name),
+            "team": team or "-",
+            "played": played if played is not None else "",
+            "goals": int(goals),
+        }
+        key = (item["name"].lower(), item["team"].lower())
+        if key not in [(x["name"].lower(), x["team"].lower()) for x in items]:
+            items.append(item)
+
+    items.sort(key=lambda x: (-x.get("goals", 0), str(x.get("name",""))))
+    return items[:25]
+
+
+def _v29_extract_top_scorers_from_html(html):
+    items = []
+    try:
+        # نمط قريب من جدول ESPN الظاهر: name/team/P/G داخل JSON أو HTML
+        # نبحث في __NEXT_DATA__ أولًا
+        m = re.search(r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, flags=re.S)
+        if m:
+            data = json.loads(m.group(1))
+            items = _v29_extract_top_scorers_from_json(data)
+            if items:
+                return items
+    except Exception:
+        pass
+
+    text = re.sub(r"<[^>]+>", " ", html or "")
+    text = re.sub(r"\s+", " ", text)
+    # fallback ضعيف لكن مفيد لو الصفحة HTML عادية
+    # يحاول التقاط Name Team P G عندما تكون البيانات متتابعة
+    teams_en = list((TEAM_SEARCH_EN.keys() if 'TEAM_SEARCH_EN' in globals() else []))
+    for tm_ar, variants in (TEAM_SEARCH_EN.items() if 'TEAM_SEARCH_EN' in globals() else []):
+        for en in variants:
+            if not en or len(en) < 3:
+                continue
+            # Player Name Team 2 3
+            pat = r"([A-Z][A-Za-zÀ-ÖØ-öø-ÿ'\-. ]{2,55})\s+" + re.escape(en) + r"\s+(\d{1,2})\s+(\d{1,2})"
+            for mm in re.finditer(pat, text):
+                name = normalize_name(mm.group(1))
+                played = int(mm.group(2))
+                goals = int(mm.group(3))
+                if goals > 0:
+                    items.append({"name": name, "team": tm_ar, "played": played, "goals": goals})
+    unique = []
+    seen = set()
+    for it in items:
+        k = (it["name"].lower(), it["team"])
+        if k not in seen:
+            seen.add(k)
+            unique.append(it)
+    unique.sort(key=lambda x: (-x.get("goals", 0), str(x.get("name",""))))
+    return unique[:25]
+
+
+def fetch_espn_top_scorers():
+    if not requests:
+        return []
+    for url in _v29_scoring_stats_urls():
+        try:
+            r = _requests_get(url, timeout=18)
+            if int(getattr(r, "status_code", 200) or 200) >= 400:
+                continue
+            ctype = (getattr(r, "headers", {}) or {}).get("content-type", "")
+            if "json" in ctype or url.endswith("byathlete?"):
+                try:
+                    data = r.json()
+                    items = _v29_extract_top_scorers_from_json(data)
+                    if items:
+                        return items
+                except Exception:
+                    pass
+            html = r.text
+            items = _v29_extract_top_scorers_from_html(html)
+            if items:
+                return items
+        except Exception:
+            continue
+    return []
+
+
+def render_top_scorers_v29(items):
+    ensure_generated_dir()
+    items = list(items or [])[:15]
+    width = 1200
+    row_h = 74
+    height = 360 + max(6, len(items)) * row_h + 160
+    height = max(1050, min(height, 1750))
+    try:
+        img, draw = _games_day_background(width, height)
+    except Exception:
+        img = _fixture_bg(width, height)
+        draw = ImageDraw.Draw(img, "RGBA")
+    overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (55, 45, width-55, height-45), radius=44, fill="#06152F66", outline="#FFFFFF22", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    draw_text(draw, (width//2, 85), "MONDIAL AL MASEEF 2026", _v31_latin_font(34) if '_v31_latin_font' in globals() else get_font(34), fill="#FFFFFF", max_width=850)
+    draw_text(draw, (width//2, 160), "TOP SCORERS", _v31_latin_font(72) if '_v31_latin_font' in globals() else get_font(70), fill="#FFFFFF", max_width=1000)
+    draw_text(draw, (width//2, 225), "هدافين البطولة", get_font(42), fill="#FBBF24", max_width=700)
+
+    x0, y0, x1 = 95, 310, width-95
+    rounded_rect(draw, (x0, y0, x1, y0+62), radius=20, fill="#FBBF24", outline="#FFFFFF55", width=1)
+    # RTL columns: اللاعب | المنتخب | لعب | أهداف
+    draw_text(draw, (x1-38, y0+32), "اللاعب", get_font(25), fill="#061633", anchor="rm")
+    draw_text(draw, (x1-520, y0+32), "المنتخب", get_font(25), fill="#061633", anchor="rm")
+    draw_text(draw, (x0+190, y0+32), "لعب", get_font(25), fill="#061633")
+    draw_text(draw, (x0+68, y0+32), "أهداف", get_font(25), fill="#061633")
+
+    y = y0 + 78
+    if not items:
+        rounded_rect(draw, (x0, y, x1, y+85), radius=22, fill="#061633D9", outline="#FFFFFF33", width=1)
+        draw_text(draw, (width//2, y+43), "تعذر جلب هدافين البطولة من ESPN حاليًا", get_font(31), fill="#FFFFFF", max_width=850)
+    for idx, it in enumerate(items, start=1):
+        rounded_rect(draw, (x0, y, x1, y+row_h-10), radius=18, fill="#061633D9", outline="#FFFFFF22", width=1)
+        cy = y + (row_h-10)//2
+        rank = f"{idx}."
+        name = it.get("name", "")
+        team = canonical_team_name(it.get("team")) or normalize_name(it.get("team") or "-")
+        played = it.get("played", "")
+        goals = it.get("goals", "")
+        draw_text(draw, (x1-42, cy), f"{rank} {name}", _fit_font_to_width(draw, f"{rank} {name}", 29, 430, min_size=20), fill="#FFFFFF", anchor="rm", max_width=430)
+        draw_text(draw, (x1-520, cy), team, _fit_font_to_width(draw, team, 26, 250, min_size=18), fill="#CBD5E1", anchor="rm", max_width=250)
+        draw_text(draw, (x0+190, cy), str(played), get_font(28), fill="#FFFFFF")
+        draw_text(draw, (x0+68, cy), str(goals), get_font(34), fill="#FBBF24")
+        y += row_h
+
+    draw.line((240, height-125, width-240, height-125), fill="#FFFFFF88", width=2)
+    draw_text(draw, (width//2, height-75), "المصيف يضعكم بالحدث", get_font(34), fill="#FBBF24", max_width=700)
+    path = os.path.join(GENERATED_DIR, "top_scorers_espn_v29.png")
+    img.save(path, quality=95)
+    return path
+
+
+async def groups_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else ""
+
+    if action == "all":
+        wait = await q.message.reply_text("⏳ أسحب ترتيب جميع المجموعات من ESPN...")
+        try:
+            groups, source_label = await asyncio.wait_for(asyncio.to_thread(fetch_current_groups, "espn"), timeout=35)
+            if not groups:
+                await wait.edit_text("تعذر جلب ترتيب المجموعات من ESPN حاليًا.")
+                return
+            path = create_all_groups_newlook_image(groups)
+            await send_photo_path(q.message, path, "ترتيب جميع المجموعات ✅\nالمصدر: ESPN")
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب الترتيب ❌\n{str(e)[:300]}")
+        return
+
+    if action == "scorers":
+        wait = await q.message.reply_text("⏳ أسحب هدافين البطولة من ESPN...")
+        try:
+            items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers), timeout=35)
+            path = render_top_scorers_v29(items)
+            await send_photo_path(q.message, path, "هدافين البطولة ✅\nالمصدر: ESPN Scoring Stats")
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب هدافين البطولة ❌\n{str(e)[:300]}")
+        return
+
+    if action == "one" and len(parts) >= 3:
+        code = parts[2]
+        wait = await q.message.reply_text(f"⏳ أسحب ترتيب المجموعة {code} من ESPN...")
+        try:
+            groups, source_label = await asyncio.wait_for(asyncio.to_thread(fetch_current_groups, "espn"), timeout=35)
+            title, rows = _v29_find_group(groups, code)
+            if not rows:
+                await wait.edit_text("تعذر العثور على هذه المجموعة حاليًا.")
+                return
+            path = _v29_render_single_group_image(title, rows)
+            await send_photo_path(q.message, path, f"{title} ✅\nالمصدر: ESPN")
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب المجموعة ❌\n{str(e)[:300]}")
+        return
+
+
+async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    أزرار مصادر الرياضة أصبحت عامة للمستخدمين لأنها تخص /مباشر و/ترتيب.
+    """
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    parts = (query.data or "").split("|")
+    if len(parts) != 3:
+        await query.message.reply_text("تعذر قراءة الخيار.")
+        return
+    _tag, token, mode = parts
+    payload = context.bot_data.get("sports_source_requests", {}).get(token)
+    if not payload:
+        await query.message.reply_text("انتهت صلاحية الخيار، أعد تنفيذ الأمر من جديد.")
+        return
+    kind = payload.get("kind")
+    kb = source_keyboard(context, payload)
+
+    if kind == "standings":
+        msg = await query.message.reply_text(f"⏳ جاري جلب ترتيب المجموعات من {mode_label_ar(mode)}...")
+        try:
+            groups, src = await asyncio.wait_for(asyncio.to_thread(fetch_current_groups, mode), timeout=32)
+        except Exception:
+            groups, src = [], ""
+        if not groups:
+            await msg.edit_text(_source_help_text("standings", mode), reply_markup=kb)
+            return
+        path = create_all_groups_newlook_image(groups)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        await send_photo_path_markup(query.message, path, f"ترتيب المجموعات الآن ✅\nالمصدر: {src}", kb)
+        return
+
+    if kind == "live":
+        team1 = payload.get("team1")
+        team2 = payload.get("team2")
+        date_hint = payload.get("date_hint")
+        msg = await query.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}")
+        try:
+            data = await asyncio.wait_for(asyncio.to_thread(fetch_live_match_data, team1, team2, mode, date_hint), timeout=26)
+        except Exception:
+            data = None
+        if not data:
+            await msg.edit_text(f"تعذر جلب المباراة من مصدر {mode_label_ar(mode)} ❌\nمباراة: {team1} × {team2}", reply_markup=kb)
+            return
+        try:
+            path = render_live_match_card(data, mode_label_ar(mode))
+            await send_photo_path_markup(query.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            await msg.edit_text(f"تم جلب البيانات لكن تعذر تصميم البطاقة ❌\n{str(e)[:180]}\n\n" + build_live_caption(data, mode_label_ar(mode)), reply_markup=kb)
+        return
+
+    await query.message.reply_text("تعذر تحديد نوع الطلب.")
+
+
+async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    أزرار /مباريات أصبحت عامة للعرض، لكن تعديل أطراف المباريات يبقى للمشرف فقط.
+    """
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else ""
+
+    if _v29_is_admin_action(action) and not is_admin_user(update):
+        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+
+    try:
+        if action == "menu":
+            await q.message.edit_text("اختر اليوم أو استخدم /مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+            return
+        if action == "multi":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اختر التصميم:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+        if action == "toggle" and len(parts) >= 3:
+            d = parts[2]
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if d in sel:
+                sel.remove(d)
+            else:
+                sel.append(d)
+            context.user_data["fx_selected_dates"] = sel
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اختر التصميم:", reply_markup=_fixtures_dates_keyboard("multi", sel))
+            return
+        if action == "clear":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اختر التصميم:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+        if action == "day" and len(parts) >= 3:
+            d = parts[2]
+            await q.message.edit_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+            return
+        if action in ["render1", "render2"] and len(parts) >= 3:
+            d = parts[2]
+            design = 1 if action == "render1" else 2
+            wait = await q.message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+            try:
+                rows, simple = _v26_fixture_simple_matches(d)
+                paths = _render_fixture_day_by_design(d, design=design)
+                if not paths:
+                    await wait.edit_text("ما فيه مباريات لهذا اليوم.")
+                    return
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(q.message, p, _v26_fixtures_caption(_v26_fixture_title(d), simple, include_fantasy=True))
+            except Exception as e:
+                await wait.edit_text(f"تعذر تصميم اليوم ❌\nالسبب: {str(e)[:400]}")
+            return
+        if action in ["render_combo_new", "render_combo_10", "render_combo"]:
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if not sel:
+                await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+                return
+            title = "التصميم الجديد" if action != "render_combo_10" else "تصميم 10 مباريات"
+            wait = await q.message.reply_text(f"⏳ جاري تصميم {title}...")
+            try:
+                paths = _v26_render_fixtures_10_images(sel) if action == "render_combo_10" else render_fixtures_combined_images(sel)
+                if not paths:
+                    await wait.edit_text("ما لقيت مباريات للتواريخ المحددة.")
+                    return
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(q.message, p, _v26_fixtures_caption("مباريات مجمعة", [], include_fantasy=False))
+            except Exception as e:
+                await wait.edit_text(f"تعذر التصميم ❌\nالسبب: {str(e)[:400]}")
+            return
+        if action == "upd" and len(parts) >= 3:
+            mid = parts[2]
+            m = _fixture_by_id(mid)
+            if not m:
+                await q.message.reply_text("لم أجد المباراة.")
+                return
+            context.user_data["fixture_update_match_id"] = mid
+            await q.message.reply_text(
+                f"اكتب طرفي المباراة لـ {mid} ({m.get('date')} {_v26_short_time(m.get('time'))}) كذا:\n"
+                "الفريق الأول * الفريق الثاني\n\n"
+                "مثال: المكسيك * أستراليا\n"
+                "ملاحظة: سيتم الحفظ فقط، ولن يتم التصميم إلا عندما تطلب /مباريات التاريخ."
+            )
+            return
+        await q.message.reply_text("تعذر قراءة الخيار.")
+    except Exception as e:
+        await q.message.reply_text(f"تعذر تنفيذ خيار المباريات ❌\n{str(e)[:400]}")
+
+# ==================== END V29 PUBLIC BOT + LIVE BUTTONS + GROUP MENU + ESPN TOP SCORERS ====================
+
+# ==================== END V28 RESULTS + ESPN SCORERS + RTL STANDINGS ====================
 
 # ==================== END V26 FINAL OVERRIDE ====================
 
