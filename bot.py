@@ -15200,5 +15200,203 @@ except Exception:
 
 # ==================== END V14 SAFE START PATCH ====================
 
+
+
+# ==================== V22 HARD STABLE PATCH: ESPN RESULTS -> GROUP STANDINGS ====================
+# الهدف: إيقاف دوامة Google/Playwright/Docker نهائيًا.
+# ترتيب المجموعات هنا يسحب نتائج المباريات من ESPN JSON المباشر، ثم يحسب الترتيب فورًا.
+# لا يحتاج Docker ولا Playwright ولا Chromium. requests فقط.
+
+V22_GROUPS_SOURCE_LABEL = "ESPN Live Results"
+
+
+def _v22_event_is_countable(event, obj):
+    """نحسب المباراة إذا بدأت أو انتهت. نستبعد المجدولة فقط."""
+    try:
+        comp = (event.get("competitions") or [event])[0]
+        st = comp.get("status") or event.get("status") or {}
+        typ = st.get("type") or {}
+        state = normalize_name(typ.get("state") or typ.get("name") or typ.get("description") or typ.get("detail") or "").lower()
+        detail = normalize_name(typ.get("detail") or typ.get("shortDetail") or st.get("displayClock") or obj.get("status") or obj.get("minute") or "").lower()
+        if any(x in state + " " + detail for x in ["pre", "scheduled", "not started", "لم تبدأ"]):
+            return False
+        # إذا فيه نتيجة رقمية نعدها، حتى لو مباشر.
+        int(float(obj.get("score1", 0)))
+        int(float(obj.get("score2", 0)))
+        return True
+    except Exception:
+        return False
+
+
+def _v22_date_range_for_worldcup():
+    """من بداية البطولة إلى اليوم + يومين. ثابت وخفيف."""
+    start = datetime(2026, 6, 11).date()
+    # لا نخلي التاريخ قبل بداية البطولة حتى لو ساعة السيرفر مختلفة
+    today = max(datetime.utcnow().date(), start)
+    end = min(today + timedelta(days=2), datetime(2026, 7, 1).date())
+    dates = []
+    d = start
+    while d <= end:
+        dates.append(d.strftime("%Y%m%d"))
+        d += timedelta(days=1)
+    return dates
+
+
+def fetch_standings_from_espn_live_results():
+    """يسحب نتائج ESPN لكل مباريات المجموعات، ثم يحسب الترتيب.
+    يرجع نفس شكل التصميم المعتمد: [(المجموعة أ, [(team, played, gd, pts), ...]), ...]
+    """
+    # جدول كامل لكل منتخب داخل مجموعته
+    group_by_team = {}
+    for g, teams in WORLD_CUP_GROUPS:
+        for t in teams:
+            group_by_team[t] = g
+    table = {t: {"played": 0, "wins": 0, "draws": 0, "losses": 0, "gf": 0, "ga": 0, "gd": 0, "pts": 0} for t in WORLD_CUP_TEAMS}
+
+    found_any = False
+    seen = set()
+    for dv in _v22_date_range_for_worldcup():
+        events = []
+        try:
+            events = _fetch_espn_events_by_date(dv) or []
+        except Exception:
+            events = []
+        for event in events:
+            try:
+                eid = str(event.get("id") or event.get("uid") or "")
+                if eid and eid in seen:
+                    continue
+                if eid:
+                    seen.add(eid)
+                obj = _parse_espn_match_from_event(event)
+                if not obj:
+                    continue
+                t1 = canonical_team_name(obj.get("team1")) or normalize_name(obj.get("team1"))
+                t2 = canonical_team_name(obj.get("team2")) or normalize_name(obj.get("team2"))
+                if t1 not in table or t2 not in table:
+                    continue
+                # لا نحسب مباريات من مجموعات مختلفة أو مباريات ودية/خارج البطولة
+                if group_by_team.get(t1) != group_by_team.get(t2):
+                    continue
+                if not _v22_event_is_countable(event, obj):
+                    continue
+                s1 = int(float(obj.get("score1", 0)))
+                s2 = int(float(obj.get("score2", 0)))
+                found_any = True
+                table[t1]["played"] += 1
+                table[t2]["played"] += 1
+                table[t1]["gf"] += s1
+                table[t1]["ga"] += s2
+                table[t2]["gf"] += s2
+                table[t2]["ga"] += s1
+                table[t1]["gd"] = table[t1]["gf"] - table[t1]["ga"]
+                table[t2]["gd"] = table[t2]["gf"] - table[t2]["ga"]
+                if s1 > s2:
+                    table[t1]["wins"] += 1; table[t2]["losses"] += 1
+                    table[t1]["pts"] += 3
+                elif s2 > s1:
+                    table[t2]["wins"] += 1; table[t1]["losses"] += 1
+                    table[t2]["pts"] += 3
+                else:
+                    table[t1]["draws"] += 1; table[t2]["draws"] += 1
+                    table[t1]["pts"] += 1; table[t2]["pts"] += 1
+            except Exception:
+                continue
+    if not found_any:
+        return []
+
+    groups = []
+    ar_letters = {"A":"أ", "B":"ب", "C":"ج", "D":"د", "E":"هـ", "F":"و", "G":"ز", "H":"ح", "I":"ط", "J":"ي", "K":"ك", "L":"ل"}
+    for g, teams in WORLD_CUP_GROUPS:
+        rows = []
+        for t in teams:
+            r = table[t]
+            rows.append((t, int(r["played"]), int(r["gd"]), int(r["pts"])))
+        # ترتيب قياسي: نقاط، فارق، أهداف له، الاسم لضمان ثبات الترتيب
+        rows.sort(key=lambda row: (row[3], row[2], table[row[0]]["gf"], row[0]), reverse=True)
+        groups.append((f"المجموعة {ar_letters.get(g, g)}", rows))
+    return groups
+
+
+def fetch_current_groups(mode="latest"):
+    """V22: المصدر الثابت لترتيب المجموعات = نتائج ESPN المباشرة فقط."""
+    groups = fetch_standings_from_espn_live_results()
+    if groups:
+        return groups, V22_GROUPS_SOURCE_LABEL
+    return [], ""
+
+
+def _source_help_text(kind, mode):
+    if kind == "standings":
+        return (
+            "تعذر جلب نتائج المجموعات من ESPN حاليًا ❌\n"
+            "البوت شغال، لكن مصدر النتائج لم يرجع مباريات كافية الآن.\n\n"
+            "جرّب بعد دقيقة أو اختر مصدر آخر."
+        )
+    return f"تعذر جلب البيانات من مصدر {mode_label_ar(mode)} ❌"
+
+
+async def current_groups_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    """V22: أمر ثابت لا يستخدم Google/Playwright، فقط ESPN JSON."""
+    payload = {"kind": "standings"}
+    kb = source_keyboard(context, payload)
+    wait = await update.message.reply_text("⏳ أسحب نتائج المجموعات من ESPN وأحسب الترتيب...")
+    try:
+        groups, source_label = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_current_groups, "espn"), timeout=35)
+    except Exception as e:
+        groups, source_label = [], ""
+        try:
+            await wait.edit_text(f"تعذر جلب ترتيب المجموعات ❌\n{str(e)[:250]}", reply_markup=kb)
+            return
+        except Exception:
+            pass
+    if not groups:
+        await wait.edit_text(_source_help_text("standings", "espn") + "\n\nاختر مصدر آخر:", reply_markup=kb)
+        return
+    try:
+        path = create_all_groups_newlook_image(groups) if 'create_all_groups_newlook_image' in globals() else create_all_groups_image(groups)
+    except Exception:
+        path = None
+    caption = "ترتيب المجموعات الآن ✅\nالمصدر: ESPN — محسوب من نتائج المباريات المباشرة"
+    try:
+        await wait.delete()
+    except Exception:
+        pass
+    if path and os.path.exists(path):
+        await send_photo_path_markup(update.message, path, caption, kb)
+    else:
+        await update.message.reply_text(caption, reply_markup=kb)
+    await update.message.reply_text(build_groups_text(groups, "ESPN Live Results"))
+
+
+async def google_search_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نترك اسم الأمر كما هو، لكن للترتيب نعرض تشخيص ESPN الثابت بدل دوامة قوقل."""
+    body = parse_command_body_lines(update.message.text)
+    query = " ".join(body).strip() or "مباراة المكسيك كوريا الجنوبية"
+    if any(x in normalize_name(query) for x in ["ترتيب", "ترتيبات", "standings", "المجموعات"]):
+        msg = await update.message.reply_text("⏳ أفحص ESPN لترتيب المجموعات...")
+        try:
+            groups = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_standings_from_espn_live_results), timeout=35)
+        except Exception as e:
+            await msg.edit_text("نتيجة فحص ESPN:\n" + f"error: {str(e)[:500]}")
+            return
+        if not groups:
+            await msg.edit_text("نتيجة فحص ESPN:\nلم يرجع مباريات كافية لحساب الترتيب الآن.")
+            return
+        lines = ["نتيجة فحص ESPN:", f"groups_read: {len(groups)}"]
+        for title, rows in groups[:4]:
+            lines.append(f"{title}: " + "، ".join([f"{r[0]} {r[3]}" for r in rows[:4]]))
+        await msg.edit_text("\n".join(lines[:25]))
+        return
+    # للبحث العادي نستخدم الأمر السابق إن وجد، وإلا رد مختصر
+    try:
+        if '_V11_PREV_GOOGLE_SEARCH_DEBUG_COMMAND' in globals() and _V11_PREV_GOOGLE_SEARCH_DEBUG_COMMAND:
+            return await _V11_PREV_GOOGLE_SEARCH_DEBUG_COMMAND(update, context)
+    except Exception:
+        pass
+    await update.message.reply_text("استخدم /ترتيب_المجموعات_الان لترتيب المجموعات أو /مباشر للمباريات.")
+
+# ==================== END V22 HARD STABLE PATCH ====================
+
 if __name__ == "__main__":
     main()
