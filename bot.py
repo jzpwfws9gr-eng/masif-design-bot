@@ -3,7 +3,6 @@ import re
 import json
 import shutil
 import asyncio
-import time
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 import difflib
@@ -5302,7 +5301,7 @@ def create_matches_template_image(day_name, matches, use_template=True):
         rounded_rect(draw, (92, y, width-92, y+row_h), radius=28, fill="#0B1020", outline=accent, width=2)
         cy = y + row_h//2
 
-        # V18: تكبير الأعلام
+        # V17: تكبير الأعلام
         flag_w = min(150, max(94, row_h - 18))
         paste_flag(img, a, (width-238, cy-flag_w//2, width-238+flag_w, cy+flag_w//2))
         paste_flag(img, b, (238-flag_w, cy-flag_w//2, 238, cy+flag_w//2))
@@ -5391,10 +5390,10 @@ def create_group_standing_image(group_title, rows, use_template=True):
         rounded_rect(draw, (92, y, width-92, y+row_h), radius=26, fill="#0B1020", outline=accent, width=2)
         cy = y + row_h//2
 
-        # V18: الرقم داخل أكثر من الحافة
+        # V17: الرقم داخل أكثر من الحافة
         draw_text(draw, (1062, cy), str(i), get_font(max(28, name_size)), fill="#FDE68A" if i == 1 else "#FFFFFF")
 
-        # V18: تكبير أعلام الترتيب
+        # V17: تكبير أعلام الترتيب
         flag_w = min(120, max(76, row_h-18))
         paste_flag(img, team, (900, cy-flag_w//2, 900+flag_w, cy+flag_w//2))
 
@@ -5430,10 +5429,10 @@ def create_top_scorers_template_image(items, use_template=True):
         rounded_rect(draw, (92, y, width-92, y+row_h), radius=26, fill=fill, outline=accent, width=2)
         cy = y + row_h//2
 
-        # V18: الرقم داخل أكثر من الحافة
+        # V17: الرقم داخل أكثر من الحافة
         draw_text(draw, (1062, cy), str(i), get_font(max(30, name_size+4)), fill="#FDE68A")
 
-        # V18: تكبير العلم
+        # V17: تكبير العلم
         if team:
             flag_w = min(110, max(68, row_h-18))
             paste_flag(img, team, (885, cy-flag_w//2, 885+flag_w, cy+flag_w//2))
@@ -15200,393 +15199,6 @@ except Exception:
     pass
 
 # ==================== END V14 SAFE START PATCH ====================
-
-
-# ==================== V18 PLAYWRIGHT GOOGLE STANDINGS PATCH ====================
-# الاعتماد الجديد: ترتيب المجموعات يُسحب من صفحة قوقل نفسها عبر متصفح Chromium مخفي.
-# إذا قدرنا نحول النص إلى جدول: نصمم ترتيب المجموعات بهوية البوت.
-# إذا تغيّرت بنية قوقل أو النص كان غير قابل للتحويل: نرسل Screenshot من قوقل مباشرة بدل الرفض.
-
-_V18_GOOGLE_STANDINGS_QUERIES = [
-    "ترتيبات كأس العالم",
-    "ترتيب مجموعات كأس العالم 2026",
-    "FIFA World Cup 2026 standings",
-    "World Cup 2026 group standings",
-]
-
-# خريطة حروف المجموعات العربية إلى الإنجليزية المستخدمة داخل التصميم
-_V18_GROUP_LETTERS_AR = {
-    "أ": "A", "ا": "A", "ب": "B", "ج": "C", "د": "D", "هـ": "E", "ه": "E", "و": "F",
-    "ز": "G", "ح": "H", "ط": "I", "ي": "J", "ك": "K", "ل": "L",
-}
-
-
-def _v17_build_google_url(query):
-    from urllib.parse import urlencode
-    params = {
-        "q": query,
-        "hl": "ar-SA",
-        "gl": "sa",
-        "pws": "0",
-        "igu": "1",
-    }
-    return "https://www.google.com/search?" + urlencode(params)
-
-
-def _v17_normalize_ar_digits(s):
-    trans = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
-    return str(s or "").translate(trans)
-
-
-def _v17_clean_google_text(text):
-    text = _v17_normalize_ar_digits(text)
-    text = text.replace("\u200f", "").replace("\u200e", "")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def _v17_group_key_from_title(line):
-    s = str(line or "").strip()
-    m = re.search(r"المجموعة\s*([أابجدهـهوزحطيكلA-L])", s, re.I)
-    if m:
-        ch = m.group(1)
-        return _V18_GROUP_LETTERS_AR.get(ch, ch.upper())
-    m = re.search(r"Group\s*([A-L])", s, re.I)
-    if m:
-        return m.group(1).upper()
-    return ""
-
-
-def _v17_parse_row_numbers_after_team(section, team):
-    # محاولة حذرة فقط؛ إذا لم نجد أرقامًا واضحة لا نخترع ترتيبًا.
-    idx = section.find(team)
-    if idx < 0:
-        return None
-    chunk = section[idx:idx + 260]
-    nums = [int(x) for x in re.findall(r"(?<!\d)(?:[-+]?\d+)(?!\d)", chunk)]
-    # غالبًا يظهر المركز أولًا ثم لعب/ف/ت/خ/نقاط/له/عليه أو مشابه.
-    # نأخذ أرقامًا معقولة: لعب 0-3، نقاط 0-9، فارق -20..20.
-    if len(nums) < 3:
-        return None
-    # تخلص من رقم المركز إن كان أول رقم بين 1 و4 ويأتي قبل/قريب من الاسم
-    if nums and 1 <= nums[0] <= 4:
-        nums2 = nums[1:]
-    else:
-        nums2 = nums[:]
-    played = None
-    pts = None
-    diff = 0
-    # نقاط كأس العالم بعد جولتين عادة <= 6، لكن خله <= 12 احتياطًا
-    plausible = [n for n in nums2 if 0 <= n <= 12]
-    if len(plausible) >= 2:
-        # نبحث عن لعب 0-3 وأكبر رقم محتمل كنقاط
-        for n in plausible:
-            if 0 <= n <= 3:
-                played = n
-                break
-        pts = max(plausible)
-    # فارق أهداف إذا ظهر رقم بعلامة + أو - حول الفريق
-    dm = re.search(r"[+\-]\d+", chunk)
-    if dm:
-        try:
-            diff = int(dm.group(0))
-        except Exception:
-            diff = 0
-    if played is None or pts is None:
-        return None
-    return played, diff, pts
-
-
-def _v17_parse_google_standings_text(text):
-    """يحاول تحويل نص صفحة قوقل إلى groups بالصيغة: [(title, [(team, played, diff, pts), ...])].
-    إذا لم تكن القراءة واثقة يرجع [] حتى نرسل Screenshot بدل ترتيب مخترع.
-    """
-    text = _v17_clean_google_text(text)
-    if not text:
-        return []
-
-    group_headers = []
-    for m in re.finditer(r"(?:المجموعة\s*[أابجدهـهوزحطيكل]|Group\s*[A-L])", text, re.I):
-        g = _v17_group_key_from_title(m.group(0))
-        if g:
-            group_headers.append((m.start(), g, m.group(0)))
-    group_headers.sort()
-
-    results = []
-    known_groups = WORLD_CUP_GROUPS if 'WORLD_CUP_GROUPS' in globals() else []
-    by_letter = {g: teams for g, teams in known_groups}
-
-    if group_headers:
-        for i, (pos, g, raw_title) in enumerate(group_headers):
-            end = group_headers[i + 1][0] if i + 1 < len(group_headers) else min(len(text), pos + 2500)
-            section = text[pos:end]
-            teams = by_letter.get(g, [])
-            rows = []
-            for team in teams:
-                # جرّب الاسم الرسمي وبعض التنظيفات
-                if team in section:
-                    parsed = _v17_parse_row_numbers_after_team(section, team)
-                    if parsed:
-                        rows.append((team, parsed[0], parsed[1], parsed[2]))
-            if len(rows) >= 2:
-                # الترتيب حسب ظهور الفريق في القسم، ثم النقاط تنازليًا كاحتياط إذا الظهور غير واضح
-                try:
-                    rows.sort(key=lambda r: section.find(r[0]) if section.find(r[0]) >= 0 else 9999)
-                except Exception:
-                    rows.sort(key=lambda r: (-int(r[3]), -int(r[2]), r[0]))
-                results.append((f"المجموعة {g}", rows[:4]))
-
-    # إن لم نجد عناوين مجموعات، جرّب تجميع حسب أسماء الفرق الموجودة معًا في النص.
-    if not results and known_groups:
-        for g, teams in known_groups:
-            if sum(1 for t in teams if t in text) >= 3:
-                # خذ مقطع بين أول وآخر فريق من المجموعة
-                positions = [text.find(t) for t in teams if text.find(t) >= 0]
-                section = text[max(0, min(positions) - 300): min(len(text), max(positions) + 900)]
-                rows = []
-                for team in teams:
-                    parsed = _v17_parse_row_numbers_after_team(section, team)
-                    if parsed:
-                        rows.append((team, parsed[0], parsed[1], parsed[2]))
-                if len(rows) >= 2:
-                    rows.sort(key=lambda r: section.find(r[0]) if section.find(r[0]) >= 0 else 9999)
-                    results.append((f"المجموعة {g}", rows[:4]))
-
-    # لا نعتمد نتيجة ضعيفة جدًا. مجموعتان على الأقل، أو مجموعة واحدة كاملة.
-    if len(results) >= 2 or any(len(rows) >= 4 for _t, rows in results):
-        return results
-    return []
-
-
-def _v17_open_google_standings_with_playwright(query=None, screenshot_name=None):
-    """يفتح قوقل فعليًا عبر Chromium. يرجع dict فيه: groups/text/screenshot/error/query."""
-    query = query or _V18_GOOGLE_STANDINGS_QUERIES[0]
-    ensure_generated_dir()
-    screenshot_name = screenshot_name or f"google_standings_{int(time.time())}.png"
-    screenshot_path = os.path.join(GENERATED_DIR, screenshot_name)
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception as e:
-        return {
-            "ok": False,
-            "error": "playwright_not_installed",
-            "detail": str(e),
-            "query": query,
-            "screenshot": "",
-            "groups": [],
-            "text": "",
-        }
-
-    url = _v17_build_google_url(query)
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--disable-blink-features=AutomationControlled",
-                ],
-            )
-            page = browser.new_page(
-                viewport={"width": 950, "height": 1700},
-                locale="ar-SA",
-                timezone_id="Asia/Riyadh",
-                user_agent=(
-                    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-                ),
-            )
-            page.set_default_timeout(12000)
-            page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            try:
-                page.wait_for_load_state("networkidle", timeout=4000)
-            except Exception:
-                pass
-            # حاول الضغط على الترتيب إذا ظهر الزر كنص
-            for label in ["الترتيب", "Standings", "Rankings"]:
-                try:
-                    loc = page.get_by_text(label, exact=True)
-                    if loc.count() > 0:
-                        loc.first.click(timeout=1200)
-                        page.wait_for_timeout(800)
-                        break
-                except Exception:
-                    pass
-            # أحيانًا يحتاج انتظار بسيط حتى تظهر الجداول
-            page.wait_for_timeout(1200)
-            try:
-                text = page.locator("body").inner_text(timeout=3000)
-            except Exception:
-                text = ""
-            try:
-                page.screenshot(path=screenshot_path, full_page=False)
-            except Exception:
-                screenshot_path = ""
-            try:
-                browser.close()
-            except Exception:
-                pass
-        groups = _v17_parse_google_standings_text(text)
-        return {
-            "ok": True,
-            "error": "",
-            "detail": "",
-            "query": query,
-            "screenshot": screenshot_path,
-            "groups": groups,
-            "text": text,
-        }
-    except Exception as e:
-        return {
-            "ok": False,
-            "error": "playwright_failed",
-            "detail": repr(e),
-            "query": query,
-            "screenshot": screenshot_path if os.path.exists(screenshot_path) else "",
-            "groups": [],
-            "text": "",
-        }
-
-
-def fetch_standings_from_playwright_google():
-    """يحاول كل استعلامات قوقل. يرجع groups, source, screenshot_path, diagnostic."""
-    last = None
-    for q in _V18_GOOGLE_STANDINGS_QUERIES:
-        res = _v17_open_google_standings_with_playwright(q)
-        last = res
-        if res.get("groups"):
-            return res["groups"], f"Google مباشر / Playwright — {q}", res.get("screenshot", ""), ""
-        # إذا عندنا Screenshot مرئية من قوقل، احتفظ بها كحل نهائي بدل الرفض
-        if res.get("screenshot") and os.path.exists(res.get("screenshot")):
-            # لا نرجع مباشرة؛ نجرب الاستعلامات الأخرى أولًا
-            pass
-    if last:
-        detail = last.get("detail") or last.get("error") or "لم أتمكن من تحويل جدول قوقل إلى بيانات نصية"
-        return [], "Google مباشر / Playwright", last.get("screenshot", ""), detail
-    return [], "Google مباشر / Playwright", "", "تعذر فتح قوقل"
-
-
-try:
-    _V18_OLD_FETCH_CURRENT_GROUPS = fetch_current_groups
-except Exception:
-    _V18_OLD_FETCH_CURRENT_GROUPS = None
-
-
-def fetch_current_groups(mode="latest"):
-    """للترتيب نعطي قوقل المباشر الأولوية. لو فشل التحويل، ترجع [] ويتعامل الأمر مع Screenshot."""
-    mode_n = normalize_name(mode or "latest").lower() if 'normalize_name' in globals() else str(mode or "latest").lower()
-    if mode_n in ["latest", "الأحدث", "الاحدث", "google", "قوقل", "سريع", "fast", "official", "رسمي"]:
-        groups, src, _shot, _diag = fetch_standings_from_playwright_google()
-        if groups:
-            return groups, src
-    if _V18_OLD_FETCH_CURRENT_GROUPS:
-        return _V18_OLD_FETCH_CURRENT_GROUPS(mode)
-    return [], ""
-
-
-async def current_groups_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
-    text = update.message.text if getattr(update, 'message', None) else ""
-    mode = mode_override
-    if not mode:
-        m = re.search(r"\*\s*(رسمي|سريع|الأحدث|الاحدث|official|fast|latest|google|قوقل|365|٣٦٥|كورة|كوره|kooora)\s*$", text or "", re.I)
-        mode = m.group(1) if m else "latest"
-    payload = {"kind": "standings"}
-    kb = source_keyboard(context, payload) if 'source_keyboard' in globals() else None
-    wait = await update.message.reply_text("⏳ أفتح قوقل مباشرة وآخذ لقطة ترتيب المجموعات...")
-
-    try:
-        groups, source_label, screenshot_path, diag = await _asyncio_v6.wait_for(
-            _asyncio_v6.to_thread(fetch_standings_from_playwright_google), timeout=35
-        )
-    except Exception as e:
-        groups, source_label, screenshot_path, diag = [], "Google مباشر / Playwright", "", repr(e)
-
-    if groups:
-        path = create_all_groups_newlook_image(groups) if 'create_all_groups_newlook_image' in globals() else create_all_groups_image(groups)
-        caption = f"ترتيب المجموعات الآن ✅\nالمصدر: {source_label}\nملاحظة: الترتيب مسحوب من قوقل مباشرة."
-        try:
-            await wait.delete()
-        except Exception:
-            pass
-        await send_photo_path_markup(update.message, path, caption, kb)
-        try:
-            await update.message.reply_text(build_groups_text(groups, source_label))
-        except Exception:
-            pass
-        return
-
-    # إذا لم نقدر نحول الجدول، نرسل Screenshot قوقل نفسه؛ هذا يحقق طلب المستخدم بالسحب من قوقل مباشرة.
-    if screenshot_path and os.path.exists(screenshot_path):
-        try:
-            await wait.delete()
-        except Exception:
-            pass
-        cap = (
-            "ترتيب المجموعات من قوقل مباشرة 📊\n"
-            "أرسلت لك لقطة مباشرة من قوقل، وبعدها نقدر نحسن تحويلها لتصميم.\n"
-            "المصدر: Google مباشر / Playwright"
-        )
-        await send_photo_path_markup(update.message, screenshot_path, cap, kb)
-        return
-
-    # Playwright غير مثبت أو Chromium غير موجود.
-    if "playwright_not_installed" in str(diag) or "No module named" in str(diag):
-        await wait.edit_text(
-            "❌ Playwright غير مركّب على Railway.\n\n"
-            "ركّبها كذا:\n"
-            "1) أضف playwright في requirements.txt\n"
-            "2) Start Command:\n"
-            "python -m playwright install chromium && python bot.py\n\n"
-            "ولو احتاج Chromium dependencies استخدم:\n"
-            "python -m playwright install --with-deps chromium && python bot.py",
-            reply_markup=kb,
-        )
-        return
-
-    await wait.edit_text(
-        "❌ تعذر فتح قوقل أو أخذ لقطة الترتيب.\n"
-        f"التشخيص: {diag}\n\n"
-        "تأكد أن Start Command يحتوي:\n"
-        "python -m playwright install chromium && python bot.py",
-        reply_markup=kb,
-    )
-
-
-async def google_search_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    body = parse_command_body_lines(update.message.text) if 'parse_command_body_lines' in globals() else []
-    query = " ".join(body).strip() or "ترتيبات كأس العالم"
-    msg = await update.message.reply_text(f"⏳ أفحص قوقل مباشرة: {query}")
-    try:
-        res = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(_v17_open_google_standings_with_playwright, query), timeout=35)
-    except Exception as e:
-        await msg.edit_text(f"❌ فشل فتح قوقل مباشرة: {e}")
-        return
-    lines = [
-        "نتيجة فحص قوقل المباشر:",
-        f"query: {res.get('query')}",
-        f"ok: {res.get('ok')}",
-        f"groups_read: {len(res.get('groups') or [])}",
-        f"screenshot: {'موجود' if res.get('screenshot') else 'غير موجود'}",
-    ]
-    if res.get('error'):
-        lines.append(f"error: {res.get('error')}")
-    if res.get('detail'):
-        lines.append(f"detail: {str(res.get('detail'))[:500]}")
-    preview = _v17_clean_google_text(res.get('text') or '')[:1200]
-    if preview:
-        lines.append("\nأول نص من الصفحة:")
-        lines.append(preview)
-    await msg.edit_text("\n".join(lines)[:3900])
-    if res.get('screenshot') and os.path.exists(res.get('screenshot')):
-        try:
-            await send_photo_path_markup(update.message, res.get('screenshot'), "Screenshot من قوقل المباشر")
-        except Exception:
-            pass
-
-# ==================== END V18 PLAYWRIGHT GOOGLE STANDINGS PATCH ====================
 
 if __name__ == "__main__":
     main()
