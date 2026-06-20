@@ -6303,6 +6303,551 @@ def _source_help_text(kind, mode):
     return f"تعذر جلب البيانات من مصدر {mode_label_ar(mode)} ❌"
 
 
+
+# ==================== V25 FIXTURES DESIGN OVERRIDE ====================
+# هذا القسم يتعمد تعريف دوال /مباريات مرة أخيرة قبل التشغيل.
+# الهدف:
+# - /مباريات 20/06 = نفس تصميم /مباريات_اليوم الرئيسي (تصميم 2)
+# - اختيار يوم من الأزرار = يظهر زرين تصميم 1 وتصميم 2
+# - تصميم 1 = مضغوط بخلفية التمثال بدون الكلام الكبير فوق
+# - تصميم 2 = التصميم الرئيسي المعتمد V31 /مباريات_اليوم
+# - /مباريات_مجمعة = تصميم مضغوط لعدة أيام
+# - حذف تكرار المباريات داخل نفس اليوم
+
+def _v25_safe_txt(x):
+    return str(x or "").strip()
+
+
+def _v25_dedupe_fixture_matches(matches):
+    seen = set()
+    out = []
+    for m in matches or []:
+        t1 = _v25_safe_txt(m.get("team1"))
+        t2 = _v25_safe_txt(m.get("team2"))
+        tm = _v25_safe_txt(m.get("time"))
+        dt = _v25_safe_txt(m.get("date"))
+        key = (
+            re.sub(r"\s+", " ", t1.replace("ـ", "")).strip(),
+            re.sub(r"\s+", " ", t2.replace("ـ", "")).strip(),
+            re.sub(r"\s+", " ", tm).strip(),
+            dt,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(dict(m))
+    return out
+
+
+def _v25_fixture_simple_matches(date):
+    rows = _v25_dedupe_fixture_matches(_fixtures_for_date(date))
+    simple = []
+    for m in rows:
+        simple.append((
+            _v25_safe_txt(m.get("team1")),
+            _v25_safe_txt(m.get("team2")),
+            _v25_safe_txt(m.get("time")),
+        ))
+    return rows, simple
+
+
+def _v25_fixture_title(date):
+    d = _normalize_date_arg(date)
+    day = ""
+    for x, dy in _fixture_dates():
+        if x == d:
+            day = dy
+            break
+    return f"{day} {d[:5]}".strip()
+
+
+def _fixtures_caption(date_or_title, source="PDF جدول البطولة"):
+    return f"{date_or_title}\nالمصدر: {source}\nالمصيف يضعكم بالحدث"
+
+
+def _v25_compact_bg(w=1080, h=1350):
+    """
+    خلفية التمثال النظيفة للمضغوط بدون عنوان GAMES الكبير.
+    """
+    candidates = [
+        "games_v31_clean_bg.png",
+        os.path.join("assets", "templates", "games_v31_clean_bg.png"),
+        "games_v31_full_bg.png",
+        os.path.join("assets", "templates", "games_v31_full_bg.png"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                bg = Image.open(p).convert("RGB").resize((w, h))
+                ov = Image.new("RGBA", (w, h), (0, 10, 30, 120))
+                return Image.alpha_composite(bg.convert("RGBA"), ov).convert("RGB")
+            except Exception:
+                pass
+    return Image.new("RGB", (w, h), "#071329")
+
+
+def _v25_draw_compact_match(draw, box, m):
+    x0, y0, x1, y1 = box
+    try:
+        draw.rounded_rectangle(box, radius=22, fill=(5,24,58,225), outline=(38,151,255,190), width=2)
+    except Exception:
+        draw.rectangle(box, fill=(5,24,58), outline=(38,151,255), width=2)
+
+    # الوقت يمين
+    draw_text(draw, (x1-35, y0+38), _v25_safe_txt(m.get("time")), get_font(27), fill="#FBBF24", anchor="rm", max_width=190)
+
+    # المباراة بالنص
+    text = f"{_v25_safe_txt(m.get('team1'))} × {_v25_safe_txt(m.get('team2'))}"
+    draw_text(draw, ((x0+x1)//2, y0+36), text, get_font(30), fill="#FFFFFF", max_width=(x1-x0)-260)
+
+    sub = _v25_safe_txt(m.get("stage"))
+    if m.get("group"):
+        sub += f" - {_v25_safe_txt(m.get('group'))}"
+    draw_text(draw, ((x0+x1)//2, y0+75), sub, get_font(21), fill="#CBD5E1", max_width=(x1-x0)-160)
+
+
+def _render_fixture_day_compact(date):
+    """
+    تصميم 1: مضغوط، خلفية التمثال، بدون الكلام الكبير فوق.
+    """
+    rows = _v25_dedupe_fixture_matches(_fixtures_for_date(date))
+    if not rows:
+        return []
+
+    chunks = [rows[i:i+8] for i in range(0, len(rows), 8)]
+    paths = []
+
+    for page, chunk in enumerate(chunks, 1):
+        h = 1350
+        img = _v25_compact_bg(1080, h)
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        y = 105
+        # شريط التاريخ فقط بدون عنوان كبير
+        try:
+            draw.rounded_rectangle((120, y, 960, y+62), radius=22, fill=(251,191,36,235))
+        except Exception:
+            draw.rectangle((120, y, 960, y+62), fill=(251,191,36))
+        title = _v25_fixture_title(date)
+        if len(chunks) > 1:
+            title += f" | {page}/{len(chunks)}"
+        draw_text(draw, (540, y+31), title, get_font(34), fill="#061329", max_width=780)
+
+        y += 92
+        for m in chunk:
+            _v25_draw_compact_match(draw, (70, y, 1010, y+104), m)
+            y += 122
+
+        draw.line((250, 1238, 830, 1238), fill=(255,255,255,180), width=2)
+        draw_text(draw, (540, 1284), "المصيف يضعكم بالحدث", get_font(30), fill="#FBBF24")
+
+        path = os.path.join(GENERATED_DIR, f"fixtures_compact_{date.replace('/','_')}_{page}.png")
+        img.save(path, quality=96)
+        paths.append(path)
+
+    return paths
+
+
+def _render_fixture_day_by_design(date, design=2):
+    """
+    design=1 => مضغوط
+    design=2 => نفس تصميم /مباريات_اليوم الرئيسي
+    """
+    rows, simple_matches = _v25_fixture_simple_matches(date)
+    if not simple_matches:
+        return []
+
+    if int(design) == 1:
+        return _render_fixture_day_compact(date)
+
+    # تصميم 2: نفس تصميم /مباريات_اليوم
+    chunks = [simple_matches[i:i+7] for i in range(0, len(simple_matches), 7)]
+    paths = []
+
+    for page_idx, chunk in enumerate(chunks, start=1):
+        page_title = _v25_fixture_title(date)
+        if len(chunks) > 1:
+            page_title = f"{page_title} | {page_idx}/{len(chunks)}"
+
+        # هذا هو التصميم المعتمد نفسه حق /مباريات_اليوم
+        path = create_matches_today_v31_full_image(page_title, chunk)
+        final_path = os.path.join(
+            GENERATED_DIR,
+            f"fixtures_day_design2_{date.replace('/','_')}_{page_idx}.png"
+        )
+        try:
+            Image.open(path).save(final_path, quality=96)
+            paths.append(final_path)
+        except Exception:
+            paths.append(path)
+
+    return paths
+
+
+def render_fixtures_combined_images(dates):
+    """
+    تصميم مجمع: خلفية التمثال بدون الكلام الكبير فوق.
+    إذا كثرت الأيام يقسم كل 3 أيام في صورة.
+    """
+    dates = [_normalize_date_arg(d) for d in dates if _normalize_date_arg(d)]
+    dates = [d for d in dates if _fixtures_for_date(d)]
+    # إزالة تكرار التواريخ مع الحفاظ على الترتيب
+    clean_dates = []
+    for d in dates:
+        if d not in clean_dates:
+            clean_dates.append(d)
+    dates = clean_dates
+
+    if not dates:
+        return []
+
+    date_chunks = [dates[i:i+3] for i in range(0, len(dates), 3)]
+    paths = []
+
+    for page, dchunk in enumerate(date_chunks, 1):
+        rows = []
+        for d in dchunk:
+            rows.append(("date", d))
+            for m in _v25_dedupe_fixture_matches(_fixtures_for_date(d)):
+                rows.append(("match", m))
+
+        h = max(1350, 170 + len(rows)*112 + 140)
+        h = min(h, 2400)
+        img = _v25_compact_bg(1080, h)
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        y = 90
+        if len(date_chunks) > 1:
+            draw_text(draw, (540, 42), f"صفحة {page}/{len(date_chunks)}", get_font(24), fill="#FBBF24")
+
+        for kind, val in rows:
+            if y > h - 135:
+                break
+
+            if kind == "date":
+                try:
+                    draw.rounded_rectangle((90, y, 990, y+54), radius=20, fill=(251,191,36,235))
+                except Exception:
+                    draw.rectangle((90, y, 990, y+54), fill=(251,191,36))
+                draw_text(draw, (540, y+27), _v25_fixture_title(val), get_font(31), fill="#061329", max_width=830)
+                y += 72
+            else:
+                _v25_draw_compact_match(draw, (75, y, 1005, y+96), val)
+                y += 112
+
+        draw.line((250, h-88, 830, h-88), fill=(255,255,255,180), width=2)
+        draw_text(draw, (540, h-48), "المصيف يضعكم بالحدث", get_font(29), fill="#FBBF24")
+
+        path = os.path.join(GENERATED_DIR, f"fixtures_combined_v25_{page}_{datetime.now().strftime('%H%M%S')}.png")
+        img.save(path, quality=96)
+        paths.append(path)
+
+    return paths
+
+
+def _fixtures_day_keyboard(date):
+    rows = [
+        [
+            InlineKeyboardButton("تصميم 1", callback_data=f"fx|render1|{date}"),
+            InlineKeyboardButton("تصميم 2", callback_data=f"fx|render2|{date}")
+        ]
+    ]
+
+    miss = [m for m in _fixtures_for_date(date) if _has_unknown(m)]
+    for i, m in enumerate(miss, 1):
+        rows.append([InlineKeyboardButton(f"تحديث مباراة {i} — {m.get('time')}", callback_data=f"fx|upd|{m.get('id')}")])
+
+    rows.append([InlineKeyboardButton("رجوع للأيام", callback_data="fx|menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fixtures_dates_keyboard(mode="single", selected=None):
+    selected = set(selected or [])
+    rows = []
+    row = []
+
+    for d, day in _fixture_dates():
+        label = f"{'✅ ' if d in selected else ''}{day} {d[:5]}"
+        data = f"fx|toggle|{d}" if mode == "multi" else f"fx|day|{d}"
+        row.append(InlineKeyboardButton(label, callback_data=data))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+
+    if row:
+        rows.append(row)
+
+    if mode == "multi":
+        rows.append([
+            InlineKeyboardButton("تصميم كل يوم", callback_data="fx|render_each"),
+            InlineKeyboardButton("تصميم واحد", callback_data="fx|render_combo"),
+        ])
+        rows.append([
+            InlineKeyboardButton("تصفير الاختيار", callback_data="fx|clear"),
+            InlineKeyboardButton("رجوع", callback_data="fx|menu"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton("اختيار أكثر من يوم", callback_data="fx|multi")])
+
+    return InlineKeyboardMarkup(rows)
+
+
+def _fixtures_day_text(date):
+    rows, matches = _v25_fixture_simple_matches(date)
+    if not matches:
+        return "ما فيه مباريات لهذا التاريخ."
+
+    lines = [f"{_v25_fixture_title(date)}", ""]
+    for i, m in enumerate(rows, 1):
+        lines.append(f"{i}) {_v25_safe_txt(m.get('team1'))} × {_v25_safe_txt(m.get('team2'))} — {_v25_safe_txt(m.get('time'))}")
+        extra = []
+        if m.get("stage"):
+            extra.append(_v25_safe_txt(m.get("stage")))
+        if m.get("group"):
+            extra.append(_v25_safe_txt(m.get("group")))
+        if extra:
+            lines.append("   " + " | ".join(extra))
+        if _has_unknown(m) and m.get("note"):
+            lines.append(f"   {_v25_safe_txt(m.get('note'))}")
+
+    return "\n".join(lines)
+
+
+async def fixtures_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text or ""
+    dates = _extract_fixture_dates_from_text(text)
+
+    if dates:
+        # تاريخ واحد: يصمم مباشرة بتصميم 2، نفس /مباريات_اليوم
+        if len(dates) == 1:
+            d = dates[0]
+            wait = await update.message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+            try:
+                paths = _render_fixture_day_by_design(d, design=2)
+                if not paths:
+                    await wait.edit_text(f"ما فيه مباريات بتاريخ {d}")
+                    return
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(update.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            except Exception as e:
+                await wait.edit_text(f"تعذر تصميم اليوم ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        # أكثر من تاريخ: مجمع
+        wait = await update.message.reply_text("⏳ جاري تصميم الأيام المجمعة...")
+        try:
+            paths = render_fixtures_combined_images(dates)
+            if not paths:
+                await wait.edit_text("ما لقيت مباريات للتواريخ المطلوبة.")
+                return
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+            for p in paths:
+                await send_photo_path(update.message, p, _fixtures_caption("مباريات مجمعة"))
+        except Exception as e:
+            await wait.edit_text(f"تعذر تصميم الأيام ❌\nالسبب: {str(e)[:400]}")
+        return
+
+    await update.message.reply_text("اختر اليوم أو اكتب:\n/مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+
+
+async def fixtures_combined_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text("اكتبها كذا:\n/مباريات_مجمعة 20/06 21/06 22/06")
+        return
+
+    wait = await update.message.reply_text("⏳ جاري تصميم المباريات المجمعة...")
+    try:
+        paths = render_fixtures_combined_images(dates)
+        if not paths:
+            await wait.edit_text("ما لقيت مباريات للتواريخ المطلوبة.")
+            return
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        for p in paths:
+            await send_photo_path(update.message, p, _fixtures_caption("مباريات مجمعة"))
+    except Exception as e:
+        await wait.edit_text(f"تعذر التصميم المجمع ❌\nالسبب: {str(e)[:400]}")
+
+
+async def fixtures_review_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text("اكتبها كذا:\n/مراجعة_مباراة 20/07")
+        return
+    for d in dates:
+        await update.message.reply_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+
+
+async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+
+    await q.answer()
+
+    if not is_admin_user(update):
+        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else ""
+
+    try:
+        if action == "menu":
+            await q.message.edit_text("اختر اليوم أو استخدم /مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+            return
+
+        if action == "multi":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+
+        if action == "toggle" and len(parts) >= 3:
+            d = parts[2]
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if d in sel:
+                sel.remove(d)
+            else:
+                sel.append(d)
+            context.user_data["fx_selected_dates"] = sel
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", sel))
+            return
+
+        if action == "clear":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+
+        if action == "day" and len(parts) >= 3:
+            d = parts[2]
+            await q.message.edit_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+            return
+
+        if action in ["render1", "render2"] and len(parts) >= 3:
+            d = parts[2]
+            design = 1 if action == "render1" else 2
+            wait = await q.message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+            try:
+                paths = _render_fixture_day_by_design(d, design=design)
+                if not paths:
+                    await wait.edit_text("ما فيه مباريات لهذا اليوم.")
+                    return
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(q.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            except Exception as e:
+                await wait.edit_text(f"تعذر تصميم اليوم ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        if action == "render_each":
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if not sel:
+                await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+                return
+            wait = await q.message.reply_text("⏳ جاري تصميم الأيام...")
+            try:
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for d in sel:
+                    for p in _render_fixture_day_by_design(d, design=2):
+                        await send_photo_path(q.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            except Exception as e:
+                await q.message.reply_text(f"تعذر التصميم ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        if action == "render_combo":
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if not sel:
+                await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+                return
+            wait = await q.message.reply_text("⏳ جاري التصميم المجمع...")
+            try:
+                paths = render_fixtures_combined_images(sel)
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(q.message, p, _fixtures_caption("مباريات مجمعة"))
+            except Exception as e:
+                await wait.edit_text(f"تعذر التصميم المجمع ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        if action == "upd" and len(parts) >= 3:
+            mid = parts[2]
+            m = _fixture_by_id(mid)
+            if not m:
+                await q.message.reply_text("لم أجد المباراة.")
+                return
+
+            context.user_data["fixture_update_match_id"] = mid
+            await q.message.reply_text(
+                f"اكتب طرفي المباراة لـ {mid} ({m.get('date')} {m.get('time')}) كذا:\n"
+                "الفريق الأول * الفريق الثاني\n\n"
+                "مثال: المكسيك * أستراليا\n"
+                "ملاحظة: سيتم الحفظ فقط، ولن يتم التصميم إلا عندما تطلب /مباريات التاريخ."
+            )
+            return
+
+        await q.message.reply_text("تعذر قراءة الخيار.")
+    except Exception as e:
+        await q.message.reply_text(f"تعذر تنفيذ خيار المباريات ❌\n{str(e)[:400]}")
+
+
+async def fixtures_update_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mid = context.user_data.get("fixture_update_match_id")
+    if not mid:
+        return
+
+    text = (update.message.text or "").strip()
+
+    if "*" in text:
+        a, b = [x.strip() for x in text.split("*", 1)]
+    elif "×" in text:
+        a, b = [x.strip() for x in text.split("×", 1)]
+    elif "-" in text:
+        a, b = [x.strip() for x in text.split("-", 1)]
+    else:
+        await update.message.reply_text("اكتبها كذا: الفريق الأول * الفريق الثاني")
+        return
+
+    if not a or not b:
+        await update.message.reply_text("اكتب اسم الفريقين كاملين.")
+        return
+
+    data = _load_fixture_updates()
+    data.setdefault(mid, {})
+    data[mid]["team1"] = canonical_team_name(a) or normalize_name(a)
+    data[mid]["team2"] = canonical_team_name(b) or normalize_name(b)
+    _save_fixture_updates(data)
+
+    context.user_data.pop("fixture_update_match_id", None)
+
+    m = _apply_fixture_updates(_fixture_by_id(mid) or {"id": mid})
+    await update.message.reply_text(
+        f"✅ تم حفظ تحديث المباراة\n"
+        f"{m.get('team1')} × {m.get('team2')} — {m.get('time', '')}\n\n"
+        f"لن أصمم الآن. وقت ما تبيها اكتب:\n/مباريات {m.get('date', '')}"
+    )
+
+# ==================== END V25 FIXTURES DESIGN OVERRIDE ====================
+
+
 async def api_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["فحص مصادر النتائج:", ""]
     # SerpApi
@@ -11428,6 +11973,551 @@ def build_live_caption(match, mode_label="رسمي"):
     return "\n".join(lines)
 
 
+
+# ==================== V25 FIXTURES DESIGN OVERRIDE ====================
+# هذا القسم يتعمد تعريف دوال /مباريات مرة أخيرة قبل التشغيل.
+# الهدف:
+# - /مباريات 20/06 = نفس تصميم /مباريات_اليوم الرئيسي (تصميم 2)
+# - اختيار يوم من الأزرار = يظهر زرين تصميم 1 وتصميم 2
+# - تصميم 1 = مضغوط بخلفية التمثال بدون الكلام الكبير فوق
+# - تصميم 2 = التصميم الرئيسي المعتمد V31 /مباريات_اليوم
+# - /مباريات_مجمعة = تصميم مضغوط لعدة أيام
+# - حذف تكرار المباريات داخل نفس اليوم
+
+def _v25_safe_txt(x):
+    return str(x or "").strip()
+
+
+def _v25_dedupe_fixture_matches(matches):
+    seen = set()
+    out = []
+    for m in matches or []:
+        t1 = _v25_safe_txt(m.get("team1"))
+        t2 = _v25_safe_txt(m.get("team2"))
+        tm = _v25_safe_txt(m.get("time"))
+        dt = _v25_safe_txt(m.get("date"))
+        key = (
+            re.sub(r"\s+", " ", t1.replace("ـ", "")).strip(),
+            re.sub(r"\s+", " ", t2.replace("ـ", "")).strip(),
+            re.sub(r"\s+", " ", tm).strip(),
+            dt,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(dict(m))
+    return out
+
+
+def _v25_fixture_simple_matches(date):
+    rows = _v25_dedupe_fixture_matches(_fixtures_for_date(date))
+    simple = []
+    for m in rows:
+        simple.append((
+            _v25_safe_txt(m.get("team1")),
+            _v25_safe_txt(m.get("team2")),
+            _v25_safe_txt(m.get("time")),
+        ))
+    return rows, simple
+
+
+def _v25_fixture_title(date):
+    d = _normalize_date_arg(date)
+    day = ""
+    for x, dy in _fixture_dates():
+        if x == d:
+            day = dy
+            break
+    return f"{day} {d[:5]}".strip()
+
+
+def _fixtures_caption(date_or_title, source="PDF جدول البطولة"):
+    return f"{date_or_title}\nالمصدر: {source}\nالمصيف يضعكم بالحدث"
+
+
+def _v25_compact_bg(w=1080, h=1350):
+    """
+    خلفية التمثال النظيفة للمضغوط بدون عنوان GAMES الكبير.
+    """
+    candidates = [
+        "games_v31_clean_bg.png",
+        os.path.join("assets", "templates", "games_v31_clean_bg.png"),
+        "games_v31_full_bg.png",
+        os.path.join("assets", "templates", "games_v31_full_bg.png"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                bg = Image.open(p).convert("RGB").resize((w, h))
+                ov = Image.new("RGBA", (w, h), (0, 10, 30, 120))
+                return Image.alpha_composite(bg.convert("RGBA"), ov).convert("RGB")
+            except Exception:
+                pass
+    return Image.new("RGB", (w, h), "#071329")
+
+
+def _v25_draw_compact_match(draw, box, m):
+    x0, y0, x1, y1 = box
+    try:
+        draw.rounded_rectangle(box, radius=22, fill=(5,24,58,225), outline=(38,151,255,190), width=2)
+    except Exception:
+        draw.rectangle(box, fill=(5,24,58), outline=(38,151,255), width=2)
+
+    # الوقت يمين
+    draw_text(draw, (x1-35, y0+38), _v25_safe_txt(m.get("time")), get_font(27), fill="#FBBF24", anchor="rm", max_width=190)
+
+    # المباراة بالنص
+    text = f"{_v25_safe_txt(m.get('team1'))} × {_v25_safe_txt(m.get('team2'))}"
+    draw_text(draw, ((x0+x1)//2, y0+36), text, get_font(30), fill="#FFFFFF", max_width=(x1-x0)-260)
+
+    sub = _v25_safe_txt(m.get("stage"))
+    if m.get("group"):
+        sub += f" - {_v25_safe_txt(m.get('group'))}"
+    draw_text(draw, ((x0+x1)//2, y0+75), sub, get_font(21), fill="#CBD5E1", max_width=(x1-x0)-160)
+
+
+def _render_fixture_day_compact(date):
+    """
+    تصميم 1: مضغوط، خلفية التمثال، بدون الكلام الكبير فوق.
+    """
+    rows = _v25_dedupe_fixture_matches(_fixtures_for_date(date))
+    if not rows:
+        return []
+
+    chunks = [rows[i:i+8] for i in range(0, len(rows), 8)]
+    paths = []
+
+    for page, chunk in enumerate(chunks, 1):
+        h = 1350
+        img = _v25_compact_bg(1080, h)
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        y = 105
+        # شريط التاريخ فقط بدون عنوان كبير
+        try:
+            draw.rounded_rectangle((120, y, 960, y+62), radius=22, fill=(251,191,36,235))
+        except Exception:
+            draw.rectangle((120, y, 960, y+62), fill=(251,191,36))
+        title = _v25_fixture_title(date)
+        if len(chunks) > 1:
+            title += f" | {page}/{len(chunks)}"
+        draw_text(draw, (540, y+31), title, get_font(34), fill="#061329", max_width=780)
+
+        y += 92
+        for m in chunk:
+            _v25_draw_compact_match(draw, (70, y, 1010, y+104), m)
+            y += 122
+
+        draw.line((250, 1238, 830, 1238), fill=(255,255,255,180), width=2)
+        draw_text(draw, (540, 1284), "المصيف يضعكم بالحدث", get_font(30), fill="#FBBF24")
+
+        path = os.path.join(GENERATED_DIR, f"fixtures_compact_{date.replace('/','_')}_{page}.png")
+        img.save(path, quality=96)
+        paths.append(path)
+
+    return paths
+
+
+def _render_fixture_day_by_design(date, design=2):
+    """
+    design=1 => مضغوط
+    design=2 => نفس تصميم /مباريات_اليوم الرئيسي
+    """
+    rows, simple_matches = _v25_fixture_simple_matches(date)
+    if not simple_matches:
+        return []
+
+    if int(design) == 1:
+        return _render_fixture_day_compact(date)
+
+    # تصميم 2: نفس تصميم /مباريات_اليوم
+    chunks = [simple_matches[i:i+7] for i in range(0, len(simple_matches), 7)]
+    paths = []
+
+    for page_idx, chunk in enumerate(chunks, start=1):
+        page_title = _v25_fixture_title(date)
+        if len(chunks) > 1:
+            page_title = f"{page_title} | {page_idx}/{len(chunks)}"
+
+        # هذا هو التصميم المعتمد نفسه حق /مباريات_اليوم
+        path = create_matches_today_v31_full_image(page_title, chunk)
+        final_path = os.path.join(
+            GENERATED_DIR,
+            f"fixtures_day_design2_{date.replace('/','_')}_{page_idx}.png"
+        )
+        try:
+            Image.open(path).save(final_path, quality=96)
+            paths.append(final_path)
+        except Exception:
+            paths.append(path)
+
+    return paths
+
+
+def render_fixtures_combined_images(dates):
+    """
+    تصميم مجمع: خلفية التمثال بدون الكلام الكبير فوق.
+    إذا كثرت الأيام يقسم كل 3 أيام في صورة.
+    """
+    dates = [_normalize_date_arg(d) for d in dates if _normalize_date_arg(d)]
+    dates = [d for d in dates if _fixtures_for_date(d)]
+    # إزالة تكرار التواريخ مع الحفاظ على الترتيب
+    clean_dates = []
+    for d in dates:
+        if d not in clean_dates:
+            clean_dates.append(d)
+    dates = clean_dates
+
+    if not dates:
+        return []
+
+    date_chunks = [dates[i:i+3] for i in range(0, len(dates), 3)]
+    paths = []
+
+    for page, dchunk in enumerate(date_chunks, 1):
+        rows = []
+        for d in dchunk:
+            rows.append(("date", d))
+            for m in _v25_dedupe_fixture_matches(_fixtures_for_date(d)):
+                rows.append(("match", m))
+
+        h = max(1350, 170 + len(rows)*112 + 140)
+        h = min(h, 2400)
+        img = _v25_compact_bg(1080, h)
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        y = 90
+        if len(date_chunks) > 1:
+            draw_text(draw, (540, 42), f"صفحة {page}/{len(date_chunks)}", get_font(24), fill="#FBBF24")
+
+        for kind, val in rows:
+            if y > h - 135:
+                break
+
+            if kind == "date":
+                try:
+                    draw.rounded_rectangle((90, y, 990, y+54), radius=20, fill=(251,191,36,235))
+                except Exception:
+                    draw.rectangle((90, y, 990, y+54), fill=(251,191,36))
+                draw_text(draw, (540, y+27), _v25_fixture_title(val), get_font(31), fill="#061329", max_width=830)
+                y += 72
+            else:
+                _v25_draw_compact_match(draw, (75, y, 1005, y+96), val)
+                y += 112
+
+        draw.line((250, h-88, 830, h-88), fill=(255,255,255,180), width=2)
+        draw_text(draw, (540, h-48), "المصيف يضعكم بالحدث", get_font(29), fill="#FBBF24")
+
+        path = os.path.join(GENERATED_DIR, f"fixtures_combined_v25_{page}_{datetime.now().strftime('%H%M%S')}.png")
+        img.save(path, quality=96)
+        paths.append(path)
+
+    return paths
+
+
+def _fixtures_day_keyboard(date):
+    rows = [
+        [
+            InlineKeyboardButton("تصميم 1", callback_data=f"fx|render1|{date}"),
+            InlineKeyboardButton("تصميم 2", callback_data=f"fx|render2|{date}")
+        ]
+    ]
+
+    miss = [m for m in _fixtures_for_date(date) if _has_unknown(m)]
+    for i, m in enumerate(miss, 1):
+        rows.append([InlineKeyboardButton(f"تحديث مباراة {i} — {m.get('time')}", callback_data=f"fx|upd|{m.get('id')}")])
+
+    rows.append([InlineKeyboardButton("رجوع للأيام", callback_data="fx|menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fixtures_dates_keyboard(mode="single", selected=None):
+    selected = set(selected or [])
+    rows = []
+    row = []
+
+    for d, day in _fixture_dates():
+        label = f"{'✅ ' if d in selected else ''}{day} {d[:5]}"
+        data = f"fx|toggle|{d}" if mode == "multi" else f"fx|day|{d}"
+        row.append(InlineKeyboardButton(label, callback_data=data))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+
+    if row:
+        rows.append(row)
+
+    if mode == "multi":
+        rows.append([
+            InlineKeyboardButton("تصميم كل يوم", callback_data="fx|render_each"),
+            InlineKeyboardButton("تصميم واحد", callback_data="fx|render_combo"),
+        ])
+        rows.append([
+            InlineKeyboardButton("تصفير الاختيار", callback_data="fx|clear"),
+            InlineKeyboardButton("رجوع", callback_data="fx|menu"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton("اختيار أكثر من يوم", callback_data="fx|multi")])
+
+    return InlineKeyboardMarkup(rows)
+
+
+def _fixtures_day_text(date):
+    rows, matches = _v25_fixture_simple_matches(date)
+    if not matches:
+        return "ما فيه مباريات لهذا التاريخ."
+
+    lines = [f"{_v25_fixture_title(date)}", ""]
+    for i, m in enumerate(rows, 1):
+        lines.append(f"{i}) {_v25_safe_txt(m.get('team1'))} × {_v25_safe_txt(m.get('team2'))} — {_v25_safe_txt(m.get('time'))}")
+        extra = []
+        if m.get("stage"):
+            extra.append(_v25_safe_txt(m.get("stage")))
+        if m.get("group"):
+            extra.append(_v25_safe_txt(m.get("group")))
+        if extra:
+            lines.append("   " + " | ".join(extra))
+        if _has_unknown(m) and m.get("note"):
+            lines.append(f"   {_v25_safe_txt(m.get('note'))}")
+
+    return "\n".join(lines)
+
+
+async def fixtures_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text or ""
+    dates = _extract_fixture_dates_from_text(text)
+
+    if dates:
+        # تاريخ واحد: يصمم مباشرة بتصميم 2، نفس /مباريات_اليوم
+        if len(dates) == 1:
+            d = dates[0]
+            wait = await update.message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+            try:
+                paths = _render_fixture_day_by_design(d, design=2)
+                if not paths:
+                    await wait.edit_text(f"ما فيه مباريات بتاريخ {d}")
+                    return
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(update.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            except Exception as e:
+                await wait.edit_text(f"تعذر تصميم اليوم ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        # أكثر من تاريخ: مجمع
+        wait = await update.message.reply_text("⏳ جاري تصميم الأيام المجمعة...")
+        try:
+            paths = render_fixtures_combined_images(dates)
+            if not paths:
+                await wait.edit_text("ما لقيت مباريات للتواريخ المطلوبة.")
+                return
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+            for p in paths:
+                await send_photo_path(update.message, p, _fixtures_caption("مباريات مجمعة"))
+        except Exception as e:
+            await wait.edit_text(f"تعذر تصميم الأيام ❌\nالسبب: {str(e)[:400]}")
+        return
+
+    await update.message.reply_text("اختر اليوم أو اكتب:\n/مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+
+
+async def fixtures_combined_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text("اكتبها كذا:\n/مباريات_مجمعة 20/06 21/06 22/06")
+        return
+
+    wait = await update.message.reply_text("⏳ جاري تصميم المباريات المجمعة...")
+    try:
+        paths = render_fixtures_combined_images(dates)
+        if not paths:
+            await wait.edit_text("ما لقيت مباريات للتواريخ المطلوبة.")
+            return
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        for p in paths:
+            await send_photo_path(update.message, p, _fixtures_caption("مباريات مجمعة"))
+    except Exception as e:
+        await wait.edit_text(f"تعذر التصميم المجمع ❌\nالسبب: {str(e)[:400]}")
+
+
+async def fixtures_review_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text("اكتبها كذا:\n/مراجعة_مباراة 20/07")
+        return
+    for d in dates:
+        await update.message.reply_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+
+
+async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+
+    await q.answer()
+
+    if not is_admin_user(update):
+        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else ""
+
+    try:
+        if action == "menu":
+            await q.message.edit_text("اختر اليوم أو استخدم /مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+            return
+
+        if action == "multi":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+
+        if action == "toggle" and len(parts) >= 3:
+            d = parts[2]
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if d in sel:
+                sel.remove(d)
+            else:
+                sel.append(d)
+            context.user_data["fx_selected_dates"] = sel
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", sel))
+            return
+
+        if action == "clear":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+
+        if action == "day" and len(parts) >= 3:
+            d = parts[2]
+            await q.message.edit_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+            return
+
+        if action in ["render1", "render2"] and len(parts) >= 3:
+            d = parts[2]
+            design = 1 if action == "render1" else 2
+            wait = await q.message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+            try:
+                paths = _render_fixture_day_by_design(d, design=design)
+                if not paths:
+                    await wait.edit_text("ما فيه مباريات لهذا اليوم.")
+                    return
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(q.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            except Exception as e:
+                await wait.edit_text(f"تعذر تصميم اليوم ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        if action == "render_each":
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if not sel:
+                await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+                return
+            wait = await q.message.reply_text("⏳ جاري تصميم الأيام...")
+            try:
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for d in sel:
+                    for p in _render_fixture_day_by_design(d, design=2):
+                        await send_photo_path(q.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            except Exception as e:
+                await q.message.reply_text(f"تعذر التصميم ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        if action == "render_combo":
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if not sel:
+                await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+                return
+            wait = await q.message.reply_text("⏳ جاري التصميم المجمع...")
+            try:
+                paths = render_fixtures_combined_images(sel)
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(q.message, p, _fixtures_caption("مباريات مجمعة"))
+            except Exception as e:
+                await wait.edit_text(f"تعذر التصميم المجمع ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        if action == "upd" and len(parts) >= 3:
+            mid = parts[2]
+            m = _fixture_by_id(mid)
+            if not m:
+                await q.message.reply_text("لم أجد المباراة.")
+                return
+
+            context.user_data["fixture_update_match_id"] = mid
+            await q.message.reply_text(
+                f"اكتب طرفي المباراة لـ {mid} ({m.get('date')} {m.get('time')}) كذا:\n"
+                "الفريق الأول * الفريق الثاني\n\n"
+                "مثال: المكسيك * أستراليا\n"
+                "ملاحظة: سيتم الحفظ فقط، ولن يتم التصميم إلا عندما تطلب /مباريات التاريخ."
+            )
+            return
+
+        await q.message.reply_text("تعذر قراءة الخيار.")
+    except Exception as e:
+        await q.message.reply_text(f"تعذر تنفيذ خيار المباريات ❌\n{str(e)[:400]}")
+
+
+async def fixtures_update_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mid = context.user_data.get("fixture_update_match_id")
+    if not mid:
+        return
+
+    text = (update.message.text or "").strip()
+
+    if "*" in text:
+        a, b = [x.strip() for x in text.split("*", 1)]
+    elif "×" in text:
+        a, b = [x.strip() for x in text.split("×", 1)]
+    elif "-" in text:
+        a, b = [x.strip() for x in text.split("-", 1)]
+    else:
+        await update.message.reply_text("اكتبها كذا: الفريق الأول * الفريق الثاني")
+        return
+
+    if not a or not b:
+        await update.message.reply_text("اكتب اسم الفريقين كاملين.")
+        return
+
+    data = _load_fixture_updates()
+    data.setdefault(mid, {})
+    data[mid]["team1"] = canonical_team_name(a) or normalize_name(a)
+    data[mid]["team2"] = canonical_team_name(b) or normalize_name(b)
+    _save_fixture_updates(data)
+
+    context.user_data.pop("fixture_update_match_id", None)
+
+    m = _apply_fixture_updates(_fixture_by_id(mid) or {"id": mid})
+    await update.message.reply_text(
+        f"✅ تم حفظ تحديث المباراة\n"
+        f"{m.get('team1')} × {m.get('team2')} — {m.get('time', '')}\n\n"
+        f"لن أصمم الآن. وقت ما تبيها اكتب:\n/مباريات {m.get('date', '')}"
+    )
+
+# ==================== END V25 FIXTURES DESIGN OVERRIDE ====================
+
+
 async def api_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["فحص مصادر النتائج:", ""]
     # SerpApi
@@ -16258,6 +17348,551 @@ async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("تعذر قراءة الخيار.")
     except Exception as e:
         await q.message.reply_text(f"تعذر تنفيذ خيار المباريات ❌\n{str(e)[:300]}")
+
+
+
+# ==================== V25 FIXTURES DESIGN OVERRIDE ====================
+# هذا القسم يتعمد تعريف دوال /مباريات مرة أخيرة قبل التشغيل.
+# الهدف:
+# - /مباريات 20/06 = نفس تصميم /مباريات_اليوم الرئيسي (تصميم 2)
+# - اختيار يوم من الأزرار = يظهر زرين تصميم 1 وتصميم 2
+# - تصميم 1 = مضغوط بخلفية التمثال بدون الكلام الكبير فوق
+# - تصميم 2 = التصميم الرئيسي المعتمد V31 /مباريات_اليوم
+# - /مباريات_مجمعة = تصميم مضغوط لعدة أيام
+# - حذف تكرار المباريات داخل نفس اليوم
+
+def _v25_safe_txt(x):
+    return str(x or "").strip()
+
+
+def _v25_dedupe_fixture_matches(matches):
+    seen = set()
+    out = []
+    for m in matches or []:
+        t1 = _v25_safe_txt(m.get("team1"))
+        t2 = _v25_safe_txt(m.get("team2"))
+        tm = _v25_safe_txt(m.get("time"))
+        dt = _v25_safe_txt(m.get("date"))
+        key = (
+            re.sub(r"\s+", " ", t1.replace("ـ", "")).strip(),
+            re.sub(r"\s+", " ", t2.replace("ـ", "")).strip(),
+            re.sub(r"\s+", " ", tm).strip(),
+            dt,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(dict(m))
+    return out
+
+
+def _v25_fixture_simple_matches(date):
+    rows = _v25_dedupe_fixture_matches(_fixtures_for_date(date))
+    simple = []
+    for m in rows:
+        simple.append((
+            _v25_safe_txt(m.get("team1")),
+            _v25_safe_txt(m.get("team2")),
+            _v25_safe_txt(m.get("time")),
+        ))
+    return rows, simple
+
+
+def _v25_fixture_title(date):
+    d = _normalize_date_arg(date)
+    day = ""
+    for x, dy in _fixture_dates():
+        if x == d:
+            day = dy
+            break
+    return f"{day} {d[:5]}".strip()
+
+
+def _fixtures_caption(date_or_title, source="PDF جدول البطولة"):
+    return f"{date_or_title}\nالمصدر: {source}\nالمصيف يضعكم بالحدث"
+
+
+def _v25_compact_bg(w=1080, h=1350):
+    """
+    خلفية التمثال النظيفة للمضغوط بدون عنوان GAMES الكبير.
+    """
+    candidates = [
+        "games_v31_clean_bg.png",
+        os.path.join("assets", "templates", "games_v31_clean_bg.png"),
+        "games_v31_full_bg.png",
+        os.path.join("assets", "templates", "games_v31_full_bg.png"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                bg = Image.open(p).convert("RGB").resize((w, h))
+                ov = Image.new("RGBA", (w, h), (0, 10, 30, 120))
+                return Image.alpha_composite(bg.convert("RGBA"), ov).convert("RGB")
+            except Exception:
+                pass
+    return Image.new("RGB", (w, h), "#071329")
+
+
+def _v25_draw_compact_match(draw, box, m):
+    x0, y0, x1, y1 = box
+    try:
+        draw.rounded_rectangle(box, radius=22, fill=(5,24,58,225), outline=(38,151,255,190), width=2)
+    except Exception:
+        draw.rectangle(box, fill=(5,24,58), outline=(38,151,255), width=2)
+
+    # الوقت يمين
+    draw_text(draw, (x1-35, y0+38), _v25_safe_txt(m.get("time")), get_font(27), fill="#FBBF24", anchor="rm", max_width=190)
+
+    # المباراة بالنص
+    text = f"{_v25_safe_txt(m.get('team1'))} × {_v25_safe_txt(m.get('team2'))}"
+    draw_text(draw, ((x0+x1)//2, y0+36), text, get_font(30), fill="#FFFFFF", max_width=(x1-x0)-260)
+
+    sub = _v25_safe_txt(m.get("stage"))
+    if m.get("group"):
+        sub += f" - {_v25_safe_txt(m.get('group'))}"
+    draw_text(draw, ((x0+x1)//2, y0+75), sub, get_font(21), fill="#CBD5E1", max_width=(x1-x0)-160)
+
+
+def _render_fixture_day_compact(date):
+    """
+    تصميم 1: مضغوط، خلفية التمثال، بدون الكلام الكبير فوق.
+    """
+    rows = _v25_dedupe_fixture_matches(_fixtures_for_date(date))
+    if not rows:
+        return []
+
+    chunks = [rows[i:i+8] for i in range(0, len(rows), 8)]
+    paths = []
+
+    for page, chunk in enumerate(chunks, 1):
+        h = 1350
+        img = _v25_compact_bg(1080, h)
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        y = 105
+        # شريط التاريخ فقط بدون عنوان كبير
+        try:
+            draw.rounded_rectangle((120, y, 960, y+62), radius=22, fill=(251,191,36,235))
+        except Exception:
+            draw.rectangle((120, y, 960, y+62), fill=(251,191,36))
+        title = _v25_fixture_title(date)
+        if len(chunks) > 1:
+            title += f" | {page}/{len(chunks)}"
+        draw_text(draw, (540, y+31), title, get_font(34), fill="#061329", max_width=780)
+
+        y += 92
+        for m in chunk:
+            _v25_draw_compact_match(draw, (70, y, 1010, y+104), m)
+            y += 122
+
+        draw.line((250, 1238, 830, 1238), fill=(255,255,255,180), width=2)
+        draw_text(draw, (540, 1284), "المصيف يضعكم بالحدث", get_font(30), fill="#FBBF24")
+
+        path = os.path.join(GENERATED_DIR, f"fixtures_compact_{date.replace('/','_')}_{page}.png")
+        img.save(path, quality=96)
+        paths.append(path)
+
+    return paths
+
+
+def _render_fixture_day_by_design(date, design=2):
+    """
+    design=1 => مضغوط
+    design=2 => نفس تصميم /مباريات_اليوم الرئيسي
+    """
+    rows, simple_matches = _v25_fixture_simple_matches(date)
+    if not simple_matches:
+        return []
+
+    if int(design) == 1:
+        return _render_fixture_day_compact(date)
+
+    # تصميم 2: نفس تصميم /مباريات_اليوم
+    chunks = [simple_matches[i:i+7] for i in range(0, len(simple_matches), 7)]
+    paths = []
+
+    for page_idx, chunk in enumerate(chunks, start=1):
+        page_title = _v25_fixture_title(date)
+        if len(chunks) > 1:
+            page_title = f"{page_title} | {page_idx}/{len(chunks)}"
+
+        # هذا هو التصميم المعتمد نفسه حق /مباريات_اليوم
+        path = create_matches_today_v31_full_image(page_title, chunk)
+        final_path = os.path.join(
+            GENERATED_DIR,
+            f"fixtures_day_design2_{date.replace('/','_')}_{page_idx}.png"
+        )
+        try:
+            Image.open(path).save(final_path, quality=96)
+            paths.append(final_path)
+        except Exception:
+            paths.append(path)
+
+    return paths
+
+
+def render_fixtures_combined_images(dates):
+    """
+    تصميم مجمع: خلفية التمثال بدون الكلام الكبير فوق.
+    إذا كثرت الأيام يقسم كل 3 أيام في صورة.
+    """
+    dates = [_normalize_date_arg(d) for d in dates if _normalize_date_arg(d)]
+    dates = [d for d in dates if _fixtures_for_date(d)]
+    # إزالة تكرار التواريخ مع الحفاظ على الترتيب
+    clean_dates = []
+    for d in dates:
+        if d not in clean_dates:
+            clean_dates.append(d)
+    dates = clean_dates
+
+    if not dates:
+        return []
+
+    date_chunks = [dates[i:i+3] for i in range(0, len(dates), 3)]
+    paths = []
+
+    for page, dchunk in enumerate(date_chunks, 1):
+        rows = []
+        for d in dchunk:
+            rows.append(("date", d))
+            for m in _v25_dedupe_fixture_matches(_fixtures_for_date(d)):
+                rows.append(("match", m))
+
+        h = max(1350, 170 + len(rows)*112 + 140)
+        h = min(h, 2400)
+        img = _v25_compact_bg(1080, h)
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        y = 90
+        if len(date_chunks) > 1:
+            draw_text(draw, (540, 42), f"صفحة {page}/{len(date_chunks)}", get_font(24), fill="#FBBF24")
+
+        for kind, val in rows:
+            if y > h - 135:
+                break
+
+            if kind == "date":
+                try:
+                    draw.rounded_rectangle((90, y, 990, y+54), radius=20, fill=(251,191,36,235))
+                except Exception:
+                    draw.rectangle((90, y, 990, y+54), fill=(251,191,36))
+                draw_text(draw, (540, y+27), _v25_fixture_title(val), get_font(31), fill="#061329", max_width=830)
+                y += 72
+            else:
+                _v25_draw_compact_match(draw, (75, y, 1005, y+96), val)
+                y += 112
+
+        draw.line((250, h-88, 830, h-88), fill=(255,255,255,180), width=2)
+        draw_text(draw, (540, h-48), "المصيف يضعكم بالحدث", get_font(29), fill="#FBBF24")
+
+        path = os.path.join(GENERATED_DIR, f"fixtures_combined_v25_{page}_{datetime.now().strftime('%H%M%S')}.png")
+        img.save(path, quality=96)
+        paths.append(path)
+
+    return paths
+
+
+def _fixtures_day_keyboard(date):
+    rows = [
+        [
+            InlineKeyboardButton("تصميم 1", callback_data=f"fx|render1|{date}"),
+            InlineKeyboardButton("تصميم 2", callback_data=f"fx|render2|{date}")
+        ]
+    ]
+
+    miss = [m for m in _fixtures_for_date(date) if _has_unknown(m)]
+    for i, m in enumerate(miss, 1):
+        rows.append([InlineKeyboardButton(f"تحديث مباراة {i} — {m.get('time')}", callback_data=f"fx|upd|{m.get('id')}")])
+
+    rows.append([InlineKeyboardButton("رجوع للأيام", callback_data="fx|menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fixtures_dates_keyboard(mode="single", selected=None):
+    selected = set(selected or [])
+    rows = []
+    row = []
+
+    for d, day in _fixture_dates():
+        label = f"{'✅ ' if d in selected else ''}{day} {d[:5]}"
+        data = f"fx|toggle|{d}" if mode == "multi" else f"fx|day|{d}"
+        row.append(InlineKeyboardButton(label, callback_data=data))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+
+    if row:
+        rows.append(row)
+
+    if mode == "multi":
+        rows.append([
+            InlineKeyboardButton("تصميم كل يوم", callback_data="fx|render_each"),
+            InlineKeyboardButton("تصميم واحد", callback_data="fx|render_combo"),
+        ])
+        rows.append([
+            InlineKeyboardButton("تصفير الاختيار", callback_data="fx|clear"),
+            InlineKeyboardButton("رجوع", callback_data="fx|menu"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton("اختيار أكثر من يوم", callback_data="fx|multi")])
+
+    return InlineKeyboardMarkup(rows)
+
+
+def _fixtures_day_text(date):
+    rows, matches = _v25_fixture_simple_matches(date)
+    if not matches:
+        return "ما فيه مباريات لهذا التاريخ."
+
+    lines = [f"{_v25_fixture_title(date)}", ""]
+    for i, m in enumerate(rows, 1):
+        lines.append(f"{i}) {_v25_safe_txt(m.get('team1'))} × {_v25_safe_txt(m.get('team2'))} — {_v25_safe_txt(m.get('time'))}")
+        extra = []
+        if m.get("stage"):
+            extra.append(_v25_safe_txt(m.get("stage")))
+        if m.get("group"):
+            extra.append(_v25_safe_txt(m.get("group")))
+        if extra:
+            lines.append("   " + " | ".join(extra))
+        if _has_unknown(m) and m.get("note"):
+            lines.append(f"   {_v25_safe_txt(m.get('note'))}")
+
+    return "\n".join(lines)
+
+
+async def fixtures_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text or ""
+    dates = _extract_fixture_dates_from_text(text)
+
+    if dates:
+        # تاريخ واحد: يصمم مباشرة بتصميم 2، نفس /مباريات_اليوم
+        if len(dates) == 1:
+            d = dates[0]
+            wait = await update.message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+            try:
+                paths = _render_fixture_day_by_design(d, design=2)
+                if not paths:
+                    await wait.edit_text(f"ما فيه مباريات بتاريخ {d}")
+                    return
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(update.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            except Exception as e:
+                await wait.edit_text(f"تعذر تصميم اليوم ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        # أكثر من تاريخ: مجمع
+        wait = await update.message.reply_text("⏳ جاري تصميم الأيام المجمعة...")
+        try:
+            paths = render_fixtures_combined_images(dates)
+            if not paths:
+                await wait.edit_text("ما لقيت مباريات للتواريخ المطلوبة.")
+                return
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+            for p in paths:
+                await send_photo_path(update.message, p, _fixtures_caption("مباريات مجمعة"))
+        except Exception as e:
+            await wait.edit_text(f"تعذر تصميم الأيام ❌\nالسبب: {str(e)[:400]}")
+        return
+
+    await update.message.reply_text("اختر اليوم أو اكتب:\n/مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+
+
+async def fixtures_combined_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text("اكتبها كذا:\n/مباريات_مجمعة 20/06 21/06 22/06")
+        return
+
+    wait = await update.message.reply_text("⏳ جاري تصميم المباريات المجمعة...")
+    try:
+        paths = render_fixtures_combined_images(dates)
+        if not paths:
+            await wait.edit_text("ما لقيت مباريات للتواريخ المطلوبة.")
+            return
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        for p in paths:
+            await send_photo_path(update.message, p, _fixtures_caption("مباريات مجمعة"))
+    except Exception as e:
+        await wait.edit_text(f"تعذر التصميم المجمع ❌\nالسبب: {str(e)[:400]}")
+
+
+async def fixtures_review_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text("اكتبها كذا:\n/مراجعة_مباراة 20/07")
+        return
+    for d in dates:
+        await update.message.reply_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+
+
+async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+
+    await q.answer()
+
+    if not is_admin_user(update):
+        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else ""
+
+    try:
+        if action == "menu":
+            await q.message.edit_text("اختر اليوم أو استخدم /مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+            return
+
+        if action == "multi":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+
+        if action == "toggle" and len(parts) >= 3:
+            d = parts[2]
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if d in sel:
+                sel.remove(d)
+            else:
+                sel.append(d)
+            context.user_data["fx_selected_dates"] = sel
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", sel))
+            return
+
+        if action == "clear":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+
+        if action == "day" and len(parts) >= 3:
+            d = parts[2]
+            await q.message.edit_text(_fixtures_day_text(d), reply_markup=_fixtures_day_keyboard(d))
+            return
+
+        if action in ["render1", "render2"] and len(parts) >= 3:
+            d = parts[2]
+            design = 1 if action == "render1" else 2
+            wait = await q.message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+            try:
+                paths = _render_fixture_day_by_design(d, design=design)
+                if not paths:
+                    await wait.edit_text("ما فيه مباريات لهذا اليوم.")
+                    return
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(q.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            except Exception as e:
+                await wait.edit_text(f"تعذر تصميم اليوم ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        if action == "render_each":
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if not sel:
+                await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+                return
+            wait = await q.message.reply_text("⏳ جاري تصميم الأيام...")
+            try:
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for d in sel:
+                    for p in _render_fixture_day_by_design(d, design=2):
+                        await send_photo_path(q.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            except Exception as e:
+                await q.message.reply_text(f"تعذر التصميم ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        if action == "render_combo":
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if not sel:
+                await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+                return
+            wait = await q.message.reply_text("⏳ جاري التصميم المجمع...")
+            try:
+                paths = render_fixtures_combined_images(sel)
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                for p in paths:
+                    await send_photo_path(q.message, p, _fixtures_caption("مباريات مجمعة"))
+            except Exception as e:
+                await wait.edit_text(f"تعذر التصميم المجمع ❌\nالسبب: {str(e)[:400]}")
+            return
+
+        if action == "upd" and len(parts) >= 3:
+            mid = parts[2]
+            m = _fixture_by_id(mid)
+            if not m:
+                await q.message.reply_text("لم أجد المباراة.")
+                return
+
+            context.user_data["fixture_update_match_id"] = mid
+            await q.message.reply_text(
+                f"اكتب طرفي المباراة لـ {mid} ({m.get('date')} {m.get('time')}) كذا:\n"
+                "الفريق الأول * الفريق الثاني\n\n"
+                "مثال: المكسيك * أستراليا\n"
+                "ملاحظة: سيتم الحفظ فقط، ولن يتم التصميم إلا عندما تطلب /مباريات التاريخ."
+            )
+            return
+
+        await q.message.reply_text("تعذر قراءة الخيار.")
+    except Exception as e:
+        await q.message.reply_text(f"تعذر تنفيذ خيار المباريات ❌\n{str(e)[:400]}")
+
+
+async def fixtures_update_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mid = context.user_data.get("fixture_update_match_id")
+    if not mid:
+        return
+
+    text = (update.message.text or "").strip()
+
+    if "*" in text:
+        a, b = [x.strip() for x in text.split("*", 1)]
+    elif "×" in text:
+        a, b = [x.strip() for x in text.split("×", 1)]
+    elif "-" in text:
+        a, b = [x.strip() for x in text.split("-", 1)]
+    else:
+        await update.message.reply_text("اكتبها كذا: الفريق الأول * الفريق الثاني")
+        return
+
+    if not a or not b:
+        await update.message.reply_text("اكتب اسم الفريقين كاملين.")
+        return
+
+    data = _load_fixture_updates()
+    data.setdefault(mid, {})
+    data[mid]["team1"] = canonical_team_name(a) or normalize_name(a)
+    data[mid]["team2"] = canonical_team_name(b) or normalize_name(b)
+    _save_fixture_updates(data)
+
+    context.user_data.pop("fixture_update_match_id", None)
+
+    m = _apply_fixture_updates(_fixture_by_id(mid) or {"id": mid})
+    await update.message.reply_text(
+        f"✅ تم حفظ تحديث المباراة\n"
+        f"{m.get('team1')} × {m.get('team2')} — {m.get('time', '')}\n\n"
+        f"لن أصمم الآن. وقت ما تبيها اكتب:\n/مباريات {m.get('date', '')}"
+    )
+
+# ==================== END V25 FIXTURES DESIGN OVERRIDE ====================
 
 
 async def api_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
