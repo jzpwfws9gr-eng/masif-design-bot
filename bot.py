@@ -6471,7 +6471,7 @@ def main():
     load_participants_state()
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/start"), start))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:من_انا|معرفي)"), who_am_i))
     app.add_handler(MessageHandler(filters.Document.ALL, remember_last_file))
 
@@ -12556,7 +12556,7 @@ def main():
     ensure_design_assets()
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/start"), start))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:من_انا|معرفي)"), who_am_i))
     app.add_handler(MessageHandler(filters.Document.ALL, remember_last_file))
 
@@ -14979,7 +14979,7 @@ async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE,
     kb = source_keyboard(context, payload)
     wait = await update.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}")
     try:
-        data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_live_match_data, team1, team2, mode, date_hint), timeout=26)
+        data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_live_match_data, team1, team2, mode, date_hint), timeout=55)
     except Exception:
         data = None
     if not data:
@@ -15009,7 +15009,7 @@ async def current_groups_now_command(update: Update, context: ContextTypes.DEFAU
     kb = source_keyboard(context, payload)
     wait = await update.message.reply_text("⏳ جاري جلب ترتيب المجموعات من قوقل...")
     try:
-        groups, source_label = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_current_groups, mode), timeout=28)
+        groups, source_label = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_current_groups, mode), timeout=55)
     except Exception:
         groups, source_label = [], ""
     if not groups:
@@ -15199,6 +15199,395 @@ except Exception:
     pass
 
 # ==================== END V14 SAFE START PATCH ====================
+
+
+# ==================== V16 HARD GOOGLE PULL PATCH ====================
+# المطلوب: قوقل هو المصدر الأساسي فعليًا. لا نوقف عند timeout واحد، ولا نرجع اسم ملف علم،
+# ونحاول SerpApi ثم Google HTML مباشر كاحتياط.
+
+import time as _v16_time
+
+try:
+    _V16_OLD_SERPAPI_SEARCH_JSON = serpapi_search_json
+except Exception:
+    _V16_OLD_SERPAPI_SEARCH_JSON = None
+
+
+def _v16_unique(seq):
+    out = []
+    for x in seq or []:
+        try:
+            x = normalize_name(x)
+        except Exception:
+            x = str(x or '').strip()
+        if x and x not in out:
+            out.append(x)
+    return out
+
+
+def serpapi_search_json(query, hl="ar", gl="sa", timeout=18, **kwargs):
+    """V16: افتح قوقل عبر SerpApi مع retries ووقت أطول. timeout واحد ما يعني فشل قوقل."""
+    if not _serpapi_key():
+        raise RuntimeError("SERPAPI_KEY غير موجود")
+    last_err = None
+    # تمرير parameters قوقل المهمة لو احتجنا تبويب الرياضة/الترتيب
+    params_extra = dict(kwargs or {})
+    for attempt, to in enumerate([timeout, min(max(timeout + 7, 18), 26)], start=1):
+        try:
+            if _V16_OLD_SERPAPI_SEARCH_JSON:
+                return _V16_OLD_SERPAPI_SEARCH_JSON(query, hl=hl, gl=gl, timeout=to, **params_extra)
+            params = {"engine":"google", "q":query, "hl":hl, "gl":gl, "api_key":_serpapi_key()}
+            params.update(params_extra)
+            return _http_json_get("https://serpapi.com/search.json", params=params, timeout=to)
+        except Exception as e:
+            last_err = e
+            try:
+                _v16_time.sleep(0.6 * attempt)
+            except Exception:
+                pass
+    raise last_err
+
+
+def _v16_google_direct_html(query, hl="ar", gl="sa", timeout=22, extra=None):
+    """احتياط مباشر: يفتح صفحة Google العادية كـ HTML إذا SerpApi تأخر."""
+    if requests is None or BeautifulSoup is None:
+        return ""
+    params = {"q": query, "hl": hl, "gl": gl, "ie": "UTF-8", "oe": "UTF-8"}
+    if extra:
+        params.update(extra)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        "Accept-Language": "ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+    try:
+        r = requests.get("https://www.google.com/search", params=params, headers=headers, timeout=timeout)
+        if r.status_code == 200 and r.text:
+            return r.text
+    except Exception:
+        pass
+    return ""
+
+
+def _v16_html_text(html):
+    if not html or BeautifulSoup is None:
+        return ""
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+        return normalize_name(soup.get_text("\n"))
+    except Exception:
+        return normalize_name(html)
+
+
+def _v16_team_from_filename_safe(x):
+    s = normalize_name(x or "")
+    low = s.lower().strip()
+    base = os.path.basename(low)
+    mp = {
+        "scotland.png":"اسكتلندا", "scotland":"اسكتلندا",
+        "morocco.png":"المغرب", "morocco":"المغرب",
+        "usa.png":"الولايات المتحدة", "united_states.png":"الولايات المتحدة", "united states":"الولايات المتحدة",
+        "australia.png":"أستراليا", "australia":"أستراليا",
+        "mexico.png":"المكسيك", "mexico":"المكسيك",
+        "south_korea.png":"كوريا الجنوبية", "korea_republic.png":"كوريا الجنوبية",
+    }
+    if low in mp:
+        return mp[low]
+    if base in mp:
+        return mp[base]
+    if low.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        low2 = re.sub(r"\.(png|jpg|jpeg|webp)$", "", base, flags=re.I).replace("_", " ").replace("-", " ")
+        return canonical_team_name(low2) or normalize_name(low2)
+    return canonical_team_name(s) or s
+
+try:
+    _V16_OLD_PARSE_LIVE_COMMAND_TEXT = parse_live_command_text
+    def parse_live_command_text(text):
+        t1, t2, mode, date_hint = _V16_OLD_PARSE_LIVE_COMMAND_TEXT(text)
+        return _v16_team_from_filename_safe(t1), _v16_team_from_filename_safe(t2), mode, date_hint
+except Exception:
+    pass
+
+
+def _v16_match_queries(team1, team2, date_hint=None):
+    ar1 = canonical_team_name(team1) or _v16_team_from_filename_safe(team1)
+    ar2 = canonical_team_name(team2) or _v16_team_from_filename_safe(team2)
+    en1 = team_query_name(ar1) if 'team_query_name' in globals() else ar1
+    en2 = team_query_name(ar2) if 'team_query_name' in globals() else ar2
+    qs = [
+        f"مباراة {ar1} {ar2}",
+        f"{ar1} ضد {ar2}",
+        f"{ar1} × {ar2}",
+        f"{en1} vs {en2} FIFA World Cup 2026",
+        f"{en1} {en2} score FIFA 2026",
+    ]
+    if date_hint:
+        qs = [f"{q} {date_hint}" for q in qs] + qs
+    return _v16_unique(qs)
+
+
+def _v16_parse_match_from_html(html, team1, team2):
+    """سحب بسيط من Google HTML: إذا ظهرت أسماء الفريقين والنتيجة بالنص."""
+    text = _v16_html_text(html)
+    if not text:
+        return None
+    req1 = canonical_team_name(team1) or _v16_team_from_filename_safe(team1)
+    req2 = canonical_team_name(team2) or _v16_team_from_filename_safe(team2)
+    sk1, sk2 = simple_key(req1), simple_key(req2)
+    if sk1 not in simple_key(text) or sk2 not in simple_key(text):
+        return None
+    # جرّب parser النص الموجود في النسخ السابقة أولًا
+    try:
+        if '_score_from_text_near_teams' in globals():
+            ss = _score_from_text_near_teams(text, req1, req2)
+            if ss:
+                obj = {"team1": req1, "team2": req2, "score1": ss.get("score1"), "score2": ss.get("score2"), "status": ss.get("status") or "حسب قوقل", "minute": ss.get("minute") or "", "source": "Google مباشر", "scorers": []}
+                if _v9_valid_score_obj(obj):
+                    return obj
+    except Exception:
+        pass
+    # fallback regex قريب من الفريقين
+    blob = re.sub(r"\s+", " ", text)
+    pos1, pos2 = simple_key(blob).find(sk1), simple_key(blob).find(sk2)
+    if pos1 == -1 or pos2 == -1:
+        return None
+    # لأن simple_key يغيّر الطول، خذ نافذة كاملة من النص الأصلي
+    win = blob[:1800]
+    # أنماط: الفريق 2 - 0 الفريق أو الفريقين ثم 2 - 0
+    for pat in [r"(\d{1,2})\s*[-–]\s*(\d{1,2})", r"(\d{1,2})\s*:\s*(\d{1,2})"]:
+        for m in re.finditer(pat, win):
+            a, b = int(m.group(1)), int(m.group(2))
+            if 0 <= a <= 15 and 0 <= b <= 15:
+                obj = {"team1": req1, "team2": req2, "score1": str(a), "score2": str(b), "status": "حسب قوقل", "minute": "", "source": "Google مباشر", "scorers": []}
+                if _v9_valid_score_obj(obj):
+                    # حالة المباراة
+                    if any(w in text for w in ["انتهت المباراة", "نهاية المباراة", "FT", "Full-time"]):
+                        obj["status"] = "انتهت المباراة"
+                    elif any(w in text for w in ["مباشر", "Live"]):
+                        obj["status"] = "مباشر الآن"
+                    return obj
+    return None
+
+try:
+    _V16_OLD_V11_PARSE_GOOGLE_MATCH_DATA = _v11_parse_google_match_data
+except Exception:
+    _V16_OLD_V11_PARSE_GOOGLE_MATCH_DATA = None
+
+
+def fetch_match_from_serpapi(team1, team2, date_hint=None):
+    """V16: قوقل فقط، SerpApi مع retry ثم HTML مباشر إذا API تأخر."""
+    req1 = _v16_team_from_filename_safe(team1)
+    req2 = _v16_team_from_filename_safe(team2)
+    # SerpApi structured أولًا
+    last_data = None
+    if _serpapi_key():
+        for q in _v16_match_queries(req1, req2, date_hint):
+            for hl, gl in [("ar", "sa"), ("en", "us")]:
+                try:
+                    data = serpapi_search_json(q, hl=hl, gl=gl, timeout=20)
+                    last_data = data
+                    obj = _V16_OLD_V11_PARSE_GOOGLE_MATCH_DATA(data, req1, req2, source_name="Google Sports") if _V16_OLD_V11_PARSE_GOOGLE_MATCH_DATA else None
+                    if obj and _v9_valid_score_obj(obj):
+                        obj["team1"], obj["team2"] = req1, req2
+                        obj["source"] = "Google Sports"
+                        return obj
+                except Exception:
+                    continue
+    # HTML مباشر من Google كاحتياط
+    for q in _v16_match_queries(req1, req2, date_hint)[:3]:
+        html = _v16_google_direct_html(q, hl="ar-SA", gl="sa", timeout=22)
+        obj = _v16_parse_match_from_html(html, req1, req2)
+        if obj and _v9_valid_score_obj(obj):
+            return obj
+    return None
+
+
+def _v16_extract_groups_from_google_text(text):
+    """Fallback من نص Google HTML: يستخرج ترتيب تقريبي من ظهور الفرق والأرقام حولها."""
+    text = normalize_name(text or "")
+    if not text:
+        return []
+    groups = []
+    sk_text = simple_key(text)
+    for gl, teams in WORLD_CUP_GROUPS:
+        rows = []
+        for team in teams:
+            sk = simple_key(team)
+            # ابحث بالاسم العربي أو aliases الإنجليزية
+            aliases = [team] + [k for k, v in TEAM_ALIASES.items() if v == team]
+            idx = -1
+            for a in aliases:
+                ia = sk_text.find(simple_key(a))
+                if ia >= 0:
+                    idx = ia
+                    break
+            if idx < 0:
+                continue
+            # نافذة نصية بعد اسم الفريق من النص الأصلي تقريبية
+            # استخدم find العادي إن أمكن
+            raw_idx = text.find(team)
+            if raw_idx < 0:
+                raw_idx = max(0, min(len(text)-1, idx))
+            window = text[raw_idx: raw_idx + 260]
+            nums = [int(x) for x in re.findall(r"(?<!\d)-?\d{1,2}(?!\d)", window)[:10]]
+            # حذف رقم المركز في البداية إن وجد
+            if nums and nums[0] in [1,2,3,4]:
+                nums2 = nums[1:]
+            else:
+                nums2 = nums[:]
+            played = None; pts = None; gd = 0
+            # غالبًا تظهر: لعب، ف، ت، خ، نقاط ... أو فيها أهداف له/عليه
+            if len(nums2) >= 5:
+                played = nums2[0]
+                # النقاط غالبًا أكبر رقم منطقي أو آخر رقم في أول 7 خانات
+                pts = max([n for n in nums2[:8] if 0 <= n <= 15] or [0])
+                if len(nums2) >= 7:
+                    try:
+                        gd = nums2[-2]
+                    except Exception:
+                        gd = 0
+            elif len(nums2) >= 2:
+                played = nums2[0]
+                pts = nums2[-1]
+            if played is not None and pts is not None:
+                rows.append((team, int(played), int(gd), int(pts)))
+        if len(rows) >= 2:
+            rows.sort(key=lambda r: (r[3], r[2], r[1]), reverse=True)
+            groups.append((_v11_group_title_from_letter(gl), rows[:4]))
+    return groups
+
+
+def _v16_parse_serp_rankings_loose(data):
+    """إذا SerpApi رجع rankings بشكل غير متوقع، اجمع كل النصوص حول أسماء الفرق."""
+    try:
+        groups = _v11_extract_groups_from_google_json(data)
+        if groups:
+            return groups
+    except Exception:
+        pass
+    try:
+        sr = data.get("sports_results") if isinstance(data, dict) else None
+        text = json.dumps(sr or data, ensure_ascii=False)
+        return _v16_extract_groups_from_google_text(text)
+    except Exception:
+        return []
+
+
+def fetch_standings_from_serpapi():
+    # استعلامات قوقل المعتمدة من رابط المستخدم
+    queries = _v16_unique(["ترتيبات كأس العالم", "ترتيب مجموعات كأس العالم", "ترتيب مجموعات كأس العالم 2026", "FIFA World Cup 2026 standings", "World Cup 2026 group standings"])
+    # 1) SerpApi structured مع retry طويل
+    if _serpapi_key():
+        for q in queries:
+            for hl, gl in [("ar", "sa"), ("en", "us")]:
+                try:
+                    data = serpapi_search_json(q, hl=hl, gl=gl, timeout=22)
+                    groups = _v16_parse_serp_rankings_loose(data)
+                    if groups and (len(groups) >= 2 or sum(len(r) for _, r in groups) >= 8):
+                        return groups[:12]
+                except Exception:
+                    continue
+    # 2) Google HTML مباشر كاحتياط
+    for q in queries[:3]:
+        html = _v16_google_direct_html(q, hl="ar-SA", gl="sa", timeout=25)
+        text = _v16_html_text(html)
+        groups = _v16_extract_groups_from_google_text(text)
+        if groups and (len(groups) >= 2 or sum(len(r) for _, r in groups) >= 8):
+            return groups[:12]
+    return []
+
+
+def fetch_current_groups(mode="latest"):
+    # قوقل أولًا دائمًا. API-Football موقوف عند المستخدم، نخليه آخر شيء فقط.
+    try:
+        groups = fetch_standings_from_serpapi()
+        if groups:
+            return groups[:12], "Google"
+    except Exception:
+        pass
+    try:
+        groups = fetch_standings_from_api_football()
+        if groups:
+            return groups[:12], "API-Football"
+    except Exception:
+        pass
+    return [], ""
+
+try:
+    _V16_OLD_GOOGLE_SEARCH_DEBUG_COMMAND = google_search_debug_command
+except Exception:
+    _V16_OLD_GOOGLE_SEARCH_DEBUG_COMMAND = None
+
+async def google_search_debug_command(update, context):
+    body = parse_command_body_lines(update.message.text)
+    query = " ".join(body).strip() or "مباراة المكسيك كوريا الجنوبية"
+    msg = await update.message.reply_text(f"⏳ أفحص قوقل: {query}")
+    try:
+        data = None
+        err = ""
+        try:
+            data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(serpapi_search_json, query, "ar", "sa", 22), timeout=30)
+        except Exception as e:
+            err = str(e)[:120]
+        lines = ["نتيجة فحص قوقل:", f"query: {query}"]
+        if isinstance(data, dict):
+            sr = data.get("sports_results") if isinstance(data, dict) else None
+            if isinstance(sr, dict):
+                lines.append("✅ sports_results موجود")
+                lines.append("مفاتيح: " + "، ".join(list(sr.keys())[:12]))
+                groups = _v16_parse_serp_rankings_loose(data)
+                if groups:
+                    lines.append(f"✅ قرأت ترتيب/جدول: {len(groups)} مجموعة")
+                    for title, rows in groups[:3]:
+                        lines.append(f"{title}: " + "، ".join([f"{r[0]} {r[3]}" for r in rows[:4]]))
+                else:
+                    # مباراة؟
+                    found = []
+                    txt = normalize_name(query)
+                    for tm in WORLD_CUP_TEAMS:
+                        if simple_key(tm) in simple_key(txt):
+                            found.append(tm)
+                        if len(found) >= 2:
+                            break
+                    if len(found) >= 2:
+                        obj = _v11_parse_google_match_data(data, found[0], found[1], source_name="Google Sports")
+                        if obj:
+                            lines.append(f"✅ قرأت المباراة: {obj.get('team1')} {obj.get('score1')} - {obj.get('score2')} {obj.get('team2')}")
+                        else:
+                            lines.append("⚠️ وصلنا لقوقل لكن بنية المباراة مختلفة")
+                    else:
+                        lines.append("⚠️ وصلنا لقوقل لكن لم أقرأ جدول/مباراة مؤكدة من البنية الحالية")
+            else:
+                lines.append("⚠️ لم يظهر sports_results")
+        else:
+            html = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(_v16_google_direct_html, query, "ar-SA", "sa", 20), timeout=25)
+            txt = _v16_html_text(html)
+            if txt:
+                lines.append("✅ فتحت Google HTML مباشر")
+                groups = _v16_extract_groups_from_google_text(txt)
+                if groups:
+                    lines.append(f"✅ قرأت من HTML: {len(groups)} مجموعة")
+                elif err:
+                    lines.append(f"⚠️ SerpApi تأخر: {err}")
+            elif err:
+                lines.append(f"❌ فشل قوقل: {err}")
+        await msg.edit_text("\n".join(lines[:18]))
+    except Exception as e:
+        await msg.edit_text(f"❌ فشل فحص قوقل: {str(e)[:220]}")
+
+async def start(update, context):
+    await update.message.reply_text(
+        "✅ بوت مونديال المصيف 2026 شغال\n\n"
+        "أوامر سريعة:\n"
+        "/مباشر المغرب * اسكتلندا * قوقل\n"
+        "/بحث_قوقل ترتيبات كأس العالم\n"
+        "/ترتيب_المجموعات_الان\n"
+        "/خبر\n"
+        "/عاجل"
+    )
+
+# ==================== END V16 HARD GOOGLE PULL PATCH ====================
 
 if __name__ == "__main__":
     main()
