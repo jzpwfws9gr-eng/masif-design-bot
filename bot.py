@@ -14979,7 +14979,7 @@ async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE,
     kb = source_keyboard(context, payload)
     wait = await update.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}")
     try:
-        data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_live_match_data, team1, team2, mode, date_hint), timeout=55)
+        data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_live_match_data, team1, team2, mode, date_hint), timeout=26)
     except Exception:
         data = None
     if not data:
@@ -15009,7 +15009,7 @@ async def current_groups_now_command(update: Update, context: ContextTypes.DEFAU
     kb = source_keyboard(context, payload)
     wait = await update.message.reply_text("⏳ جاري جلب ترتيب المجموعات من قوقل...")
     try:
-        groups, source_label = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_current_groups, mode), timeout=55)
+        groups, source_label = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(fetch_current_groups, mode), timeout=28)
     except Exception:
         groups, source_label = [], ""
     if not groups:
@@ -15201,393 +15201,390 @@ except Exception:
 # ==================== END V14 SAFE START PATCH ====================
 
 
-# ==================== V16 HARD GOOGLE PULL PATCH ====================
-# المطلوب: قوقل هو المصدر الأساسي فعليًا. لا نوقف عند timeout واحد، ولا نرجع اسم ملف علم،
-# ونحاول SerpApi ثم Google HTML مباشر كاحتياط.
+# ==================== V17 PLAYWRIGHT GOOGLE STANDINGS PATCH ====================
+# الاعتماد الجديد: ترتيب المجموعات يُسحب من صفحة قوقل نفسها عبر متصفح Chromium مخفي.
+# إذا قدرنا نحول النص إلى جدول: نصمم ترتيب المجموعات بهوية البوت.
+# إذا تغيّرت بنية قوقل أو النص كان غير قابل للتحويل: نرسل Screenshot من قوقل مباشرة بدل الرفض.
 
-import time as _v16_time
+_V17_GOOGLE_STANDINGS_QUERIES = [
+    "ترتيبات كأس العالم",
+    "ترتيب مجموعات كأس العالم 2026",
+    "FIFA World Cup 2026 standings",
+    "World Cup 2026 group standings",
+]
 
-try:
-    _V16_OLD_SERPAPI_SEARCH_JSON = serpapi_search_json
-except Exception:
-    _V16_OLD_SERPAPI_SEARCH_JSON = None
-
-
-def _v16_unique(seq):
-    out = []
-    for x in seq or []:
-        try:
-            x = normalize_name(x)
-        except Exception:
-            x = str(x or '').strip()
-        if x and x not in out:
-            out.append(x)
-    return out
+# خريطة حروف المجموعات العربية إلى الإنجليزية المستخدمة داخل التصميم
+_V17_GROUP_LETTERS_AR = {
+    "أ": "A", "ا": "A", "ب": "B", "ج": "C", "د": "D", "هـ": "E", "ه": "E", "و": "F",
+    "ز": "G", "ح": "H", "ط": "I", "ي": "J", "ك": "K", "ل": "L",
+}
 
 
-def serpapi_search_json(query, hl="ar", gl="sa", timeout=18, **kwargs):
-    """V16: افتح قوقل عبر SerpApi مع retries ووقت أطول. timeout واحد ما يعني فشل قوقل."""
-    if not _serpapi_key():
-        raise RuntimeError("SERPAPI_KEY غير موجود")
-    last_err = None
-    # تمرير parameters قوقل المهمة لو احتجنا تبويب الرياضة/الترتيب
-    params_extra = dict(kwargs or {})
-    for attempt, to in enumerate([timeout, min(max(timeout + 7, 18), 26)], start=1):
-        try:
-            if _V16_OLD_SERPAPI_SEARCH_JSON:
-                return _V16_OLD_SERPAPI_SEARCH_JSON(query, hl=hl, gl=gl, timeout=to, **params_extra)
-            params = {"engine":"google", "q":query, "hl":hl, "gl":gl, "api_key":_serpapi_key()}
-            params.update(params_extra)
-            return _http_json_get("https://serpapi.com/search.json", params=params, timeout=to)
-        except Exception as e:
-            last_err = e
-            try:
-                _v16_time.sleep(0.6 * attempt)
-            except Exception:
-                pass
-    raise last_err
-
-
-def _v16_google_direct_html(query, hl="ar", gl="sa", timeout=22, extra=None):
-    """احتياط مباشر: يفتح صفحة Google العادية كـ HTML إذا SerpApi تأخر."""
-    if requests is None or BeautifulSoup is None:
-        return ""
-    params = {"q": query, "hl": hl, "gl": gl, "ie": "UTF-8", "oe": "UTF-8"}
-    if extra:
-        params.update(extra)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-        "Accept-Language": "ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7",
+def _v17_build_google_url(query):
+    from urllib.parse import urlencode
+    params = {
+        "q": query,
+        "hl": "ar-SA",
+        "gl": "sa",
+        "pws": "0",
+        "igu": "1",
     }
-    try:
-        r = requests.get("https://www.google.com/search", params=params, headers=headers, timeout=timeout)
-        if r.status_code == 200 and r.text:
-            return r.text
-    except Exception:
-        pass
+    return "https://www.google.com/search?" + urlencode(params)
+
+
+def _v17_normalize_ar_digits(s):
+    trans = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+    return str(s or "").translate(trans)
+
+
+def _v17_clean_google_text(text):
+    text = _v17_normalize_ar_digits(text)
+    text = text.replace("\u200f", "").replace("\u200e", "")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _v17_group_key_from_title(line):
+    s = str(line or "").strip()
+    m = re.search(r"المجموعة\s*([أابجدهـهوزحطيكلA-L])", s, re.I)
+    if m:
+        ch = m.group(1)
+        return _V17_GROUP_LETTERS_AR.get(ch, ch.upper())
+    m = re.search(r"Group\s*([A-L])", s, re.I)
+    if m:
+        return m.group(1).upper()
     return ""
 
 
-def _v16_html_text(html):
-    if not html or BeautifulSoup is None:
-        return ""
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        for tag in soup(["script", "style", "noscript"]):
-            tag.decompose()
-        return normalize_name(soup.get_text("\n"))
-    except Exception:
-        return normalize_name(html)
-
-
-def _v16_team_from_filename_safe(x):
-    s = normalize_name(x or "")
-    low = s.lower().strip()
-    base = os.path.basename(low)
-    mp = {
-        "scotland.png":"اسكتلندا", "scotland":"اسكتلندا",
-        "morocco.png":"المغرب", "morocco":"المغرب",
-        "usa.png":"الولايات المتحدة", "united_states.png":"الولايات المتحدة", "united states":"الولايات المتحدة",
-        "australia.png":"أستراليا", "australia":"أستراليا",
-        "mexico.png":"المكسيك", "mexico":"المكسيك",
-        "south_korea.png":"كوريا الجنوبية", "korea_republic.png":"كوريا الجنوبية",
-    }
-    if low in mp:
-        return mp[low]
-    if base in mp:
-        return mp[base]
-    if low.endswith((".png", ".jpg", ".jpeg", ".webp")):
-        low2 = re.sub(r"\.(png|jpg|jpeg|webp)$", "", base, flags=re.I).replace("_", " ").replace("-", " ")
-        return canonical_team_name(low2) or normalize_name(low2)
-    return canonical_team_name(s) or s
-
-try:
-    _V16_OLD_PARSE_LIVE_COMMAND_TEXT = parse_live_command_text
-    def parse_live_command_text(text):
-        t1, t2, mode, date_hint = _V16_OLD_PARSE_LIVE_COMMAND_TEXT(text)
-        return _v16_team_from_filename_safe(t1), _v16_team_from_filename_safe(t2), mode, date_hint
-except Exception:
-    pass
-
-
-def _v16_match_queries(team1, team2, date_hint=None):
-    ar1 = canonical_team_name(team1) or _v16_team_from_filename_safe(team1)
-    ar2 = canonical_team_name(team2) or _v16_team_from_filename_safe(team2)
-    en1 = team_query_name(ar1) if 'team_query_name' in globals() else ar1
-    en2 = team_query_name(ar2) if 'team_query_name' in globals() else ar2
-    qs = [
-        f"مباراة {ar1} {ar2}",
-        f"{ar1} ضد {ar2}",
-        f"{ar1} × {ar2}",
-        f"{en1} vs {en2} FIFA World Cup 2026",
-        f"{en1} {en2} score FIFA 2026",
-    ]
-    if date_hint:
-        qs = [f"{q} {date_hint}" for q in qs] + qs
-    return _v16_unique(qs)
-
-
-def _v16_parse_match_from_html(html, team1, team2):
-    """سحب بسيط من Google HTML: إذا ظهرت أسماء الفريقين والنتيجة بالنص."""
-    text = _v16_html_text(html)
-    if not text:
+def _v17_parse_row_numbers_after_team(section, team):
+    # محاولة حذرة فقط؛ إذا لم نجد أرقامًا واضحة لا نخترع ترتيبًا.
+    idx = section.find(team)
+    if idx < 0:
         return None
-    req1 = canonical_team_name(team1) or _v16_team_from_filename_safe(team1)
-    req2 = canonical_team_name(team2) or _v16_team_from_filename_safe(team2)
-    sk1, sk2 = simple_key(req1), simple_key(req2)
-    if sk1 not in simple_key(text) or sk2 not in simple_key(text):
+    chunk = section[idx:idx + 260]
+    nums = [int(x) for x in re.findall(r"(?<!\d)(?:[-+]?\d+)(?!\d)", chunk)]
+    # غالبًا يظهر المركز أولًا ثم لعب/ف/ت/خ/نقاط/له/عليه أو مشابه.
+    # نأخذ أرقامًا معقولة: لعب 0-3، نقاط 0-9، فارق -20..20.
+    if len(nums) < 3:
         return None
-    # جرّب parser النص الموجود في النسخ السابقة أولًا
-    try:
-        if '_score_from_text_near_teams' in globals():
-            ss = _score_from_text_near_teams(text, req1, req2)
-            if ss:
-                obj = {"team1": req1, "team2": req2, "score1": ss.get("score1"), "score2": ss.get("score2"), "status": ss.get("status") or "حسب قوقل", "minute": ss.get("minute") or "", "source": "Google مباشر", "scorers": []}
-                if _v9_valid_score_obj(obj):
-                    return obj
-    except Exception:
-        pass
-    # fallback regex قريب من الفريقين
-    blob = re.sub(r"\s+", " ", text)
-    pos1, pos2 = simple_key(blob).find(sk1), simple_key(blob).find(sk2)
-    if pos1 == -1 or pos2 == -1:
+    # تخلص من رقم المركز إن كان أول رقم بين 1 و4 ويأتي قبل/قريب من الاسم
+    if nums and 1 <= nums[0] <= 4:
+        nums2 = nums[1:]
+    else:
+        nums2 = nums[:]
+    played = None
+    pts = None
+    diff = 0
+    # نقاط كأس العالم بعد جولتين عادة <= 6، لكن خله <= 12 احتياطًا
+    plausible = [n for n in nums2 if 0 <= n <= 12]
+    if len(plausible) >= 2:
+        # نبحث عن لعب 0-3 وأكبر رقم محتمل كنقاط
+        for n in plausible:
+            if 0 <= n <= 3:
+                played = n
+                break
+        pts = max(plausible)
+    # فارق أهداف إذا ظهر رقم بعلامة + أو - حول الفريق
+    dm = re.search(r"[+\-]\d+", chunk)
+    if dm:
+        try:
+            diff = int(dm.group(0))
+        except Exception:
+            diff = 0
+    if played is None or pts is None:
         return None
-    # لأن simple_key يغيّر الطول، خذ نافذة كاملة من النص الأصلي
-    win = blob[:1800]
-    # أنماط: الفريق 2 - 0 الفريق أو الفريقين ثم 2 - 0
-    for pat in [r"(\d{1,2})\s*[-–]\s*(\d{1,2})", r"(\d{1,2})\s*:\s*(\d{1,2})"]:
-        for m in re.finditer(pat, win):
-            a, b = int(m.group(1)), int(m.group(2))
-            if 0 <= a <= 15 and 0 <= b <= 15:
-                obj = {"team1": req1, "team2": req2, "score1": str(a), "score2": str(b), "status": "حسب قوقل", "minute": "", "source": "Google مباشر", "scorers": []}
-                if _v9_valid_score_obj(obj):
-                    # حالة المباراة
-                    if any(w in text for w in ["انتهت المباراة", "نهاية المباراة", "FT", "Full-time"]):
-                        obj["status"] = "انتهت المباراة"
-                    elif any(w in text for w in ["مباشر", "Live"]):
-                        obj["status"] = "مباشر الآن"
-                    return obj
-    return None
-
-try:
-    _V16_OLD_V11_PARSE_GOOGLE_MATCH_DATA = _v11_parse_google_match_data
-except Exception:
-    _V16_OLD_V11_PARSE_GOOGLE_MATCH_DATA = None
+    return played, diff, pts
 
 
-def fetch_match_from_serpapi(team1, team2, date_hint=None):
-    """V16: قوقل فقط، SerpApi مع retry ثم HTML مباشر إذا API تأخر."""
-    req1 = _v16_team_from_filename_safe(team1)
-    req2 = _v16_team_from_filename_safe(team2)
-    # SerpApi structured أولًا
-    last_data = None
-    if _serpapi_key():
-        for q in _v16_match_queries(req1, req2, date_hint):
-            for hl, gl in [("ar", "sa"), ("en", "us")]:
-                try:
-                    data = serpapi_search_json(q, hl=hl, gl=gl, timeout=20)
-                    last_data = data
-                    obj = _V16_OLD_V11_PARSE_GOOGLE_MATCH_DATA(data, req1, req2, source_name="Google Sports") if _V16_OLD_V11_PARSE_GOOGLE_MATCH_DATA else None
-                    if obj and _v9_valid_score_obj(obj):
-                        obj["team1"], obj["team2"] = req1, req2
-                        obj["source"] = "Google Sports"
-                        return obj
-                except Exception:
-                    continue
-    # HTML مباشر من Google كاحتياط
-    for q in _v16_match_queries(req1, req2, date_hint)[:3]:
-        html = _v16_google_direct_html(q, hl="ar-SA", gl="sa", timeout=22)
-        obj = _v16_parse_match_from_html(html, req1, req2)
-        if obj and _v9_valid_score_obj(obj):
-            return obj
-    return None
-
-
-def _v16_extract_groups_from_google_text(text):
-    """Fallback من نص Google HTML: يستخرج ترتيب تقريبي من ظهور الفرق والأرقام حولها."""
-    text = normalize_name(text or "")
+def _v17_parse_google_standings_text(text):
+    """يحاول تحويل نص صفحة قوقل إلى groups بالصيغة: [(title, [(team, played, diff, pts), ...])].
+    إذا لم تكن القراءة واثقة يرجع [] حتى نرسل Screenshot بدل ترتيب مخترع.
+    """
+    text = _v17_clean_google_text(text)
     if not text:
         return []
-    groups = []
-    sk_text = simple_key(text)
-    for gl, teams in WORLD_CUP_GROUPS:
-        rows = []
-        for team in teams:
-            sk = simple_key(team)
-            # ابحث بالاسم العربي أو aliases الإنجليزية
-            aliases = [team] + [k for k, v in TEAM_ALIASES.items() if v == team]
-            idx = -1
-            for a in aliases:
-                ia = sk_text.find(simple_key(a))
-                if ia >= 0:
-                    idx = ia
-                    break
-            if idx < 0:
-                continue
-            # نافذة نصية بعد اسم الفريق من النص الأصلي تقريبية
-            # استخدم find العادي إن أمكن
-            raw_idx = text.find(team)
-            if raw_idx < 0:
-                raw_idx = max(0, min(len(text)-1, idx))
-            window = text[raw_idx: raw_idx + 260]
-            nums = [int(x) for x in re.findall(r"(?<!\d)-?\d{1,2}(?!\d)", window)[:10]]
-            # حذف رقم المركز في البداية إن وجد
-            if nums and nums[0] in [1,2,3,4]:
-                nums2 = nums[1:]
-            else:
-                nums2 = nums[:]
-            played = None; pts = None; gd = 0
-            # غالبًا تظهر: لعب، ف، ت، خ، نقاط ... أو فيها أهداف له/عليه
-            if len(nums2) >= 5:
-                played = nums2[0]
-                # النقاط غالبًا أكبر رقم منطقي أو آخر رقم في أول 7 خانات
-                pts = max([n for n in nums2[:8] if 0 <= n <= 15] or [0])
-                if len(nums2) >= 7:
-                    try:
-                        gd = nums2[-2]
-                    except Exception:
-                        gd = 0
-            elif len(nums2) >= 2:
-                played = nums2[0]
-                pts = nums2[-1]
-            if played is not None and pts is not None:
-                rows.append((team, int(played), int(gd), int(pts)))
-        if len(rows) >= 2:
-            rows.sort(key=lambda r: (r[3], r[2], r[1]), reverse=True)
-            groups.append((_v11_group_title_from_letter(gl), rows[:4]))
-    return groups
 
+    group_headers = []
+    for m in re.finditer(r"(?:المجموعة\s*[أابجدهـهوزحطيكل]|Group\s*[A-L])", text, re.I):
+        g = _v17_group_key_from_title(m.group(0))
+        if g:
+            group_headers.append((m.start(), g, m.group(0)))
+    group_headers.sort()
 
-def _v16_parse_serp_rankings_loose(data):
-    """إذا SerpApi رجع rankings بشكل غير متوقع، اجمع كل النصوص حول أسماء الفرق."""
-    try:
-        groups = _v11_extract_groups_from_google_json(data)
-        if groups:
-            return groups
-    except Exception:
-        pass
-    try:
-        sr = data.get("sports_results") if isinstance(data, dict) else None
-        text = json.dumps(sr or data, ensure_ascii=False)
-        return _v16_extract_groups_from_google_text(text)
-    except Exception:
-        return []
+    results = []
+    known_groups = WORLD_CUP_GROUPS if 'WORLD_CUP_GROUPS' in globals() else []
+    by_letter = {g: teams for g, teams in known_groups}
 
-
-def fetch_standings_from_serpapi():
-    # استعلامات قوقل المعتمدة من رابط المستخدم
-    queries = _v16_unique(["ترتيبات كأس العالم", "ترتيب مجموعات كأس العالم", "ترتيب مجموعات كأس العالم 2026", "FIFA World Cup 2026 standings", "World Cup 2026 group standings"])
-    # 1) SerpApi structured مع retry طويل
-    if _serpapi_key():
-        for q in queries:
-            for hl, gl in [("ar", "sa"), ("en", "us")]:
+    if group_headers:
+        for i, (pos, g, raw_title) in enumerate(group_headers):
+            end = group_headers[i + 1][0] if i + 1 < len(group_headers) else min(len(text), pos + 2500)
+            section = text[pos:end]
+            teams = by_letter.get(g, [])
+            rows = []
+            for team in teams:
+                # جرّب الاسم الرسمي وبعض التنظيفات
+                if team in section:
+                    parsed = _v17_parse_row_numbers_after_team(section, team)
+                    if parsed:
+                        rows.append((team, parsed[0], parsed[1], parsed[2]))
+            if len(rows) >= 2:
+                # الترتيب حسب ظهور الفريق في القسم، ثم النقاط تنازليًا كاحتياط إذا الظهور غير واضح
                 try:
-                    data = serpapi_search_json(q, hl=hl, gl=gl, timeout=22)
-                    groups = _v16_parse_serp_rankings_loose(data)
-                    if groups and (len(groups) >= 2 or sum(len(r) for _, r in groups) >= 8):
-                        return groups[:12]
+                    rows.sort(key=lambda r: section.find(r[0]) if section.find(r[0]) >= 0 else 9999)
                 except Exception:
-                    continue
-    # 2) Google HTML مباشر كاحتياط
-    for q in queries[:3]:
-        html = _v16_google_direct_html(q, hl="ar-SA", gl="sa", timeout=25)
-        text = _v16_html_text(html)
-        groups = _v16_extract_groups_from_google_text(text)
-        if groups and (len(groups) >= 2 or sum(len(r) for _, r in groups) >= 8):
-            return groups[:12]
+                    rows.sort(key=lambda r: (-int(r[3]), -int(r[2]), r[0]))
+                results.append((f"المجموعة {g}", rows[:4]))
+
+    # إن لم نجد عناوين مجموعات، جرّب تجميع حسب أسماء الفرق الموجودة معًا في النص.
+    if not results and known_groups:
+        for g, teams in known_groups:
+            if sum(1 for t in teams if t in text) >= 3:
+                # خذ مقطع بين أول وآخر فريق من المجموعة
+                positions = [text.find(t) for t in teams if text.find(t) >= 0]
+                section = text[max(0, min(positions) - 300): min(len(text), max(positions) + 900)]
+                rows = []
+                for team in teams:
+                    parsed = _v17_parse_row_numbers_after_team(section, team)
+                    if parsed:
+                        rows.append((team, parsed[0], parsed[1], parsed[2]))
+                if len(rows) >= 2:
+                    rows.sort(key=lambda r: section.find(r[0]) if section.find(r[0]) >= 0 else 9999)
+                    results.append((f"المجموعة {g}", rows[:4]))
+
+    # لا نعتمد نتيجة ضعيفة جدًا. مجموعتان على الأقل، أو مجموعة واحدة كاملة.
+    if len(results) >= 2 or any(len(rows) >= 4 for _t, rows in results):
+        return results
     return []
 
 
-def fetch_current_groups(mode="latest"):
-    # قوقل أولًا دائمًا. API-Football موقوف عند المستخدم، نخليه آخر شيء فقط.
+def _v17_open_google_standings_with_playwright(query=None, screenshot_name=None):
+    """يفتح قوقل فعليًا عبر Chromium. يرجع dict فيه: groups/text/screenshot/error/query."""
+    query = query or _V17_GOOGLE_STANDINGS_QUERIES[0]
+    ensure_generated_dir()
+    screenshot_name = screenshot_name or f"google_standings_{int(time.time())}.png"
+    screenshot_path = os.path.join(GENERATED_DIR, screenshot_name)
     try:
-        groups = fetch_standings_from_serpapi()
-        if groups:
-            return groups[:12], "Google"
-    except Exception:
-        pass
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "playwright_not_installed",
+            "detail": str(e),
+            "query": query,
+            "screenshot": "",
+            "groups": [],
+            "text": "",
+        }
+
+    url = _v17_build_google_url(query)
     try:
-        groups = fetch_standings_from_api_football()
-        if groups:
-            return groups[:12], "API-Football"
-    except Exception:
-        pass
-    return [], ""
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+            )
+            page = browser.new_page(
+                viewport={"width": 950, "height": 1700},
+                locale="ar-SA",
+                timezone_id="Asia/Riyadh",
+                user_agent=(
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+                ),
+            )
+            page.goto(url, wait_until="domcontentloaded", timeout=35000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=12000)
+            except Exception:
+                pass
+            # حاول الضغط على الترتيب إذا ظهر الزر كنص
+            for label in ["الترتيب", "Standings", "Rankings"]:
+                try:
+                    loc = page.get_by_text(label, exact=True)
+                    if loc.count() > 0:
+                        loc.first.click(timeout=2500)
+                        page.wait_for_timeout(1800)
+                        break
+                except Exception:
+                    pass
+            # أحيانًا يحتاج انتظار بسيط حتى تظهر الجداول
+            page.wait_for_timeout(2500)
+            try:
+                text = page.locator("body").inner_text(timeout=9000)
+            except Exception:
+                text = ""
+            try:
+                page.screenshot(path=screenshot_path, full_page=False)
+            except Exception:
+                screenshot_path = ""
+            try:
+                browser.close()
+            except Exception:
+                pass
+        groups = _v17_parse_google_standings_text(text)
+        return {
+            "ok": True,
+            "error": "",
+            "detail": "",
+            "query": query,
+            "screenshot": screenshot_path,
+            "groups": groups,
+            "text": text,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "playwright_failed",
+            "detail": repr(e),
+            "query": query,
+            "screenshot": screenshot_path if os.path.exists(screenshot_path) else "",
+            "groups": [],
+            "text": "",
+        }
+
+
+def fetch_standings_from_playwright_google():
+    """يحاول كل استعلامات قوقل. يرجع groups, source, screenshot_path, diagnostic."""
+    last = None
+    for q in _V17_GOOGLE_STANDINGS_QUERIES:
+        res = _v17_open_google_standings_with_playwright(q)
+        last = res
+        if res.get("groups"):
+            return res["groups"], f"Google مباشر / Playwright — {q}", res.get("screenshot", ""), ""
+        # إذا عندنا Screenshot مرئية من قوقل، احتفظ بها كحل نهائي بدل الرفض
+        if res.get("screenshot") and os.path.exists(res.get("screenshot")):
+            # لا نرجع مباشرة؛ نجرب الاستعلامات الأخرى أولًا
+            pass
+    if last:
+        detail = last.get("detail") or last.get("error") or "لم أتمكن من تحويل جدول قوقل إلى بيانات نصية"
+        return [], "Google مباشر / Playwright", last.get("screenshot", ""), detail
+    return [], "Google مباشر / Playwright", "", "تعذر فتح قوقل"
+
 
 try:
-    _V16_OLD_GOOGLE_SEARCH_DEBUG_COMMAND = google_search_debug_command
+    _V17_OLD_FETCH_CURRENT_GROUPS = fetch_current_groups
 except Exception:
-    _V16_OLD_GOOGLE_SEARCH_DEBUG_COMMAND = None
+    _V17_OLD_FETCH_CURRENT_GROUPS = None
 
-async def google_search_debug_command(update, context):
-    body = parse_command_body_lines(update.message.text)
-    query = " ".join(body).strip() or "مباراة المكسيك كوريا الجنوبية"
-    msg = await update.message.reply_text(f"⏳ أفحص قوقل: {query}")
+
+def fetch_current_groups(mode="latest"):
+    """للترتيب نعطي قوقل المباشر الأولوية. لو فشل التحويل، ترجع [] ويتعامل الأمر مع Screenshot."""
+    mode_n = normalize_name(mode or "latest").lower() if 'normalize_name' in globals() else str(mode or "latest").lower()
+    if mode_n in ["latest", "الأحدث", "الاحدث", "google", "قوقل", "سريع", "fast", "official", "رسمي"]:
+        groups, src, _shot, _diag = fetch_standings_from_playwright_google()
+        if groups:
+            return groups, src
+    if _V17_OLD_FETCH_CURRENT_GROUPS:
+        return _V17_OLD_FETCH_CURRENT_GROUPS(mode)
+    return [], ""
+
+
+async def current_groups_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    text = update.message.text if getattr(update, 'message', None) else ""
+    mode = mode_override
+    if not mode:
+        m = re.search(r"\*\s*(رسمي|سريع|الأحدث|الاحدث|official|fast|latest|google|قوقل|365|٣٦٥|كورة|كوره|kooora)\s*$", text or "", re.I)
+        mode = m.group(1) if m else "latest"
+    payload = {"kind": "standings"}
+    kb = source_keyboard(context, payload) if 'source_keyboard' in globals() else None
+    wait = await update.message.reply_text("⏳ أفتح قوقل مباشرة وأسحب ترتيب المجموعات...")
+
     try:
-        data = None
-        err = ""
-        try:
-            data = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(serpapi_search_json, query, "ar", "sa", 22), timeout=30)
-        except Exception as e:
-            err = str(e)[:120]
-        lines = ["نتيجة فحص قوقل:", f"query: {query}"]
-        if isinstance(data, dict):
-            sr = data.get("sports_results") if isinstance(data, dict) else None
-            if isinstance(sr, dict):
-                lines.append("✅ sports_results موجود")
-                lines.append("مفاتيح: " + "، ".join(list(sr.keys())[:12]))
-                groups = _v16_parse_serp_rankings_loose(data)
-                if groups:
-                    lines.append(f"✅ قرأت ترتيب/جدول: {len(groups)} مجموعة")
-                    for title, rows in groups[:3]:
-                        lines.append(f"{title}: " + "، ".join([f"{r[0]} {r[3]}" for r in rows[:4]]))
-                else:
-                    # مباراة؟
-                    found = []
-                    txt = normalize_name(query)
-                    for tm in WORLD_CUP_TEAMS:
-                        if simple_key(tm) in simple_key(txt):
-                            found.append(tm)
-                        if len(found) >= 2:
-                            break
-                    if len(found) >= 2:
-                        obj = _v11_parse_google_match_data(data, found[0], found[1], source_name="Google Sports")
-                        if obj:
-                            lines.append(f"✅ قرأت المباراة: {obj.get('team1')} {obj.get('score1')} - {obj.get('score2')} {obj.get('team2')}")
-                        else:
-                            lines.append("⚠️ وصلنا لقوقل لكن بنية المباراة مختلفة")
-                    else:
-                        lines.append("⚠️ وصلنا لقوقل لكن لم أقرأ جدول/مباراة مؤكدة من البنية الحالية")
-            else:
-                lines.append("⚠️ لم يظهر sports_results")
-        else:
-            html = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(_v16_google_direct_html, query, "ar-SA", "sa", 20), timeout=25)
-            txt = _v16_html_text(html)
-            if txt:
-                lines.append("✅ فتحت Google HTML مباشر")
-                groups = _v16_extract_groups_from_google_text(txt)
-                if groups:
-                    lines.append(f"✅ قرأت من HTML: {len(groups)} مجموعة")
-                elif err:
-                    lines.append(f"⚠️ SerpApi تأخر: {err}")
-            elif err:
-                lines.append(f"❌ فشل قوقل: {err}")
-        await msg.edit_text("\n".join(lines[:18]))
+        groups, source_label, screenshot_path, diag = await _asyncio_v6.wait_for(
+            _asyncio_v6.to_thread(fetch_standings_from_playwright_google), timeout=55
+        )
     except Exception as e:
-        await msg.edit_text(f"❌ فشل فحص قوقل: {str(e)[:220]}")
+        groups, source_label, screenshot_path, diag = [], "Google مباشر / Playwright", "", repr(e)
 
-async def start(update, context):
-    await update.message.reply_text(
-        "✅ بوت مونديال المصيف 2026 شغال\n\n"
-        "أوامر سريعة:\n"
-        "/مباشر المغرب * اسكتلندا * قوقل\n"
-        "/بحث_قوقل ترتيبات كأس العالم\n"
-        "/ترتيب_المجموعات_الان\n"
-        "/خبر\n"
-        "/عاجل"
+    if groups:
+        path = create_all_groups_newlook_image(groups) if 'create_all_groups_newlook_image' in globals() else create_all_groups_image(groups)
+        caption = f"ترتيب المجموعات الآن ✅\nالمصدر: {source_label}\nملاحظة: الترتيب مسحوب من قوقل مباشرة."
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        await send_photo_path_markup(update.message, path, caption, kb)
+        try:
+            await update.message.reply_text(build_groups_text(groups, source_label))
+        except Exception:
+            pass
+        return
+
+    # إذا لم نقدر نحول الجدول، نرسل Screenshot قوقل نفسه؛ هذا يحقق طلب المستخدم بالسحب من قوقل مباشرة.
+    if screenshot_path and os.path.exists(screenshot_path):
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        cap = (
+            "ترتيب المجموعات من قوقل مباشرة 📊\n"
+            "لم أستطع تحويل الجدول إلى تصميم بسبب تغيّر بنية قوقل، فأرسلت لك لقطة قوقل نفسها.\n"
+            "المصدر: Google مباشر / Playwright"
+        )
+        await send_photo_path_markup(update.message, screenshot_path, cap, kb)
+        return
+
+    # Playwright غير مثبت أو Chromium غير موجود.
+    if "playwright_not_installed" in str(diag) or "No module named" in str(diag):
+        await wait.edit_text(
+            "❌ Playwright غير مركّب على Railway.\n\n"
+            "ركّبها كذا:\n"
+            "1) أضف playwright في requirements.txt\n"
+            "2) Start Command:\n"
+            "python -m playwright install chromium && python bot.py\n\n"
+            "ولو احتاج Chromium dependencies استخدم:\n"
+            "python -m playwright install --with-deps chromium && python bot.py",
+            reply_markup=kb,
+        )
+        return
+
+    await wait.edit_text(
+        "❌ تعذر فتح قوقل أو أخذ لقطة الترتيب.\n"
+        f"التشخيص: {diag}\n\n"
+        "تأكد أن Start Command يحتوي:\n"
+        "python -m playwright install chromium && python bot.py",
+        reply_markup=kb,
     )
 
-# ==================== END V16 HARD GOOGLE PULL PATCH ====================
+
+async def google_search_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = parse_command_body_lines(update.message.text) if 'parse_command_body_lines' in globals() else []
+    query = " ".join(body).strip() or "ترتيبات كأس العالم"
+    msg = await update.message.reply_text(f"⏳ أفحص قوقل مباشرة: {query}")
+    try:
+        res = await _asyncio_v6.wait_for(_asyncio_v6.to_thread(_v17_open_google_standings_with_playwright, query), timeout=55)
+    except Exception as e:
+        await msg.edit_text(f"❌ فشل فتح قوقل مباشرة: {e}")
+        return
+    lines = [
+        "نتيجة فحص قوقل المباشر:",
+        f"query: {res.get('query')}",
+        f"ok: {res.get('ok')}",
+        f"groups_read: {len(res.get('groups') or [])}",
+        f"screenshot: {'موجود' if res.get('screenshot') else 'غير موجود'}",
+    ]
+    if res.get('error'):
+        lines.append(f"error: {res.get('error')}")
+    if res.get('detail'):
+        lines.append(f"detail: {str(res.get('detail'))[:500]}")
+    preview = _v17_clean_google_text(res.get('text') or '')[:1200]
+    if preview:
+        lines.append("\nأول نص من الصفحة:")
+        lines.append(preview)
+    await msg.edit_text("\n".join(lines)[:3900])
+    if res.get('screenshot') and os.path.exists(res.get('screenshot')):
+        try:
+            await send_photo_path_markup(update.message, res.get('screenshot'), "Screenshot من قوقل المباشر")
+        except Exception:
+            pass
+
+# ==================== END V17 PLAYWRIGHT GOOGLE STANDINGS PATCH ====================
 
 if __name__ == "__main__":
     main()
