@@ -20,7 +20,7 @@ except Exception:
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 
 TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or os.getenv("TOKEN"))
@@ -13749,6 +13749,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_المجموعات_الان(?:\s|$)"), current_groups_now_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباشر(?:\s|$)"), live_match_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:القائمة|menu|Menu)(?:\s|$)"), public_menu_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^(?:📺 مباشر الآن|📅 مباريات اليوم|📅 المباريات القادمة|📊 ترتيب المجموعات|🏆 هدافين البطولة|✅ المتأهلون لدور 32|🚪 المغادرون من البطولة|📋 نتائج المباريات|🎮 فانتزي المصيف|ℹ️ طريقة الاستخدام|(?:↩️\s*)?إلغاء|الغاء)$"), public_reply_menu_router))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:الهدافين|هدافين_البطولة|هدافين_كاس_العالم)(?:\s|$)"), public_top_scorers_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تحديث_المتأهلين(?:\s|$)"), admin_only(auto_update_status_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/لوحة_المغادرين(?:\s|$)"), eliminated_show_board_command))
@@ -16898,11 +16899,12 @@ async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not q:
         return
     await q.answer()
-    if not is_admin_user(update):
-        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
-        return
     parts = (q.data or "").split("|")
     action = parts[1] if len(parts) > 1 else ""
+    admin_only_actions = {"upd"}
+    if action in admin_only_actions and not is_admin_user(update):
+        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
     if action == "menu":
         await q.message.edit_text("اختر اليوم أو استخدم /مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
         return
@@ -22510,6 +22512,747 @@ async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.message.reply_text("تعذر تحديد نوع الطلب.")
 
 # ==================== END V31 FINAL PATCH ====================
+
+
+
+# ==================== V31 PATCH 2026-06-21: menu + results + groups + scorers + status ====================
+
+def _public_main_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ["📺 مباشر الآن", "📅 المباريات القادمة"],
+            ["📊 ترتيب المجموعات", "🏆 هدافين البطولة"],
+            ["✅ المتأهلون لدور 32", "🚪 المغادرون من البطولة"],
+            ["📋 نتائج المباريات", "🎮 فانتزي المصيف"],
+            ["ℹ️ طريقة الاستخدام"],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="اختر من القائمة",
+    )
+
+
+def _public_help_text():
+    return (
+        "ℹ️ طريقة الاستخدام\n\n"
+        "• مباشر الآن: اختر المباراة وتظهر لك البطاقة.\n"
+        "• المباريات القادمة: اختر اليوم المطلوب ويطلع تصميم اليوم الواحد مباشرة بتصميم 2.\n"
+        "• ترتيب المجموعات: اختر مجموعة أو 6 مجموعات أو جميع المجموعات.\n"
+        "• نتائج المباريات: اختر التاريخ وتظهر النتائج مع الهدافين قدر الإمكان من تفاصيل المباراة.\n"
+        "• فانتزي المصيف: الترتيب العام، نقاط اليوم، الأساطير، نموذج المشاركة.\n\n"
+        "القائمة الرئيسية مثبتة أسفل المحادثة، وتقدر ترجع لها أيضًا بكتابة /القائمة أو إرسال إلغاء."
+    )
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "حيّاك في بوت مونديال المصيف 2026 🏆\nاختر من القائمة الثابتة بالأسفل، وكل شخص يستخدم البوت لحاله بالخاص.",
+        reply_markup=_public_main_reply_keyboard(),
+    )
+
+
+async def public_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "القائمة الرئيسية جاهزة تحت 👇",
+        reply_markup=_public_main_reply_keyboard(),
+    )
+
+
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(update.message.text or "")
+    if txt in ["إلغاء", "الغاء", "↩️ إلغاء"]:
+        await public_menu_command(update, context)
+        return
+    if txt == "📺 مباشر الآن":
+        d = _v29_active_fixture_date() if '_v29_active_fixture_date' in globals() else None
+        await update.message.reply_text(_v29_live_today_text(d), reply_markup=_v29_live_today_keyboard(d))
+        return
+    if txt in ["📅 مباريات اليوم", "📅 المباريات القادمة"]:
+        await update.message.reply_text("اختر اليوم المطلوب من المباريات القادمة:", reply_markup=_fixtures_dates_keyboard("single"))
+        return
+    if txt == "📊 ترتيب المجموعات":
+        await update.message.reply_text("اختر المجموعة أو 6 مجموعات أو جميع المجموعات:", reply_markup=_v29_group_menu_keyboard())
+        return
+    if txt == "🏆 هدافين البطولة":
+        wait = await update.message.reply_text("⏳ أسحب هدافي البطولة من ESPN...")
+        try:
+            items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers), timeout=35)
+            path = render_top_scorers_v29(items)
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+            await send_photo_path(update.message, path, "هدافو البطولة ✅\nالمصدر: ESPN")
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب هدافي البطولة ❌\n{str(e)[:300]}")
+        return
+    if txt == "✅ المتأهلون لدور 32":
+        state = load_status_state()
+        if _v31_state_needs_refresh(state) or not state.get("qualified_auto"):
+            try:
+                state = await asyncio.wait_for(asyncio.to_thread(_v31_refresh_status_from_news, state), timeout=80)
+            except Exception:
+                state = load_status_state()
+        teams = _status_effective_teams("qualified", state)
+        path = render_qualified32_board(teams)
+        await send_photo_path(update.message, path, _status_caption("qualified", teams, state))
+        return
+    if txt == "🚪 المغادرون من البطولة":
+        state = load_status_state()
+        if _v31_state_needs_refresh(state) or not state.get("eliminated_auto"):
+            try:
+                state = await asyncio.wait_for(asyncio.to_thread(_v31_refresh_status_from_news, state), timeout=80)
+            except Exception:
+                state = load_status_state()
+        teams = _status_effective_teams("eliminated", state)
+        path = render_eliminated_board(teams)
+        await send_photo_path(update.message, path, _status_caption("eliminated", teams, state))
+        return
+    if txt == "📋 نتائج المباريات":
+        prev = _v28_previous_result_dates() if '_v28_previous_result_dates' in globals() else []
+        if not prev:
+            await update.message.reply_text("ما فيه أيام سابقة للنتائج حتى الآن.")
+            return
+        await update.message.reply_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        return
+    if txt == "🎮 فانتزي المصيف":
+        await update.message.reply_text("قائمة فانتزي المصيف:", reply_markup=_fantasy_public_keyboard())
+        return
+    if txt == "ℹ️ طريقة الاستخدام":
+        await update.message.reply_text(_public_help_text())
+        return
+
+
+def _v28_previous_result_dates():
+    out = []
+    for d, day in _fixture_dates():
+        if _v28_is_past_date(d):
+            out.append((d, day))
+    return out
+
+
+def _v28_previous_results_keyboard():
+    rows, row = [], []
+    for d, day in _v28_previous_result_dates():
+        row.append(InlineKeyboardButton(f"{day} {d[:5]}", callback_data=f"res|day|{d}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v29_group_menu_keyboard():
+    rows = []
+    for i in range(0, len(GROUP_BUTTONS_V29), 3):
+        rows.append([InlineKeyboardButton(label, callback_data=f"grp|one|{code}") for code, label in GROUP_BUTTONS_V29[i:i+3]])
+    rows.append([
+        InlineKeyboardButton("6 مجموعات", callback_data="grp|half1"),
+        InlineKeyboardButton("6 مجموعات", callback_data="grp|half2"),
+    ])
+    rows.append([InlineKeyboardButton("جميع المجموعات", callback_data="grp|all")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fixtures_day_keyboard(date):
+    rows = [[InlineKeyboardButton("تصميم 2", callback_data=f"fx|render2|{date}")]]
+    miss = [m for m in _fixtures_for_date(date) if _has_unknown(m)]
+    for i, m in enumerate(miss, 1):
+        rows.append([InlineKeyboardButton(f"تحديث مباراة {i} — {m.get('time')}", callback_data=f"fx|upd|{m.get('id')}")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fixtures_dates_keyboard(mode="single", selected=None):
+    selected = set(selected or [])
+    rows, row = [], []
+    source_dates = []
+    for d, day in _fixture_dates():
+        if _v28_is_today_or_future_date(d):
+            source_dates.append((d, day))
+    for d, day in source_dates:
+        label = f"{'✅ ' if d in selected else ''}{day} {d[:5]}"
+        data = f"fx|toggle|{d}" if mode == "multi" else f"fx|day|{d}"
+        row.append(InlineKeyboardButton(label, callback_data=data))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if mode == "multi":
+        rows.append([
+            InlineKeyboardButton("تصميم جديد", callback_data="fx|render_combo_new"),
+            InlineKeyboardButton("تصميم 10 مباريات", callback_data="fx|render_combo_10"),
+        ])
+        rows.append([InlineKeyboardButton("تصفير الاختيار", callback_data="fx|clear")])
+    else:
+        rows.append([InlineKeyboardButton("اختيار أكثر من يوم", callback_data="fx|multi")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v28_result_text_for_date(date):
+    d = _normalize_date_arg(date)
+    matches = _v26_dedupe_fixture_matches(_fixtures_for_date(d)) if '_v26_dedupe_fixture_matches' in globals() else _fixtures_for_date(d)
+    if not matches:
+        return f"ما فيه مباريات بتاريخ {d}"
+    title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+    lines = [f"🏆 نتائج مباريات {title} 🏆", "المصدر: ESPN", ""]
+    for i, m in enumerate(matches, start=1):
+        obj = _v28_fetch_espn_match_by_fixture(d, m)
+        if not obj:
+            try:
+                obj = fetch_live_match_data(m.get("team1"), m.get("team2"), "google", d)
+            except Exception:
+                obj = None
+        if obj:
+            lines.append(f"{i}) {m.get('team1')} {obj.get('score1','-')} - {obj.get('score2','-')} {m.get('team2')}")
+            scorers = _v28_sanitize_scorers(obj.get("scorers") or [])
+            if not scorers:
+                try:
+                    fallback = fetch_live_match_data(m.get("team1"), m.get("team2"), "google", d)
+                    scorers = _v28_sanitize_scorers((fallback or {}).get("scorers") or [])
+                except Exception:
+                    scorers = []
+            if scorers:
+                lines.append("⚽ الهدافون:")
+                for s in scorers[:8]:
+                    lines.append(f"- {s}")
+            else:
+                s1 = str(obj.get("score1", "0")).strip()
+                s2 = str(obj.get("score2", "0")).strip()
+                if s1 == "0" and s2 == "0":
+                    lines.append("⚽ لا يوجد أهداف")
+                else:
+                    lines.append("⚽ الهدافون: غير متوفرين حاليًا")
+        else:
+            lines.append(f"{i}) {m.get('team1')} × {m.get('team2')} — لم تتوفر النتيجة بعد")
+            lines.append("⚽ الهدافون: غير متوفرين حاليًا")
+        lines.append("")
+    lines.append("المصيف يضعكم بالحدث")
+    return "\n".join(lines).strip()
+
+
+async def previous_results_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    if len(parts) >= 3 and parts[1] == "day":
+        d = parts[2]
+        try:
+            await q.message.edit_text("⏳ أسحب النتائج والهدافين من ESPN...")
+        except Exception:
+            pass
+        try:
+            text = await asyncio.wait_for(asyncio.to_thread(_v28_result_text_for_date, d), timeout=40)
+            await q.message.edit_text(text)
+        except Exception as e:
+            await q.message.edit_text(f"تعذر جلب نتائج هذا اليوم ❌\n{str(e)[:400]}")
+        return
+
+
+def _v31_grid_positions(count, cols, card_w, card_h, gap_x, gap_y, start_x, start_y, rtl=True):
+    pos = []
+    for idx in range(count):
+        row = idx // cols
+        col = idx % cols
+        if rtl:
+            col = cols - 1 - col
+        x = start_x + col * (card_w + gap_x)
+        y = start_y + row * (card_h + gap_y)
+        pos.append((x, y))
+    return pos
+
+
+def _v28_standings_card(draw, img, box, title, rows, compact=False):
+    x, y, x2, y2 = box
+    w = x2 - x
+    try:
+        rounded_rect(draw, (x, y, x2, y2), radius=28, fill="#0638A5E8", outline="#14B8F5", width=3)
+        rounded_rect(draw, (x+16, y+16, x2-16, y+66), radius=16, fill="#FBBF24", outline="#00000055", width=1)
+    except Exception:
+        draw.rectangle((x, y, x2, y2), fill="#0638A5", outline="#14B8F5")
+        draw.rectangle((x+16, y+16, x2-16, y+66), fill="#FBBF24")
+    gt = clean_group_title_for_design(title) if 'clean_group_title_for_design' in globals() else str(title)
+    if not str(gt).startswith("المجموعة"):
+        gt = f"المجموعة {gt}"
+    draw_text(draw, (x+w//2, y+41), gt, get_font(28 if compact else 30), fill="#061633", max_width=w-44)
+
+    label_y = y + 88
+    team_x = x2 - 36
+    played_x = x2 - (235 if compact else 255)
+    diff_x = x2 - (335 if compact else 370)
+    pts_x = x2 - (430 if compact else 485)
+    draw_text(draw, (team_x, label_y), "المنتخب", get_font(18), fill="#FDE68A", anchor="rm")
+    draw_text(draw, (played_x, label_y), "لعب", get_font(18), fill="#FDE68A")
+    draw_text(draw, (diff_x, label_y), "فارق", get_font(18), fill="#FDE68A")
+    draw_text(draw, (pts_x, label_y), "نقاط", get_font(18), fill="#FDE68A")
+
+    yy = y + 108
+    row_h = 58 if compact else 64
+    row_gap = 8
+    team_width = max(130, team_x - played_x - 42)
+    for pos, r in enumerate(rows[:4], start=1):
+        team, played, diff, pts = r[0], r[1], r[2], r[3]
+        try:
+            rounded_rect(draw, (x+16, yy, x2-16, yy+row_h), radius=15, fill="#061633C8", outline="#FFFFFF30", width=1)
+        except Exception:
+            draw.rectangle((x+16, yy, x2-16, yy+row_h), fill="#061633")
+        cy = yy + row_h//2
+        team_name = f"{pos}. {_clean_display_name(team)}" if '_clean_display_name' in globals() else f"{pos}. {team}"
+        team_font = _fit_font_to_width(draw, team_name, 23 if not compact else 21, team_width, min_size=15)
+        draw_text(draw, (team_x, cy), team_name, team_font, fill="#FFFFFF", anchor="rm", max_width=team_width)
+        draw_text(draw, (played_x, cy), str(played), get_font(22 if compact else 24), fill="#FFFFFF")
+        try:
+            diff_txt = f"{int(diff):+d}"
+        except Exception:
+            diff_txt = str(diff)
+        draw_text(draw, (diff_x, cy), diff_txt, get_font(20 if compact else 22), fill="#E5E7EB")
+        draw_text(draw, (pts_x, cy), str(pts), get_font(24 if compact else 28), fill="#FBBF24")
+        yy += row_h + row_gap
+
+
+def create_all_groups_newlook_image(groups, style=2, title_ar="6 مجموعات", title_en="GROUP STANDINGS", filename_hint="groups_v31"):
+    ensure_generated_dir()
+    groups = list(groups or [])[:6]
+    width, height = 1800, 1750
+    try:
+        img, draw = _games_day_background(width, height)
+    except Exception:
+        img = _fixture_bg(width, height)
+        draw = ImageDraw.Draw(img, "RGBA")
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (56, 48, width-56, height-56), radius=46, fill="#06152FCC", outline="#FFFFFF30", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img, "RGBA")
+    draw_text(draw, (width//2, 94), "MONDIAL AL MASEEF 2026", _v31_latin_font(34) if '_v31_latin_font' in globals() else get_font(34), fill="#FFFFFF", max_width=920)
+    draw_text(draw, (width//2, 165), title_en, _v31_latin_font(56) if '_v31_latin_font' in globals() else get_font(56), fill="#FFFFFF", max_width=1200)
+    draw_text(draw, (width//2, 228), title_ar, get_font(40), fill="#FBBF24", max_width=1000)
+
+    cols = 2
+    card_w, card_h = 790, 405
+    gap_x, gap_y = 44, 36
+    start_x = (width - (cols*card_w + (cols-1)*gap_x)) // 2
+    start_y = 290
+    for idx, (title, rows) in enumerate(groups):
+        x, y = _v31_grid_positions(len(groups), cols, card_w, card_h, gap_x, gap_y, start_x, start_y, rtl=True)[idx]
+        _v28_standings_card(draw, img, (x, y, x+card_w, y+card_h), title, rows, compact=True)
+
+    draw.line((360, height-110, width-360, height-110), fill="#FFFFFF77", width=2)
+    draw_text(draw, (width//2, height-68), "المصيف يضعكم بالحدث", get_font(34), fill="#FBBF24", max_width=720)
+    path = os.path.join(GENERATED_DIR, f"{filename_hint}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def _v29_render_single_group_image(title, rows):
+    ensure_generated_dir()
+    width, height = 1080, 1220
+    try:
+        img, draw = _games_day_background(width, height)
+    except Exception:
+        img = _fixture_bg(width, height)
+        draw = ImageDraw.Draw(img, "RGBA")
+    overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (50, 50, width-50, height-50), radius=42, fill="#06152FCC", outline="#FFFFFF22", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img, "RGBA")
+    draw_text(draw, (width//2, 90), "MONDIAL AL MASEEF 2026", _v31_latin_font(34) if '_v31_latin_font' in globals() else get_font(34), fill="#FFFFFF", max_width=800)
+    draw_text(draw, (width//2, 155), "GROUP STANDINGS", _v31_latin_font(58) if '_v31_latin_font' in globals() else get_font(58), fill="#FFFFFF", max_width=950)
+    _v28_standings_card(draw, img, (90, 250, width-90, 910), title, rows, compact=False)
+    draw.line((240, 1050, width-240, 1050), fill="#FFFFFF88", width=2)
+    draw_text(draw, (width//2, 1100), "المصيف يضعكم بالحدث", get_font(34), fill="#FBBF24", max_width=700)
+    path = os.path.join(GENERATED_DIR, f"group_single_{_safe_filename(str(title))}.png")
+    img.save(path, quality=95)
+    return path
+
+
+def render_top_scorers_v29(items):
+    ensure_generated_dir()
+    row_h = 74
+    count = max(1, min(len(items or []), 15))
+    width = 1080
+    height = min(1600, 370 + count*row_h + 170)
+    img, draw = _games_day_background(width, height)
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (48, 52, width-48, height-52), radius=42, fill="#06152FCC", outline="#FFFFFF33", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img, "RGBA")
+    draw_text(draw, (width//2, 95), "MONDIAL AL MASEEF 2026", _v31_latin_font(34) if '_v31_latin_font' in globals() else get_font(34), fill="#FFFFFF", max_width=860)
+    draw_text(draw, (width//2, 162), "TOP SCORERS", _v31_latin_font(62) if '_v31_latin_font' in globals() else get_font(60), fill="#FFFFFF", max_width=940)
+    draw_text(draw, (width//2, 226), "هدافو البطولة", get_font(42), fill="#FBBF24", max_width=830)
+
+    x0, x1 = 78, width-78
+    y0 = 280
+    rounded_rect(draw, (x0, y0, x1, y0+48), radius=16, fill="#F0C24A", outline="#00000044", width=1)
+    draw_text(draw, (x1-135, y0+24), "اللاعب", get_font(24), fill="#061633", anchor="mm")
+    draw_text(draw, (x0+565, y0+24), "المنتخب", get_font(24), fill="#061633", anchor="mm")
+    draw_text(draw, (x0+230, y0+24), "لعب", get_font(24), fill="#061633", anchor="mm")
+    draw_text(draw, (x0+95, y0+24), "أهداف", get_font(24), fill="#061633", anchor="mm")
+
+    y = y0 + 60
+    if not items:
+        rounded_rect(draw, (x0, y, x1, y+85), radius=22, fill="#061633D9", outline="#FFFFFF33", width=1)
+        draw_text(draw, (width//2, y+43), "تعذر جلب هدافي البطولة من ESPN حاليًا", get_font(31), fill="#FFFFFF", max_width=850)
+    for idx, it in enumerate((items or [])[:15], start=1):
+        rounded_rect(draw, (x0, y, x1, y+row_h-10), radius=18, fill="#061633D9", outline="#FFFFFF22", width=1)
+        cy = y + (row_h-10)//2
+        raw_name = it.get("name", "")
+        name = _player_name_ar(raw_name) if '_player_name_ar' in globals() else normalize_name(raw_name)
+        team = canonical_team_name(it.get("team")) or normalize_name(it.get("team") or "-")
+        played = str(it.get("played", ""))
+        goals = str(it.get("goals", ""))
+
+        rank_box = (x1-52, y+12, x1-10, y+row_h-22)
+        rounded_rect(draw, rank_box, radius=12, fill="#FBBF24", outline="#FFFFFF22", width=1)
+        draw_text(draw, ((rank_box[0]+rank_box[2])//2, cy), str(idx), get_font(22), fill="#061633")
+        draw_text(draw, (x1-70, cy), name, _fit_font_to_width(draw, name, 27, 305, min_size=18), fill="#FFFFFF", anchor="rm", max_width=305)
+        draw_text(draw, (x0+575, cy), team, _fit_font_to_width(draw, team, 24, 215, min_size=17), fill="#CBD5E1", anchor="mm", max_width=215)
+        draw_text(draw, (x0+230, cy), played, get_font(28), fill="#FFFFFF", anchor="mm")
+        draw_text(draw, (x0+95, cy), goals, get_font(34), fill="#FBBF24", anchor="mm")
+        y += row_h
+
+    draw.line((240, height-120, width-240, height-120), fill="#FFFFFF88", width=2)
+    draw_text(draw, (width//2, height-72), "المصيف يضعكم بالحدث", get_font(34), fill="#FBBF24", max_width=700)
+    path = os.path.join(GENERATED_DIR, "top_scorers_espn_v31_ar.png")
+    img.save(path, quality=95)
+    return path
+
+
+def _v31_search_page_text(query):
+    getter = _requests_get if '_requests_get' in globals() else (requests.get if requests else None)
+    if not getter:
+        return ""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    texts = []
+    for url in [
+        f"https://www.bing.com/search?q={_quote_plus(query)}",
+        f"https://duckduckgo.com/html/?q={_quote_plus(query)}",
+    ]:
+        try:
+            r = getter(url, headers=headers, timeout=12)
+            if int(getattr(r, 'status_code', 200) or 200) >= 400:
+                continue
+            texts.append(_v31_strip_html(getattr(r, 'text', '')))
+        except Exception:
+            continue
+    return " ".join(texts)
+
+
+def _v31_status_team_mentions(text, kind="qualified"):
+    low = str(text or "").lower()
+    if not low:
+        return {}
+    if kind == "qualified":
+        keys = ["officially qualified", "qualified", "clinched qualification", "booked their place", "through to the round of 32", "advanced to the round of 32", "تأهل", "متأهل", "رسميا", "رسميًا"]
+    else:
+        keys = ["officially eliminated", "eliminated", "knocked out", "out of the world cup", "cannot advance", "غادر", "ودع", "أقصي", "اقصي", "خرج من البطولة"]
+    counts = {}
+    for team_ar, en_vars in TEAM_SEARCH_EN.items():
+        variants = [team_ar, _v31_team_name_en(team_ar)] + list(en_vars or [])
+        page_hit = False
+        for v in [x for x in dict.fromkeys([normalize_name(x) for x in variants if x])]:
+            pat = re.escape(v.lower())
+            for m in re.finditer(pat, low):
+                snippet = low[max(0, m.start()-140):min(len(low), m.end()+140)]
+                if any(k in snippet for k in keys):
+                    page_hit = True
+                    break
+            if page_hit:
+                break
+        if page_hit:
+            counts[team_ar] = counts.get(team_ar, 0) + 1
+    return counts
+
+
+def _v31_collect_official_status(kind="qualified"):
+    if kind == "qualified":
+        queries = [
+            "المتأهلين رسميا إلى دور 32 كأس العالم 2026",
+            "qualified teams round of 32 world cup 2026",
+            'site:espn.com officially qualified round of 32 world cup 2026',
+            'site:reuters.com qualified round of 32 world cup 2026',
+        ]
+        cap = 32
+    else:
+        queries = [
+            "المنتخبات المغادرة رسميا من كأس العالم 2026",
+            "eliminated teams world cup 2026",
+            'site:espn.com officially eliminated world cup 2026',
+            'site:reuters.com eliminated world cup 2026',
+        ]
+        cap = None
+    totals = {}
+    for q in queries:
+        txt = _v31_search_page_text(q)
+        for team, c in _v31_status_team_mentions(txt, kind).items():
+            totals[team] = totals.get(team, 0) + c
+    ordered = [team for team, _c in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0])) if _c >= 1]
+    return _unique_teams(ordered, cap)
+
+
+def _v31_refresh_status_from_news(state=None):
+    state = state or load_status_state()
+    q_auto = []
+    e_auto = []
+    try:
+        q_auto = _v31_collect_official_status("qualified")
+    except Exception:
+        q_auto = state.get("qualified_auto") or []
+    try:
+        e_auto = _v31_collect_official_status("eliminated")
+    except Exception:
+        e_auto = state.get("eliminated_auto") or []
+    state["qualified_auto"] = _unique_teams(q_auto, 32)
+    state["eliminated_auto"] = _unique_teams(e_auto)
+    state["updated_at"] = _now_riyadh_text()
+    state["updated_ts"] = _time.time()
+    state["source"] = "بحث عربي + إنجليزي عن الأخبار الرسمية"
+    save_status_state(state)
+    return state
+
+
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    action = (q.data or "").split("|", 1)[1] if "|" in (q.data or "") else "home"
+    if action == "home":
+        await q.edit_message_text("القائمة الرئيسية: اختر القسم المطلوب، أو استخدم القائمة الثابتة أسفل المحادثة.", reply_markup=_public_main_keyboard())
+        return
+    if action == "live":
+        d = _v29_active_fixture_date() if '_v29_active_fixture_date' in globals() else None
+        await q.edit_message_text(_v29_live_today_text(d), reply_markup=_v29_live_today_keyboard(d))
+        return
+    if action == "fixtures":
+        await q.edit_message_text("اختر اليوم المطلوب من المباريات القادمة:", reply_markup=_fixtures_dates_keyboard("single"))
+        return
+    if action == "groups":
+        await q.edit_message_text("اختر المجموعة أو 6 مجموعات أو جميع المجموعات:", reply_markup=_v29_group_menu_keyboard())
+        return
+    if action == "fantasy":
+        await q.edit_message_text("قائمة فانتزي المصيف:", reply_markup=_fantasy_public_keyboard())
+        return
+    if action == "scorers":
+        wait = await q.message.reply_text("⏳ أسحب هدافي البطولة من ESPN...")
+        try:
+            items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers), timeout=35)
+            path = render_top_scorers_v29(items)
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+            await send_photo_path(q.message, path, "هدافو البطولة ✅\nالمصدر: ESPN")
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب هدافي البطولة ❌\n{str(e)[:300]}")
+        return
+    if action == "results":
+        prev = _v28_previous_result_dates()
+        if not prev:
+            await q.edit_message_text("ما فيه أيام سابقة للنتائج حتى الآن.")
+            return
+        await q.edit_message_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        return
+    if action == "help":
+        await q.edit_message_text(_public_help_text())
+        return
+    await q.message.reply_text("تعذر قراءة الخيار.")
+
+
+async def public_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    kind = (q.data or "").split("|", 1)[1] if "|" in (q.data or "") else "qualified"
+    state = load_status_state()
+    if _v31_state_needs_refresh(state) or (kind == "qualified" and not state.get("qualified_auto")) or (kind == "eliminated" and not state.get("eliminated_auto")):
+        try:
+            state = await asyncio.wait_for(asyncio.to_thread(_v31_refresh_status_from_news, state), timeout=80)
+        except Exception:
+            state = load_status_state()
+    if kind == "qualified":
+        teams = _status_effective_teams("qualified", state)
+        path = render_qualified32_board(teams)
+        await send_photo_path(q.message, path, _status_caption("qualified", teams, state))
+    elif kind == "eliminated":
+        teams = _status_effective_teams("eliminated", state)
+        path = render_eliminated_board(teams)
+        await send_photo_path(q.message, path, _status_caption("eliminated", teams, state))
+    else:
+        await q.message.reply_text("تعذر قراءة الخيار.")
+
+
+async def groups_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else ""
+    try:
+        if action in {"all", "half1", "half2"}:
+            await q.message.edit_text("⏳ أسحب ترتيب المجموعات من ESPN...")
+            groups, source_label = await asyncio.wait_for(asyncio.to_thread(fetch_current_groups, "espn"), timeout=40)
+            if not groups:
+                await q.message.edit_text("تعذر جلب ترتيب المجموعات من ESPN حاليًا.")
+                return
+            if action == "half1":
+                path = create_all_groups_newlook_image(groups[:6], title_ar="6 مجموعات", title_en="GROUP STANDINGS", filename_hint="groups_half1_v31")
+                await send_photo_path(q.message, path, "ترتيب 6 مجموعات ✅\nالمصدر: ESPN")
+            elif action == "half2":
+                path = create_all_groups_newlook_image(groups[6:12], title_ar="6 مجموعات", title_en="GROUP STANDINGS", filename_hint="groups_half2_v31")
+                await send_photo_path(q.message, path, "ترتيب 6 مجموعات ✅\nالمصدر: ESPN")
+            else:
+                path1 = create_all_groups_newlook_image(groups[:6], title_ar="6 مجموعات", title_en="GROUP STANDINGS", filename_hint="groups_all_page1_v31")
+                path2 = create_all_groups_newlook_image(groups[6:12], title_ar="6 مجموعات", title_en="GROUP STANDINGS", filename_hint="groups_all_page2_v31")
+                await send_photo_path(q.message, path1, "ترتيب جميع المجموعات ✅ (1/2)\nالمصدر: ESPN")
+                await send_photo_path(q.message, path2, "ترتيب جميع المجموعات ✅ (2/2)\nالمصدر: ESPN")
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+            return
+        if action == "one" and len(parts) >= 3:
+            code = parts[2]
+            await q.message.edit_text(f"⏳ أسحب ترتيب المجموعة {code} من ESPN...")
+            groups, source_label = await asyncio.wait_for(asyncio.to_thread(fetch_current_groups, "espn"), timeout=40)
+            title, rows = _v29_find_group(groups, code)
+            if not rows:
+                await q.message.edit_text("تعذر العثور على هذه المجموعة حاليًا.")
+                return
+            path = _v29_render_single_group_image(title, rows)
+            await send_photo_path(q.message, path, f"{title} ✅\nالمصدر: ESPN")
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+            return
+    except Exception as e:
+        try:
+            await q.message.edit_text(f"تعذر جلب الترتيب ❌\n{str(e)[:300]}")
+        except Exception:
+            await q.message.reply_text(f"تعذر جلب الترتيب ❌\n{str(e)[:300]}")
+        return
+
+
+async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    if not is_admin_user(update):
+        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else ""
+    try:
+        if action == "menu":
+            await q.message.edit_text("اختر اليوم أو استخدم /مباريات 20/06", reply_markup=_fixtures_dates_keyboard("single"))
+            return
+        if action == "multi":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+        if action == "toggle" and len(parts) >= 3:
+            d = parts[2]
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if d in sel:
+                sel.remove(d)
+            else:
+                sel.append(d)
+            context.user_data["fx_selected_dates"] = sel
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", sel))
+            return
+        if action == "clear":
+            context.user_data["fx_selected_dates"] = []
+            await q.message.edit_text("اختر الأيام المطلوبة ثم اضغط التصميم المناسب:", reply_markup=_fixtures_dates_keyboard("multi", []))
+            return
+        if action == "day" and len(parts) >= 3:
+            d = parts[2]
+            await q.message.edit_text("⏳ جاري تصميم مباريات اليوم...")
+            paths = _render_fixture_day_by_design(d, design=2)
+            if not paths:
+                await q.message.edit_text(f"ما فيه مباريات بتاريخ {d}")
+                return
+            for p in paths:
+                await send_photo_path(q.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+            return
+        if action in ["render1", "render2"] and len(parts) >= 3:
+            d = parts[2]
+            design = 1 if action == "render1" else 2
+            await q.message.edit_text("⏳ جاري تصميم مباريات اليوم...")
+            paths = _render_fixture_day_by_design(d, design=design)
+            if not paths:
+                await q.message.edit_text("ما فيه مباريات لهذا اليوم.")
+                return
+            for p in paths:
+                await send_photo_path(q.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+            return
+        if action == "render_combo_new":
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if not sel:
+                await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+                return
+            await q.message.edit_text("⏳ جاري التصميم المجمع...")
+            paths = render_fixtures_combined_images(sel)
+            for p in paths:
+                await send_photo_path(q.message, p, _fixtures_caption("مباريات مجمعة"))
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+            return
+        if action == "render_combo_10":
+            sel = list(context.user_data.get("fx_selected_dates") or [])
+            if not sel:
+                await q.message.reply_text("اختر يومًا واحدًا على الأقل.")
+                return
+            await q.message.edit_text("⏳ جاري تصميم الأيام...")
+            for d in sel:
+                for p in _render_fixture_day_by_design(d, design=2):
+                    await send_photo_path(q.message, p, _fixtures_caption(_v25_fixture_title(d)))
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+            return
+        if action == "upd" and len(parts) >= 3:
+            mid = parts[2]
+            m = _fixture_by_id(mid)
+            if not m:
+                await q.message.reply_text("لم أجد المباراة.")
+                return
+            context.user_data["fixture_update_match_id"] = mid
+            await q.message.reply_text(
+                f"اكتب طرفي المباراة لـ {mid} ({m.get('date')} {m.get('time')}) كذا:\n"
+                "الفريق الأول * الفريق الثاني\n\n"
+                "مثال: المكسيك * أستراليا\n"
+                "ملاحظة: سيتم الحفظ فقط، ولن يتم التصميم إلا عندما تطلب /مباريات التاريخ."
+            )
+            return
+        await q.message.reply_text("تعذر قراءة الخيار.")
+    except Exception as e:
+        await q.message.reply_text(f"تعذر تنفيذ خيار المباريات ❌\n{str(e)[:400]}")
+
+# ==================== END V31 PATCH 2026-06-21 ====================
 
 if __name__ == "__main__":
     main()
