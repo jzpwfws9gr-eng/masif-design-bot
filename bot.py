@@ -26965,5 +26965,99 @@ async def _v315_refresh_fifa_and_send(msg, kind="qualified"):
 
 # ==================== END V31.6 PATCH ====================
 
+
+# ==================== V31.7 HOTFIX: restore full group-stage fixtures 11-19 June + safe results dates ====================
+# سبب الباتش: النسخة السابقة كان جدول TOURNAMENT_FIXTURES يبدأ من 20/06 فقط؛ لذلك نتائج 11/06 و13/06 كانت تقول "ما فيه مباريات".
+
+_EARLY_GROUP_FIXTURES_1106_1906 = [
+    {"id":"G11-1","date":"11/06/2026","day":"الخميس","time":"10:00 م","team1":"المكسيك","team2":"جنوب أفريقيا","stage":"دور المجموعات","group":"المجموعة أ"},
+    {"id":"G11-2","date":"11/06/2026","day":"الخميس","time":"5:00 فجراً","team1":"كوريا الجنوبية","team2":"التشيك","stage":"دور المجموعات","group":"المجموعة أ"},
+
+    {"id":"G12-1","date":"12/06/2026","day":"الجمعة","time":"10:00 م","team1":"كندا","team2":"البوسنة والهرسك","stage":"دور المجموعات","group":"المجموعة ب"},
+    {"id":"G12-2","date":"12/06/2026","day":"الجمعة","time":"4:00 فجراً","team1":"الولايات المتحدة","team2":"باراغواي","stage":"دور المجموعات","group":"المجموعة د"},
+
+    {"id":"G13-1","date":"13/06/2026","day":"السبت","time":"10:00 م","team1":"قطر","team2":"سويسرا","stage":"دور المجموعات","group":"المجموعة ب"},
+    {"id":"G13-2","date":"13/06/2026","day":"السبت","time":"1:00 صباحاً","team1":"البرازيل","team2":"المغرب","stage":"دور المجموعات","group":"المجموعة ج"},
+    {"id":"G13-3","date":"13/06/2026","day":"السبت","time":"4:00 فجراً","team1":"هايتي","team2":"اسكتلندا","stage":"دور المجموعات","group":"المجموعة ج"},
+    {"id":"G13-4","date":"13/06/2026","day":"السبت","time":"7:00 صباحاً","team1":"تركيا","team2":"أستراليا","stage":"دور المجموعات","group":"المجموعة د"},
+
+    {"id":"G14-1","date":"14/06/2026","day":"الأحد","time":"8:00 م","team1":"ألمانيا","team2":"كوراساو","stage":"دور المجموعات","group":"المجموعة هـ"},
+    {"id":"G14-2","date":"14/06/2026","day":"الأحد","time":"11:00 م","team1":"هولندا","team2":"اليابان","stage":"دور المجموعات","group":"المجموعة و"},
+    {"id":"G14-3","date":"14/06/2026","day":"الأحد","time":"2:00 فجراً","team1":"ساحل العاج","team2":"الإكوادور","stage":"دور المجموعات","group":"المجموعة هـ"},
+    {"id":"G14-4","date":"14/06/2026","day":"الأحد","time":"5:00 فجراً","team1":"السويد","team2":"تونس","stage":"دور المجموعات","group":"المجموعة و"},
+
+    {"id":"G15-1","date":"15/06/2026","day":"الإثنين","time":"7:00 م","team1":"إسبانيا","team2":"السعودية","stage":"دور المجموعات","group":"المجموعة ح"},
+    {"id":"G15-2","date":"15/06/2026","day":"الإثنين","time":"10:00 م","team1":"بلجيكا","team2":"إيران","stage":"دور المجموعات","group":"المجموعة ز"},
+    {"id":"G15-3","date":"15/06/2026","day":"الإثنين","time":"1:00 صباحاً","team1":"الأوروغواي","team2":"الرأس الأخضر","stage":"دور المجموعات","group":"المجموعة ح"},
+    {"id":"G15-4","date":"15/06/2026","day":"الإثنين","time":"4:00 فجراً","team1":"نيوزيلندا","team2":"مصر","stage":"دور المجموعات","group":"المجموعة ز"},
+
+    {"id":"G16-1","date":"16/06/2026","day":"الثلاثاء","time":"10:00 م","team1":"فرنسا","team2":"السنغال","stage":"دور المجموعات","group":"المجموعة ط"},
+    {"id":"G16-2","date":"16/06/2026","day":"الثلاثاء","time":"1:00 صباحاً","team1":"النرويج","team2":"العراق","stage":"دور المجموعات","group":"المجموعة ط"},
+    {"id":"G16-3","date":"16/06/2026","day":"الثلاثاء","time":"4:00 فجراً","team1":"الأرجنتين","team2":"الجزائر","stage":"دور المجموعات","group":"المجموعة ي"},
+    {"id":"G16-4","date":"16/06/2026","day":"الثلاثاء","time":"7:00 صباحاً","team1":"الأردن","team2":"النمسا","stage":"دور المجموعات","group":"المجموعة ي"},
+
+    {"id":"G17-1","date":"17/06/2026","day":"الأربعاء","time":"8:00 م","team1":"البرتغال","team2":"أوزبكستان","stage":"دور المجموعات","group":"المجموعة ك"},
+    {"id":"G17-2","date":"17/06/2026","day":"الأربعاء","time":"11:00 م","team1":"إنجلترا","team2":"غانا","stage":"دور المجموعات","group":"المجموعة ل"},
+    {"id":"G17-3","date":"17/06/2026","day":"الأربعاء","time":"2:00 صباحاً","team1":"بنما","team2":"كرواتيا","stage":"دور المجموعات","group":"المجموعة ل"},
+    {"id":"G17-4","date":"17/06/2026","day":"الأربعاء","time":"5:00 فجراً","team1":"كولومبيا","team2":"الكونغو الديمقراطية","stage":"دور المجموعات","group":"المجموعة ك"},
+
+    {"id":"G18-1","date":"18/06/2026","day":"الخميس","time":"7:00 م","team1":"التشيك","team2":"جنوب أفريقيا","stage":"دور المجموعات","group":"المجموعة أ"},
+    {"id":"G18-2","date":"18/06/2026","day":"الخميس","time":"10:00 م","team1":"سويسرا","team2":"البوسنة والهرسك","stage":"دور المجموعات","group":"المجموعة ب"},
+    {"id":"G18-3","date":"18/06/2026","day":"الخميس","time":"1:00 صباحاً","team1":"كندا","team2":"قطر","stage":"دور المجموعات","group":"المجموعة ب"},
+    {"id":"G18-4","date":"18/06/2026","day":"الخميس","time":"4:00 فجراً","team1":"المكسيك","team2":"كوريا الجنوبية","stage":"دور المجموعات","group":"المجموعة أ"},
+
+    {"id":"G19-1","date":"19/06/2026","day":"الجمعة","time":"10:00 م","team1":"الولايات المتحدة","team2":"أستراليا","stage":"دور المجموعات","group":"المجموعة د"},
+    {"id":"G19-2","date":"19/06/2026","day":"الجمعة","time":"1:00 صباحاً","team1":"اسكتلندا","team2":"المغرب","stage":"دور المجموعات","group":"المجموعة ج"},
+    {"id":"G19-3","date":"19/06/2026","day":"الجمعة","time":"3:30 فجراً","team1":"البرازيل","team2":"هايتي","stage":"دور المجموعات","group":"المجموعة ج"},
+    {"id":"G19-4","date":"19/06/2026","day":"الجمعة","time":"6:00 صباحاً","team1":"تركيا","team2":"باراغواي","stage":"دور المجموعات","group":"المجموعة د"},
+]
+
+
+def _install_early_group_fixtures_1106_1906():
+    global TOURNAMENT_FIXTURES
+    try:
+        existing_ids = {str(m.get("id")) for m in TOURNAMENT_FIXTURES}
+        existing_pairs = {(m.get("date"), simple_key(m.get("team1","")), simple_key(m.get("team2",""))) for m in TOURNAMENT_FIXTURES}
+        additions = []
+        for m in _EARLY_GROUP_FIXTURES_1106_1906:
+            pair = (m.get("date"), simple_key(m.get("team1","")), simple_key(m.get("team2","")))
+            if str(m.get("id")) not in existing_ids and pair not in existing_pairs:
+                additions.append(dict(m))
+        if additions:
+            TOURNAMENT_FIXTURES = additions + list(TOURNAMENT_FIXTURES)
+    except Exception:
+        pass
+
+_install_early_group_fixtures_1106_1906()
+
+# حماية إضافية: لا نرجع "ما فيه مباريات" للأيام القديمة إذا موجودة في القائمة المضافة.
+_v317_prev_fixtures_for_date = _fixtures_for_date
+
+def _fixtures_for_date(date):
+    d = _normalize_date_arg(date)
+    out = _v317_prev_fixtures_for_date(d)
+    if out:
+        return out
+    return [_apply_fixture_updates(m) for m in _EARLY_GROUP_FIXTURES_1106_1906 if m.get("date") == d]
+
+# تحديث لوحة تواريخ النتائج بعد إضافة الأيام القديمة.
+def _v28_previous_results_keyboard():
+    rows = []
+    today = _today_riyadh_date()
+    for d, day in _fixture_dates():
+        try:
+            # عرض أيام النتائج من 11 يونيو إلى تاريخ اليوم فقط، ولا نخفي الأيام القديمة.
+            if _date_key(d) <= _date_key(today):
+                rows.append([InlineKeyboardButton(f"{day} {d}", callback_data=f"res|{d}")])
+        except Exception:
+            rows.append([InlineKeyboardButton(f"{day} {d}", callback_data=f"res|{d}")])
+    if not rows:
+        for d, day in _fixture_dates():
+            rows.append([InlineKeyboardButton(f"{day} {d}", callback_data=f"res|{d}")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+# ==================== END V31.7 HOTFIX ====================
+
 if __name__ == "__main__":
     main()
