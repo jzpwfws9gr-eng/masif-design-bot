@@ -33170,6 +33170,352 @@ async def fantasy_menu_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return await _V44_PREV_FANTASY_CALLBACK(update, context)
     await q.edit_message_text("قائمة فانتزي المصيف:", reply_markup=_fantasy_public_keyboard())
 
+
+# ==================== PATCH15: SAFE CALLBACKS / NO DISAPPEARING MESSAGES ====================
+# هدف هذا الباتش:
+# - لا نمسح رسالة القائمة الأصلية عند الضغط على مباراة/تاريخ.
+# - أي خطأ في ESPN/الأهداف يرجع رسالة واضحة بدل اختفاء الأزرار.
+# - اختصار callback_data للمباريات عشان لا تتجاوز حد تيليجرام 64 بايت.
+# - لا يلمس التصاميم ولا الفانتزي ولا باقي البوت.
+V45_PATCH_NAME = "PATCH15_SAFE_CALLBACKS"
+
+
+def _v45_safe_short_text(s, limit=40):
+    try:
+        s = str(s or '').strip()
+    except Exception:
+        s = ''
+    return s[:limit]
+
+
+def _v45_match_short_id(m):
+    """ID قصير وآمن لزر تيليجرام. event_id هو الأفضل، وبعده hash ثابت."""
+    try:
+        if not isinstance(m, dict):
+            return 'm0'
+        eid = str(m.get('event_id') or '').replace('espn_', '').strip()
+        if eid:
+            return 'e' + re.sub(r'[^0-9A-Za-z_-]', '', eid)[:24]
+        mid = str(m.get('id') or '').strip()
+        if mid and len(mid.encode('utf-8')) <= 24:
+            return re.sub(r'[^0-9A-Za-z_-]', '_', mid)[:24]
+        raw = f"{m.get('date','')}|{m.get('team1','')}|{m.get('team2','')}"
+        if 'simple_key' in globals():
+            return 'k' + str(simple_key(raw))[:24]
+        return 'k' + str(abs(hash(raw)))[:24]
+    except Exception:
+        return 'm0'
+
+
+def _v45_callback_ok(data):
+    try:
+        return len(str(data).encode('utf-8')) <= 64
+    except Exception:
+        return False
+
+
+def _v43_find_fixture_by_mid(d, mid, force=False):
+    """يدعم الـ id المختصر الجديد، والـ id القديم، والـ event_id."""
+    d = _normalize_date_arg(d)
+    mid = str(mid or '').strip()
+    candidates = []
+    try:
+        candidates = _v43_results_fixtures_for_date(d, force=force, debug=[])
+    except Exception:
+        candidates = []
+    # إذا فشل force=False جرّب احتياط جدول اليوم بدون force
+    if not candidates:
+        try:
+            candidates = _v40_fixtures_for_date(d)
+        except Exception:
+            candidates = []
+    for m in candidates or []:
+        try:
+            ids = {
+                str(m.get('id') or ''),
+                str(m.get('event_id') or ''),
+                'espn_' + str(m.get('event_id') or '').replace('espn_', ''),
+                _v45_match_short_id(m),
+            }
+            # support e<event_id>
+            if str(m.get('event_id') or '').strip():
+                ids.add('e' + str(m.get('event_id')).replace('espn_', ''))
+            if mid in ids:
+                return m
+        except Exception:
+            continue
+    return None
+
+
+def _v33_results_matches_keyboard(d):
+    d = _normalize_date_arg(d)
+    rows = [
+        [InlineKeyboardButton("🧹 مسح كاش نتائج هذا اليوم", callback_data=f"res|clearday|{d}")],
+        [InlineKeyboardButton("🔄 تحديث نتائج هذا اليوم من ESPN", callback_data=f"res|refreshday|{d}")],
+    ]
+    debug = []
+    matches = []
+    try:
+        matches = _v43_results_fixtures_for_date(d, force=False, debug=debug)
+    except Exception as e:
+        debug.append(f'keyboard fixtures error: {str(e)[:80]}')
+        matches = []
+    added = 0
+    for m in matches or []:
+        try:
+            if '_has_unknown' in globals() and _has_unknown(m):
+                continue
+            label = _v43_match_label(m)[:62]
+            sid = _v45_match_short_id(m)
+            cb = f"res|match|{d}|{sid}"
+            if not _v45_callback_ok(cb):
+                # fallback أشد اختصارًا
+                sid = 'k' + str(abs(hash(str(m.get('id')) + str(m.get('team1')) + str(m.get('team2')))))[:12]
+                cb = f"res|match|{d}|{sid}"
+            rows.append([InlineKeyboardButton(label, callback_data=cb)])
+            added += 1
+        except Exception:
+            continue
+    if added == 0:
+        rows.append([InlineKeyboardButton("لا توجد مباريات لهذا التاريخ", callback_data="noop")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع للتواريخ", callback_data="res|dates")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v29_live_today_keyboard(date_str=None):
+    rows = []
+    active = _normalize_date_arg(date_str) if date_str else _v41_active_live_date()
+    if active:
+        rows.append([InlineKeyboardButton("🧹 مسح كاش مباشر اليوم", callback_data=f"livefx|clearday|{active}")])
+        rows.append([InlineKeyboardButton("🔄 تحديث مباشر الآن من ESPN", callback_data=f"livefx|refreshday|{active}")])
+    matches = []
+    try:
+        matches = _v40_live_rows(active)
+    except Exception:
+        matches = []
+    added = 0
+    for m in matches or []:
+        try:
+            label = _v40_live_button_label(m)[:62]
+            sid = _v45_match_short_id(m)
+            cb = f"livefx|match|{sid}"
+            if not _v45_callback_ok(cb):
+                cb = "noop"
+            rows.append([InlineKeyboardButton(label, callback_data=cb)])
+            added += 1
+        except Exception:
+            continue
+    if active and added == 0:
+        rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _v45_try_edit_text(msg, text, reply_markup=None):
+    try:
+        await msg.edit_text(text, reply_markup=reply_markup)
+        return True
+    except Exception:
+        try:
+            await msg.reply_text(text, reply_markup=reply_markup)
+            return True
+        except Exception:
+            return False
+
+
+async def _v45_send_wait(msg, text):
+    try:
+        return await msg.reply_text(text)
+    except Exception:
+        return None
+
+
+async def _v45_finish_wait(wait_msg, text=None, delete=False):
+    if not wait_msg:
+        return
+    try:
+        if delete:
+            await wait_msg.delete()
+        elif text:
+            await wait_msg.edit_text(text)
+    except Exception:
+        pass
+
+
+async def previous_results_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    data = q.data or ''
+    if data == 'noop':
+        return
+    parts = data.split('|')
+    try:
+        if data == 'res|dates':
+            await _v45_try_edit_text(q.message, "اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+            return
+
+        if len(parts) >= 3 and parts[0] == 'res' and parts[1] == 'day':
+            d = _normalize_date_arg(parts[2])
+            title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+            kb = _v33_results_matches_keyboard(d)
+            await _v45_try_edit_text(q.message, f"⚽ نتائج {title}\nنافذة اليوم من 4 العصر إلى 4 العصر. اختر مباراة أو حدّث اليوم:", reply_markup=kb)
+            return
+
+        if len(parts) >= 3 and parts[0] == 'res' and parts[1] == 'clearday':
+            d = _normalize_date_arg(parts[2])
+            dbg = _v44_clear_day_cache(d)
+            title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+            txt = f"🧹 تم مسح كاش نتائج {title}.\nاضغط تحديث نتائج هذا اليوم من ESPN عشان يحاول يسحب النتيجة والأهداف من جديد."
+            try:
+                if '_is_admin' in globals() and _is_admin(q.from_user.id):
+                    txt += "\n\n🔎 التشخيص:\n" + "\n".join(f"- {x}" for x in dbg[-8:])
+            except Exception:
+                pass
+            await _v45_try_edit_text(q.message, txt, reply_markup=_v33_results_matches_keyboard(d))
+            return
+
+        if len(parts) >= 3 and parts[0] == 'res' and parts[1] == 'refreshday':
+            d = _normalize_date_arg(parts[2])
+            wait_msg = await _v45_send_wait(q.message, f"⏳ تحديث إجباري لـ {d}: أمسح الكاش ثم أسحب ESPN + الأهداف + البحث الخارجي...")
+            try:
+                updated, dbg = await asyncio.wait_for(asyncio.to_thread(_v41_update_day_results, d, True), timeout=45)
+            except Exception as e:
+                updated, dbg = 0, [f"انتهى الوقت/خطأ: {str(e)[:80]}"]
+            title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+            txt = f"⚽ نتائج {title}\nتم تحديث {updated} مباراة.\nاختر مباراة للتفاصيل أو أعد التحديث:"
+            try:
+                if '_is_admin' in globals() and _is_admin(q.from_user.id) and dbg:
+                    txt += "\n\n🔎 آخر محاولات:\n" + "\n".join(f"- {x}" for x in dbg[-10:])
+            except Exception:
+                pass
+            await _v45_finish_wait(wait_msg, delete=True)
+            await _v45_try_edit_text(q.message, txt, reply_markup=_v33_results_matches_keyboard(d))
+            return
+
+        if len(parts) >= 4 and parts[0] == 'res' and parts[1] == 'match':
+            d = _normalize_date_arg(parts[2])
+            mid = parts[3]
+            m = _v43_find_fixture_by_mid(d, mid, force=False)
+            if not m:
+                await q.message.reply_text("لم أجد المباراة في ESPN ولا جدول البطولة.", reply_markup=_v33_results_matches_keyboard(d))
+                return
+            cached = _v43_get_cached_match_result(m)
+            wait_msg = None
+            if not isinstance(cached, dict) or not _patch6_numeric_score(cached) or not _v43_goals_complete(cached):
+                wait_msg = await _v45_send_wait(q.message, f"⏳ أبحث عن نتيجة وأهداف {m.get('team1')} × {m.get('team2')}...")
+                try:
+                    cached = await asyncio.wait_for(asyncio.to_thread(_v41_fetch_result_for_fixture, m, d, True, True), timeout=35)
+                except Exception as e:
+                    cached = None
+                    try:
+                        _v43_cache_goal_debug(m, [f'callback timeout/error: {str(e)[:80]}'])
+                    except Exception:
+                        pass
+            if isinstance(cached, dict) and _patch6_numeric_score(cached):
+                txt = _v41_result_detail_text(m, cached)
+                txt += _v43_admin_debug_text(q.from_user.id, m)
+            else:
+                txt = f"⚠️ لم أجد نتيجة {m.get('team1')} × {m.get('team2')} حاليًا.\nباقية ❌ حتى يتم تحديثها."
+                txt += _v43_admin_debug_text(q.from_user.id, m)
+            await _v45_finish_wait(wait_msg, delete=True)
+            # لا نمسح قائمة التاريخ الأصلية؛ نرسل التفاصيل كرد جديد لتبقى الأزرار موجودة.
+            await q.message.reply_text(txt, reply_markup=_v33_results_matches_keyboard(d))
+            return
+
+        if len(parts) >= 2 and parts[0] == 'res':
+            d = _normalize_date_arg(parts[1])
+            title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+            await _v45_try_edit_text(q.message, f"⚽ نتائج {title}\nاختر مباراة للتفاصيل أو اضغط تحديث اليوم:", reply_markup=_v33_results_matches_keyboard(d))
+            return
+    except Exception as e:
+        try:
+            await q.message.reply_text(f"صار خطأ في النتائج وما مسحت الأزرار.\nالخطأ: {str(e)[:120]}")
+        except Exception:
+            pass
+
+
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    data = q.data or ''
+    if data == 'noop':
+        return
+    parts = data.split('|')
+    try:
+        if len(parts) >= 3 and parts[1] == 'clearday':
+            d = _normalize_date_arg(parts[2])
+            dbg = _v44_clear_day_cache(d)
+            txt = _v29_live_today_text(d)
+            try:
+                if '_is_admin' in globals() and _is_admin(q.from_user.id):
+                    txt += "\n\n🧹 تم مسح كاش مباشر اليوم.\n🔎 " + " / ".join(dbg[-3:])
+            except Exception:
+                pass
+            await _v45_try_edit_text(q.message, txt, reply_markup=_v29_live_today_keyboard(d))
+            return
+
+        if len(parts) >= 3 and parts[1] == 'refreshday':
+            d = _normalize_date_arg(parts[2])
+            wait_msg = await _v45_send_wait(q.message, f"⏳ تحديث إجباري للمباشر {d}: ESPN + الأهداف + البحث الخارجي...")
+            try:
+                updated, dbg = await asyncio.wait_for(asyncio.to_thread(_v41_update_day_results, d, True), timeout=45)
+            except Exception as e:
+                updated, dbg = 0, [f"انتهى الوقت/خطأ: {str(e)[:80]}"]
+            txt = _v29_live_today_text(d)
+            try:
+                if '_is_admin' in globals() and _is_admin(q.from_user.id):
+                    txt += f"\n\n🔄 تم تحديث {updated} مباراة.\n🔎 " + " / ".join(dbg[-5:])
+            except Exception:
+                pass
+            await _v45_finish_wait(wait_msg, delete=True)
+            await _v45_try_edit_text(q.message, txt, reply_markup=_v29_live_today_keyboard(d))
+            return
+
+        if len(parts) < 3 or parts[1] != 'match':
+            return
+        mid = parts[2]
+        active = _normalize_date_arg(_v41_active_live_date())
+        m = _v43_find_fixture_by_mid(active, mid, force=False)
+        if not m:
+            await q.message.reply_text("لم أجد المباراة في مباشر الآن.", reply_markup=_v29_live_today_keyboard(active))
+            return
+        wait_msg = await _v45_send_wait(q.message, f"⏳ جاري تحديث {m.get('team1')} × {m.get('team2')} من ESPN...")
+        try:
+            obj = await asyncio.wait_for(asyncio.to_thread(_v40_fetch_live_for_fixture, m, True), timeout=35)
+        except Exception as e:
+            obj = None
+            try:
+                _v43_cache_goal_debug(m, [f'live callback timeout/error: {str(e)[:80]}'])
+            except Exception:
+                pass
+        if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
+            await _v45_finish_wait(wait_msg, f"⚽ {m.get('team1')} × {m.get('team2')}\nالحالة: قيد التحديث\nالمصدر: ESPN/بحث خارجي")
+            return
+        label = obj.get('actual_source') or obj.get('source') or 'ESPN'
+        try:
+            path = render_live_match_card(obj, label)
+            await _v45_finish_wait(wait_msg, delete=True)
+            await send_photo_path(q.message, path, build_live_caption(obj, label))
+        except Exception:
+            await _v45_finish_wait(wait_msg, build_live_caption(obj, label))
+    except Exception as e:
+        try:
+            await q.message.reply_text(f"صار خطأ في مباشر الآن وما مسحت الأزرار.\nالخطأ: {str(e)[:120]}")
+        except Exception:
+            pass
+
+# ==================== END PATCH15 ====================
+
 # ==================== END PATCH14 ====================
 
 # ==================== END PATCH13 ====================
