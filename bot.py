@@ -27059,5 +27059,492 @@ def _v28_previous_results_keyboard():
 
 # ==================== END V31.7 HOTFIX ====================
 
+
+# ==================== V31.8 FINAL HOTFIX: ESPN-first live/results + no official-only block ====================
+# اعتماد فهد:
+# - المباشر والنتائج لا يستخدمون شرط "رسمي فقط"؛ ESPN مسموح وأساسي.
+# - ESPN أولاً بأكثر من محاولة: التاريخ، تاريخ المباراة من الجدول، كل تواريخ نفس الزوج.
+# - إذا فشل كل مصدر لمباراة موجودة بجدولنا لا نرسل "تعذر" نهائي؛ نعرضها قيد التحديث.
+# - نتائج المباريات تعرض الأيام من جدول البطولة، ثم تبحث في ESPN بالتاريخ وتحفظ المنتهي بالكاش.
+# - هدافو البطولة: مكان المنتخب ثابت، ونصلح عمود اللاعب فقط بدون max_width الذي كان يوسّط الاسم ويلصقه بالرقم.
+
+try:
+    TEAM_ALIASES.update({
+        "Côte d’Ivoire": "ساحل العاج",
+        "Côte d'Ivoire": "ساحل العاج",
+        "Cote d'Ivoire": "ساحل العاج",
+        "Cote d Ivoire": "ساحل العاج",
+        "Ivory Coast": "ساحل العاج",
+        "CIV": "ساحل العاج",
+        "Curaçao": "كوراساو",
+        "Curacao": "كوراساو",
+        "CUW": "كوراساو",
+    })
+except Exception:
+    pass
+
+
+def _v318_is_numeric_score_obj(obj):
+    try:
+        if not isinstance(obj, dict):
+            return False
+        s1 = str(obj.get('score1', '')).strip()
+        s2 = str(obj.get('score2', '')).strip()
+        return bool(re.fullmatch(r'\d{1,2}', s1) and re.fullmatch(r'\d{1,2}', s2))
+    except Exception:
+        return False
+
+
+def _v318_date_candidates_for_pair(team1, team2, date_hint=None):
+    out = []
+    def add(x):
+        try:
+            y = _v315_date_to_espn(x) if '_v315_date_to_espn' in globals() else _v28_espn_date(x)
+        except Exception:
+            y = ''
+        if y and y not in out:
+            out.append(y)
+    add(date_hint)
+    try:
+        fix = _find_fixture_for_pair(team1, team2, date_hint)
+        if fix:
+            add(fix.get('date'))
+    except Exception:
+        pass
+    try:
+        for m in _all_fixtures():
+            if _teams_match(m.get('team1',''), m.get('team2',''), team1, team2):
+                add(m.get('date'))
+    except Exception:
+        pass
+    # آخر محاولة: تواريخ قريبة من التاريخ المحدد/اليوم النشط، لكن نخليها بعد التواريخ الدقيقة
+    try:
+        for d in _v315_espn_dates_for_match(team1, team2, date_hint):
+            add(d)
+    except Exception:
+        pass
+    try:
+        for d in _v28_espn_date_candidates(date_hint):
+            add(d)
+    except Exception:
+        pass
+    return out[:22]
+
+
+def _v318_obj_from_espn_event(event, team1, team2, fixture=None, d=None):
+    obj = None
+    try:
+        obj = _v28_event_match_obj(event, team1, team2)
+    except Exception:
+        obj = None
+    if not obj:
+        try:
+            cand = _parse_espn_match_from_event(event)
+            if cand and _teams_match(cand.get('team1'), cand.get('team2'), team1, team2):
+                obj = cand
+        except Exception:
+            obj = None
+    if not isinstance(obj, dict):
+        return None
+    eid = obj.get('event_id') or (_v316_event_id_from_event(event) if '_v316_event_id_from_event' in globals() else '')
+    obj['event_id'] = eid
+    obj['source'] = 'ESPN'
+    obj['actual_source'] = 'ESPN'
+    if d:
+        obj['date'] = d
+    # ESPN scoreboard يعطي النتيجة، summary يعطي الهدافين والدقائق
+    scorers = _v28_sanitize_scorers(obj.get('scorers') or []) if '_v28_sanitize_scorers' in globals() else (obj.get('scorers') or [])
+    if not scorers and eid:
+        try:
+            scorers = _v316_fetch_espn_scorers_for_event(eid, tries=3) if '_v316_fetch_espn_scorers_for_event' in globals() else _v28_fetch_espn_scorers(eid)
+            scorers = _v28_sanitize_scorers(scorers)
+        except Exception:
+            scorers = []
+    obj['scorers'] = scorers or []
+    obj['goals_source'] = 'ESPN' if scorers else 'غير متوفر'
+    try:
+        obj = _merge_manual_match_data(obj, fixture)
+    except Exception:
+        pass
+    try:
+        if _is_zero_zero(obj) and obj.get('goals_source') != 'إدارة المصيف':
+            obj['scorers'] = []
+    except Exception:
+        pass
+    return obj
+
+
+def _v318_fetch_espn_multi(team1, team2, date_hint=None):
+    """ESPN الأساسي: لا يوجد فلتر رسمي هنا، ويبحث بالتاريخ الصحيح وأسماء بديلة."""
+    fixture = None
+    try:
+        fixture = _find_fixture_for_pair(team1, team2, date_hint)
+    except Exception:
+        fixture = None
+    # 1) دالة ESPN القديمة؛ أحيانًا تكون أسرع وتجيب event_id
+    for hint in [date_hint, (fixture or {}).get('date') if fixture else None]:
+        if not hint:
+            continue
+        try:
+            obj = fetch_match_from_espn(team1, team2, date_hint=hint)
+            if obj:
+                obj = _v315_clean_live_obj(obj, fixture, team1, team2, 'ESPN') if '_v315_clean_live_obj' in globals() else obj
+                if obj and not obj.get('scorers') and obj.get('event_id'):
+                    try:
+                        obj['scorers'] = _v316_fetch_espn_scorers_for_event(obj.get('event_id'), tries=3)
+                        obj['goals_source'] = 'ESPN' if obj.get('scorers') else obj.get('goals_source','')
+                    except Exception:
+                        pass
+                return obj
+        except Exception:
+            pass
+    # 2) مسح scoreboard للتواريخ الدقيقة + كل بطولات ESPN soccer/all
+    for espn_d in _v318_date_candidates_for_pair(team1, team2, date_hint):
+        try:
+            events = _fetch_espn_events_by_date(espn_d)
+        except Exception:
+            events = []
+        for ev in events or []:
+            obj = _v318_obj_from_espn_event(ev, team1, team2, fixture, espn_d)
+            if obj:
+                return obj
+    return None
+
+
+def _v318_placeholder_live(team1, team2, date_hint=None):
+    fix = None
+    try:
+        fix = _find_fixture_for_pair(team1, team2, date_hint)
+    except Exception:
+        fix = None
+    if not fix:
+        return None
+    obj = {
+        'team1': canonical_team_name(team1) or normalize_name(team1),
+        'team2': canonical_team_name(team2) or normalize_name(team2),
+        'score1': '-',
+        'score2': '-',
+        'status': 'قيد التحديث',
+        'minute': '',
+        'scorers': [],
+        'source': 'جدول البطولة',
+        'actual_source': 'جدول البطولة',
+        'goals_source': 'غير متوفر',
+        'date': fix.get('date'),
+        'fixture_id': fix.get('id'),
+        'fixture_pending': True,
+    }
+    try:
+        obj = _merge_manual_match_data(obj, fix)
+    except Exception:
+        pass
+    return obj
+
+
+def fetch_live_match_data(team1, team2, mode='auto', date_hint=None):
+    """مباشر الآن: ESPN أولاً دائمًا، ثم fallback. لا شرط رسمي إلا في المتأهلين/المغادرين."""
+    norm = _norm_source_mode(mode) if '_norm_source_mode' in globals() else (mode or 'auto')
+    # ESPN دائماً الأول لأنه أفضل في النتيجة والهدافين والدقائق
+    order = ['espn']
+    if norm and norm not in {'auto', 'espn', 'official'}:
+        order.append(norm)
+    order += ['google', '365', 'kooora', 'api', 'fifa']
+    seen = set()
+    for src in order:
+        if src in seen:
+            continue
+        seen.add(src)
+        try:
+            if src == 'espn':
+                obj = _v318_fetch_espn_multi(team1, team2, date_hint)
+            else:
+                obj = _v315_fetch_source_once(src, team1, team2, date_hint) if '_v315_fetch_source_once' in globals() else None
+            if isinstance(obj, dict):
+                if src == 'espn':
+                    obj['actual_source'] = 'ESPN'
+                    obj['source'] = 'ESPN'
+                # حتى لو الهدافين ناقصين لا نرمي النتيجة
+                try:
+                    obj = _merge_manual_match_data(obj, _find_fixture_for_pair(team1, team2, date_hint))
+                except Exception:
+                    pass
+                return obj
+        except Exception:
+            continue
+    # لا نفشل مباراة موجودة في جدولنا؛ نعرضها قيد التحديث بدل الاعتذار النهائي
+    return _v318_placeholder_live(team1, team2, date_hint)
+
+
+def build_live_caption(match, mode_label='تلقائي'):
+    match = match or {}
+    t1 = match.get('team1','')
+    t2 = match.get('team2','')
+    s1 = match.get('score1','-')
+    s2 = match.get('score2','-')
+    lines = [f"{t1} {s1} - {s2} {t2}"]
+    st = normalize_name(match.get('status') or match.get('minute') or '')
+    if match.get('fixture_pending'):
+        st = 'قيد التحديث — لم تصل النتيجة من المصادر حتى الآن'
+    if st:
+        lines.append(st)
+    title, scorers = _goal_status_lines(match) if '_goal_status_lines' in globals() else ('⚽ الهدافون قيد التحديث', [])
+    lines += ['', title]
+    if scorers:
+        lines.extend([f"- {x}" for x in scorers[:8]])
+    actual = match.get('actual_source') or match.get('source') or mode_label
+    lines += ['', f"المصدر: {actual}"]
+    if match.get('fixture_pending'):
+        lines.append('🔄 جرّب لاحقًا أو أضف النتيجة/الأهداف يدويًا.')
+    link = match.get('summary_url_manual') or match.get('highlight_url') or match.get('summary_url') or ''
+    if link:
+        lines.append(f"🎞️ ملخص المباراة: {link}")
+    return '\n'.join(lines).strip()
+
+
+async def _v315_send_live_result_from_message(msg, team1, team2, date_hint=None, source='auto', admin=False):
+    try:
+        await msg.edit_text(f"⏳ جاري جلب مباراة {team1} × {team2}\nESPN أولًا ثم المصادر الاحتياطية...")
+        wait_msg = msg
+    except Exception:
+        wait_msg = await msg.reply_text(f"⏳ جاري جلب مباراة {team1} × {team2}\nESPN أولًا ثم المصادر الاحتياطية...")
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(fetch_live_match_data, team1, team2, source, date_hint), timeout=65)
+    except Exception:
+        data = _v318_placeholder_live(team1, team2, date_hint)
+    if not data:
+        # فقط إذا المباراة غير موجودة أصلًا في جدولنا
+        try:
+            await wait_msg.edit_text(f"⚠️ لم أجد مباراة {team1} × {team2} في جدول البطولة ولا في المصادر حاليًا.")
+        except Exception:
+            await wait_msg.reply_text(f"⚠️ لم أجد مباراة {team1} × {team2} حاليًا.")
+        return
+    label = data.get('actual_source') or data.get('source') or mode_label_ar(source)
+    try:
+        path = render_live_match_card(data, label)
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+        await send_photo_path(wait_msg, path, build_live_caption(data, label))
+    except Exception:
+        try:
+            await wait_msg.edit_text(build_live_caption(data, label))
+        except Exception:
+            await wait_msg.reply_text(build_live_caption(data, label))
+
+
+# ---------- نتائج المباريات: قائمة الأيام من الجدول، والنتيجة من ESPN ثم Cache ----------
+
+def _v318_fixture_dates_past_or_today():
+    today = _today_riyadh_date() if '_today_riyadh_date' in globals() else None
+    rows = []
+    for d, day in _fixture_dates():
+        try:
+            if not today or _date_key(d) <= _date_key(today):
+                rows.append((d, day))
+        except Exception:
+            rows.append((d, day))
+    # إزالة التكرار مع الحفاظ على الترتيب
+    out, seen = [], set()
+    for d, day in rows:
+        if d not in seen:
+            seen.add(d); out.append((d, day))
+    return out
+
+
+def _v28_previous_result_dates():
+    return _v318_fixture_dates_past_or_today()
+
+
+def _v28_previous_results_keyboard():
+    rows = []
+    for d, day in _v28_previous_result_dates():
+        rows.append([InlineKeyboardButton(f"{day} {d}", callback_data=f"res|day|{d}")])
+    if not rows:
+        rows.append([InlineKeyboardButton('لا توجد أيام نتائج حتى الآن', callback_data='noop')])
+    rows.append([InlineKeyboardButton('إلغاء', callback_data='mainmenu|home')])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v318_result_line_for_fixture(idx, fixture, d, obj=None):
+    if obj:
+        s1 = obj.get('score1','-')
+        s2 = obj.get('score2','-')
+        line = f"{idx}) {fixture.get('team1')} {s1} - {s2} {fixture.get('team2')}"
+        title, scorers = _goal_status_lines(obj) if '_goal_status_lines' in globals() else ('⚽ الهدافون قيد التحديث', [])
+        lines = [line]
+        if scorers:
+            lines.append('⚽ الهدافون:')
+            lines.extend([f"- {x}" for x in scorers[:8]])
+        else:
+            lines.append(title)
+        if obj.get('summary_url_manual'):
+            lines.append(f"🎞️ ملخص المباراة: {obj.get('summary_url_manual')}")
+        return lines, True
+    else:
+        return [f"{idx}) {fixture.get('team1')} × {fixture.get('team2')} — قيد التحديث", '⚽ الهدافون قيد التحديث'], False
+
+
+def _v318_fetch_result_obj_for_fixture(fixture, d):
+    # ابحث بنفس التاريخ أولًا، ثم بمحاولات ESPN متعددة
+    try:
+        espn_d = _v28_espn_date(d)
+        events = _fetch_espn_events_by_date(espn_d) if espn_d else []
+    except Exception:
+        events = []
+    for ev in events or []:
+        obj = _v318_obj_from_espn_event(ev, fixture.get('team1'), fixture.get('team2'), fixture, d)
+        if obj:
+            return obj
+    try:
+        return _v318_fetch_espn_multi(fixture.get('team1'), fixture.get('team2'), d)
+    except Exception:
+        return None
+
+
+def _v318_result_text_for_date_uncached(date):
+    d = _normalize_date_arg(date)
+    matches = _fixtures_for_date(d)
+    try:
+        matches = _v26_dedupe_fixture_matches(matches)
+    except Exception:
+        pass
+    matches = list(matches or [])
+    if not matches:
+        return f"ما فيه مباريات بتاريخ {d}", False
+    title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+    lines = [f"🏆 نتائج مباريات {title} 🏆", 'المصدر: ESPN', '']
+    found_any = False
+    for i, m in enumerate(matches, start=1):
+        if _has_unknown(m):
+            lines += [f"{i}) {m.get('note','تحدد لاحقًا')} — لم تتحدد الأطراف", '']
+            continue
+        obj = _v318_fetch_result_obj_for_fixture(m, d)
+        # لا نرمي النتيجة إذا الهدافين ناقصين؛ المهم نتيجة رقمية أو حالة منتهية
+        ok = bool(obj and (_v318_is_numeric_score_obj(obj) or (_v316_is_finished_obj(obj) if '_v316_is_finished_obj' in globals() else False)))
+        part, has = _v318_result_line_for_fixture(i, m, d, obj if ok else None)
+        found_any = found_any or bool(has)
+        lines.extend(part); lines.append('')
+    lines.append('المصيف يضعكم بالحدث')
+    return '\n'.join(lines).strip(), found_any
+
+
+def _v28_result_text_for_date(date, force_refresh=False):
+    d = _normalize_date_arg(date)
+    cache = _v316_load_results_cache() if '_v316_load_results_cache' in globals() else _json_load_file(MATCH_RESULTS_CACHE_FILE, {})
+    if (not force_refresh) and isinstance(cache.get(d), dict) and cache[d].get('text'):
+        return cache[d].get('text')
+    txt, ok = _v318_result_text_for_date_uncached(d)
+    if ok and txt and not txt.startswith('ما فيه'):
+        cache[d] = {'text': txt, 'updated_at': _now_riyadh_text(), 'source': 'ESPN'}
+        try:
+            _v316_save_results_cache(cache)
+        except Exception:
+            _json_save_file(MATCH_RESULTS_CACHE_FILE, cache)
+    return txt
+
+
+async def previous_results_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or '').split('|')
+    d = ''
+    if len(parts) >= 3 and parts[1] == 'day':
+        d = _normalize_date_arg(parts[2])
+    elif len(parts) >= 2 and parts[0] == 'res':
+        d = _normalize_date_arg(parts[1])
+    if not d:
+        return
+    try:
+        await q.message.edit_text(f"⏳ أسحب نتائج {d} والهدافين من ESPN بالتاريخ...")
+    except Exception:
+        pass
+    try:
+        text = await asyncio.wait_for(asyncio.to_thread(_v28_result_text_for_date, d, False), timeout=100)
+        await q.message.edit_text(text)
+    except Exception:
+        try:
+            await q.message.edit_text(f"⚠️ ESPN تأخر في جلب نتائج {d}\nجرّب /تحديث_نتائج {d[:5]} بعد قليل")
+        except Exception:
+            pass
+
+
+async def refresh_results_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text('اكتبها كذا:\n/تحديث_نتائج 13/06')
+        return
+    d = _normalize_date_arg(dates[0])
+    wait = await update.message.reply_text(f"⏳ أحدث نتائج {d} من ESPN بالتاريخ...")
+    try:
+        txt = await asyncio.wait_for(asyncio.to_thread(_v28_result_text_for_date, d, True), timeout=110)
+        await wait.edit_text(txt)
+    except Exception:
+        await wait.edit_text(f"⚠️ تعذر تحديث نتائج {d} حاليًا. ESPN تأخر أو لم يرجع بيانات.")
+
+
+# ---------- هدافو البطولة: المنتخب ثابت، إصلاح اللاعب فقط ----------
+
+def render_top_scorers_v29(items):
+    ensure_generated_dir()
+    items = list(items or [])[:15]
+    width = 1080
+    row_h = 78
+    height = max(1420, 330 + max(1, len(items))*row_h + 180)
+    img, draw = _games_day_background(width, height)
+    overlay = Image.new('RGBA', (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (48, 52, width-48, height-52), radius=42, fill='#06152FCC', outline='#FFFFFF33', width=2)
+    img = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+    draw = ImageDraw.Draw(img, 'RGBA')
+    draw_text(draw, (width//2, 95), 'MONDIAL AL MASEEF 2026', _v31_latin_font(34) if '_v31_latin_font' in globals() else get_font(34), fill='#FFFFFF', max_width=860)
+    draw_text(draw, (width//2, 162), 'TOP SCORERS', _v31_latin_font(62) if '_v31_latin_font' in globals() else get_font(60), fill='#FFFFFF', max_width=940)
+    draw_text(draw, (width//2, 226), 'هدافو البطولة', get_font(42), fill='#FBBF24', max_width=830)
+    x0, x1 = 70, width-70
+    y0 = 285
+    rank_x = x1 - 42
+    # المنتخب يبقى في مكانه الحالي؛ المشكلة كانت max_width على اللاعب يوسّط النص ويلصقه بالرقم.
+    team_x = x0 + 505
+    name_right_x = x1 - 120
+    played_x = x0 + 230
+    goals_x = x0 + 90
+    name_left_limit = team_x + 115
+    name_width = max(165, name_right_x - name_left_limit)
+    rounded_rect(draw, (x0, y0, x1, y0+50), radius=16, fill='#F0C24A', outline='#00000044', width=1)
+    draw_text(draw, (rank_x, y0+25), '#', get_font(23), fill='#061633')
+    draw_text(draw, (name_left_limit + name_width/2, y0+25), 'اللاعب', get_font(24), fill='#061633')
+    draw_text(draw, (team_x, y0+25), 'المنتخب', get_font(24), fill='#061633')
+    draw_text(draw, (played_x, y0+25), 'لعب', get_font(24), fill='#061633')
+    draw_text(draw, (goals_x, y0+25), 'أهداف', get_font(24), fill='#061633')
+    y = y0 + 62
+    if not items:
+        rounded_rect(draw, (x0, y, x1, y+85), radius=22, fill='#061633D9', outline='#FFFFFF33', width=1)
+        draw_text(draw, (width//2, y+43), 'تعذر جلب هدافي البطولة من ESPN حاليًا', get_font(31), fill='#FFFFFF', max_width=850)
+    for idx, it in enumerate(items, start=1):
+        rounded_rect(draw, (x0, y, x1, y+row_h-10), radius=18, fill='#061633D9', outline='#FFFFFF22', width=1)
+        cy = y + (row_h-10)//2
+        rounded_rect(draw, (rank_x-23, cy-22, rank_x+23, cy+22), radius=12, fill='#FBBF24', outline='#FFFFFF22', width=1)
+        draw_text(draw, (rank_x, cy), str(idx), get_font(22), fill='#061633')
+        raw_name = it.get('name', '') if isinstance(it, dict) else ''
+        name = _player_name_ar(raw_name) if '_player_name_ar' in globals() else normalize_name(raw_name)
+        team = canonical_team_name(it.get('team')) or normalize_name(it.get('team') or '-') if isinstance(it, dict) else '-'
+        # هنا لا نستخدم max_width حتى لا يتحول النص من right-aligned إلى centered.
+        nf = _fit_font_to_width(draw, name, 27, name_width, min_size=13)
+        draw_text(draw, (name_right_x, cy), name, nf, fill='#FFFFFF', anchor='rm')
+        tf = _fit_font_to_width(draw, team, 24, 190, min_size=14)
+        draw_text(draw, (team_x, cy), team, tf, fill='#CBD5E1', anchor='mm')
+        draw_text(draw, (played_x, cy), str(it.get('played', '') if isinstance(it, dict) else ''), get_font(28), fill='#FFFFFF', anchor='mm')
+        draw_text(draw, (goals_x, cy), str(it.get('goals', '') if isinstance(it, dict) else ''), get_font(34), fill='#FBBF24', anchor='mm')
+        y += row_h
+    draw.line((240, height-120, width-240, height-120), fill='#FFFFFF88', width=2)
+    draw_text(draw, (width//2, height-72), 'المصيف يضعكم بالحدث', get_font(34), fill='#FBBF24', max_width=700)
+    path = os.path.join(GENERATED_DIR, 'top_scorers_espn_v318_player_fixed.png')
+    img.save(path, quality=95)
+    return path
+
+# ==================== END V31.8 HOTFIX ====================
+
 if __name__ == "__main__":
     main()
