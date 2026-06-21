@@ -30463,5 +30463,128 @@ async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # ==================== END V40 CLEAN LIVE + RESULTS MODULE ====================
 
+
+# ==================== PATCH11 HOTFIX: ربط زر مباشر الآن + نتائج بدون لمس التصاميم/الفانتزي ====================
+# السبب: بعض الهاندلرز القديمة كانت تمرر تاريخ قديم/فارغ للمباشر أو لا تعالج mainmenu|live.
+# هذا الباتش يعيد ربط الزر فقط ويترك موديول V40 النظيف كما هو.
+
+_PATCH11_OLD_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+_PATCH11_OLD_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+_PATCH11_BASE_ACTIVE_LIVE_DATE = globals().get('_v40_active_live_date')
+
+
+def _patch11_safe_today_fixture_date():
+    """أقرب تاريخ صالح للمباشر إذا فشل منطق اليوم النشط الأساسي."""
+    try:
+        now = _v33_now_riyadh_dt()
+    except Exception:
+        now = datetime.utcnow() + timedelta(hours=3)
+    today = now.strftime('%d/%m/%Y')
+    try:
+        if _v40_fixtures_for_date(today):
+            return today
+    except Exception:
+        pass
+    # fallback: آخر يوم بدأ وقت أول مباراة فيه
+    active = None
+    try:
+        for d, _day in _v40_all_dates():
+            first = _v40_first_kickoff(d)
+            if first and now >= first - timedelta(hours=1):
+                active = d
+            elif first:
+                break
+    except Exception:
+        pass
+    return active
+
+
+def _v40_active_live_date(now=None):
+    """إرجاع اليوم النشط مع fallback حتى لا يصبح مباشر الآن فارغًا."""
+    try:
+        if callable(_PATCH11_BASE_ACTIVE_LIVE_DATE):
+            d = _PATCH11_BASE_ACTIVE_LIVE_DATE(now)
+            if d and _v40_fixtures_for_date(d):
+                return d
+    except Exception:
+        pass
+    return _patch11_safe_today_fixture_date()
+
+
+# اجعل الدوال الأخرى تستخدم نفس اليوم النشط بعد إعادة تعريفه.
+def _v40_live_rows(date_str=None):
+    active = _normalize_date_arg(date_str) if date_str else _v40_active_live_date()
+    if not active:
+        return []
+    return _v40_fixtures_for_date(active)
+
+
+def _v33_live_rows(date_str=None):
+    return _v40_live_rows(date_str)
+
+
+def _v29_live_today_text(date_str=None):
+    active = _normalize_date_arg(date_str) if date_str else _v40_active_live_date()
+    if not active:
+        return "لا توجد مباريات في مباشر الآن حسب جدول البطولة."
+    title = _v26_fixture_title(active) if '_v26_fixture_title' in globals() else active
+    return f"📺 مباشر الآن — {title}\nيعرض مباريات اليوم النشط. المنتهية تبقى هنا مؤقتًا بنتيجتها حتى ينتقل اليوم الجديد."
+
+
+def _v29_live_today_keyboard(date_str=None):
+    rows = []
+    for m in _v40_live_rows(date_str):
+        try:
+            label = _v40_live_button_label(m)
+        except Exception:
+            label = f"{m.get('team1')} × {m.get('team2')}"
+        rows.append([InlineKeyboardButton(str(label)[:60], callback_data=f"livefx|match|{m.get('id')}")])
+    if not rows:
+        rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(update.message.text or '')
+    trigger_words = {"القائمة", "ابدا", "اطل", "زبد", "المصيف", "ستارت", "إلغاء", "الغاء", "↩️ إلغاء"}
+    if txt in trigger_words:
+        await public_menu_command(update, context)
+        return
+    if txt == "📺 مباشر الآن":
+        await update.message.reply_text(_v29_live_today_text(), reply_markup=_v29_live_today_keyboard())
+        return
+    if txt == "📋 نتائج المباريات":
+        await update.message.reply_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        return
+    # باقي الأزرار نخليها على الروتر القديم حتى ما نلمس القوائم/الفانتزي/التصاميم
+    if callable(_PATCH11_OLD_PUBLIC_REPLY_MENU_ROUTER):
+        return await _PATCH11_OLD_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'mainmenu|live':
+        await q.answer()
+        try:
+            await q.edit_message_text(_v29_live_today_text(), reply_markup=_v29_live_today_keyboard())
+        except Exception:
+            await q.message.reply_text(_v29_live_today_text(), reply_markup=_v29_live_today_keyboard())
+        return
+    if data == 'mainmenu|results':
+        await q.answer()
+        try:
+            await q.edit_message_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        except Exception:
+            await q.message.reply_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        return
+    if callable(_PATCH11_OLD_PUBLIC_MENU_CALLBACK):
+        return await _PATCH11_OLD_PUBLIC_MENU_CALLBACK(update, context)
+
+# ==================== END PATCH11 HOTFIX ====================
+
 if __name__ == "__main__":
     main()
