@@ -33520,5 +33520,483 @@ async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # ==================== END PATCH13 ====================
 
+
+# ==================== PATCH16: FIX DATE CALLBACKS + AUTHORITATIVE RESULTS TABLE ====================
+# هدفه فقط:
+# - زر التاريخ يرسل التاريخ نفسه بشكل آمن، لا index ولا كود مزاح.
+# - عرض مباريات التاريخ من جدولنا الصحيح دائمًا.
+# - التحديث فقط هو الذي يبحث في ESPN والمصادر الاحتياطية.
+# - إصلاح live/result callbacks بدون لمس التصاميم أو الفانتزي.
+V46_PATCH_NAME = "PATCH16_DATE_CALLBACK_FIX"
+
+
+def _v46_date_code(d):
+    d = _normalize_date_arg(d)
+    m = re.match(r'(\d{2})/(\d{2})/(\d{4})', d or '')
+    if not m:
+        return str(d or '').replace('/', '-')
+    dd, mm, yy = m.groups()
+    return f"{yy}{mm}{dd}"
+
+
+def _v46_date_from_code(code):
+    s = str(code or '').strip()
+    m = re.fullmatch(r'(\d{4})(\d{2})(\d{2})', s)
+    if m:
+        yy, mm, dd = m.groups()
+        return f"{dd}/{mm}/{yy}"
+    return _normalize_date_arg(s)
+
+
+# جدول موحد مختصر ومؤكد للأيام المستخدمة في النتائج والمباشر. إذا احتجنا باقي الجدول لاحقًا نضيفه هنا فقط.
+_V46_AUTHORITATIVE_FIXTURES = [
+    # 11/06
+    ("11/06/2026","الخميس","10:00 م","المكسيك","جنوب أفريقيا","المجموعة أ"),
+    ("11/06/2026","الخميس","5:00 فجراً","كوريا الجنوبية","التشيك","المجموعة أ"),
+    # 12/06
+    ("12/06/2026","الجمعة","10:00 م","كندا","البوسنة والهرسك","المجموعة ب"),
+    ("12/06/2026","الجمعة","4:00 فجراً","الولايات المتحدة","باراغواي","المجموعة د"),
+    # 13/06
+    ("13/06/2026","السبت","10:00 م","قطر","سويسرا","المجموعة ب"),
+    ("13/06/2026","السبت","1:00 فجراً","البرازيل","المغرب","المجموعة ج"),
+    ("13/06/2026","السبت","4:00 فجراً","هايتي","اسكتلندا","المجموعة ج"),
+    ("13/06/2026","السبت","7:00 صباحاً","أستراليا","تركيا","المجموعة د"),
+    # 14/06
+    ("14/06/2026","الأحد","8:00 م","ألمانيا","كوراساو","المجموعة هـ"),
+    ("14/06/2026","الأحد","11:00 م","هولندا","اليابان","المجموعة و"),
+    ("14/06/2026","الأحد","2:00 فجراً","ساحل العاج","الإكوادور","المجموعة هـ"),
+    ("14/06/2026","الأحد","5:00 فجراً","السويد","تونس","المجموعة و"),
+    # 15/06
+    ("15/06/2026","الإثنين","7:00 م","إسبانيا","الرأس الأخضر","المجموعة ح"),
+    ("15/06/2026","الإثنين","10:00 م","بلجيكا","مصر","المجموعة ز"),
+    ("15/06/2026","الإثنين","1:00 فجراً","السعودية","الأوروغواي","المجموعة ح"),
+    ("15/06/2026","الإثنين","4:00 فجراً","إيران","نيوزيلندا","المجموعة ز"),
+    # 16/06
+    ("16/06/2026","الثلاثاء","10:00 م","فرنسا","السنغال","المجموعة ط"),
+    ("16/06/2026","الثلاثاء","1:00 صباحاً","العراق","النرويج","المجموعة ط"),
+    ("16/06/2026","الثلاثاء","4:00 فجراً","الأرجنتين","الجزائر","المجموعة ي"),
+    ("16/06/2026","الثلاثاء","7:00 صباحاً","النمسا","الأردن","المجموعة ي"),
+    # 17/06 - حسب جدولك الصحيح
+    ("17/06/2026","الأربعاء","8:00 م","البرتغال","الكونغو الديمقراطية","المجموعة ك"),
+    ("17/06/2026","الأربعاء","11:00 م","إنجلترا","كرواتيا","المجموعة ل"),
+    ("17/06/2026","الأربعاء","2:00 فجراً","غانا","بنما","المجموعة ل"),
+    ("17/06/2026","الأربعاء","5:00 فجراً","أوزبكستان","كولومبيا","المجموعة ك"),
+    # 18/06
+    ("18/06/2026","الخميس","7:00 م","التشيك","جنوب أفريقيا","المجموعة أ"),
+    ("18/06/2026","الخميس","10:00 م","سويسرا","البوسنة والهرسك","المجموعة ب"),
+    ("18/06/2026","الخميس","1:00 صباحاً","كندا","قطر","المجموعة ب"),
+    ("18/06/2026","الخميس","4:00 فجراً","المكسيك","كوريا الجنوبية","المجموعة أ"),
+    # 19/06
+    ("19/06/2026","الجمعة","10:00 م","الولايات المتحدة","أستراليا","المجموعة د"),
+    ("19/06/2026","الجمعة","1:00 صباحاً","اسكتلندا","المغرب","المجموعة ج"),
+    ("19/06/2026","الجمعة","3:30 فجراً","البرازيل","هايتي","المجموعة ج"),
+    ("19/06/2026","الجمعة","6:00 صباحاً","تركيا","باراغواي","المجموعة د"),
+    # 20/06 - يوم السبت النشط إلى الأحد 4 العصر
+    ("20/06/2026","السبت","8:00 م","هولندا","السويد","المجموعة و"),
+    ("20/06/2026","السبت","11:00 م","ألمانيا","ساحل العاج","المجموعة هـ"),
+    ("20/06/2026","السبت","3:00 فجراً","الإكوادور","كوراساو","المجموعة هـ"),
+    ("20/06/2026","السبت","7:00 صباحاً","تونس","اليابان","المجموعة و"),
+    # 21/06
+    ("21/06/2026","الأحد","7:00 م","إسبانيا","السعودية","المجموعة ح"),
+    ("21/06/2026","الأحد","10:00 م","بلجيكا","إيران","المجموعة ز"),
+    ("21/06/2026","الأحد","1:00 صباحاً","الأوروغواي","الرأس الأخضر","المجموعة ح"),
+    ("21/06/2026","الأحد","4:00 فجراً","نيوزيلندا","مصر","المجموعة ز"),
+    # 22/06
+    ("22/06/2026","الإثنين","8:00 م","الأرجنتين","النمسا","المجموعة ي"),
+    ("22/06/2026","الإثنين","12:00 صباحاً","فرنسا","العراق","المجموعة ط"),
+    ("22/06/2026","الإثنين","3:00 فجراً","النرويج","السنغال","المجموعة ط"),
+    ("22/06/2026","الإثنين","6:00 صباحاً","الأردن","الجزائر","المجموعة ي"),
+    # 23/06 - حسب جدولك الصحيح
+    ("23/06/2026","الثلاثاء","8:00 م","البرتغال","أوزبكستان","المجموعة ك"),
+    ("23/06/2026","الثلاثاء","11:00 م","إنجلترا","غانا","المجموعة ل"),
+    ("23/06/2026","الثلاثاء","2:00 فجراً","بنما","كرواتيا","المجموعة ل"),
+    ("23/06/2026","الثلاثاء","5:00 فجراً","كولومبيا","الكونغو الديمقراطية","المجموعة ك"),
+    # 24/06
+    ("24/06/2026","الأربعاء","10:00 م","سويسرا","كندا","المجموعة ب"),
+    ("24/06/2026","الأربعاء","10:00 م","البوسنة والهرسك","قطر","المجموعة ب"),
+    ("24/06/2026","الأربعاء","1:00 صباحاً","اسكتلندا","البرازيل","المجموعة ج"),
+    ("24/06/2026","الأربعاء","1:00 صباحاً","المغرب","هايتي","المجموعة ج"),
+    ("24/06/2026","الأربعاء","4:00 فجراً","التشيك","المكسيك","المجموعة أ"),
+    ("24/06/2026","الأربعاء","4:00 فجراً","جنوب أفريقيا","كوريا الجنوبية","المجموعة أ"),
+    # 25/06
+    ("25/06/2026","الخميس","11:00 م","الإكوادور","ألمانيا","المجموعة هـ"),
+    ("25/06/2026","الخميس","11:00 م","كوراساو","ساحل العاج","المجموعة هـ"),
+    ("25/06/2026","الخميس","2:00 صباحاً","تونس","هولندا","المجموعة و"),
+    ("25/06/2026","الخميس","2:00 صباحاً","اليابان","السويد","المجموعة و"),
+    ("25/06/2026","الخميس","5:00 فجراً","تركيا","الولايات المتحدة","المجموعة د"),
+    ("25/06/2026","الخميس","5:00 فجراً","باراغواي","أستراليا","المجموعة د"),
+    # 26/06
+    ("26/06/2026","الجمعة","10:00 م","النرويج","فرنسا","المجموعة ط"),
+    ("26/06/2026","الجمعة","10:00 م","السنغال","العراق","المجموعة ط"),
+    ("26/06/2026","الجمعة","3:00 فجراً","الأوروغواي","إسبانيا","المجموعة ح"),
+    ("26/06/2026","الجمعة","3:00 فجراً","الرأس الأخضر","السعودية","المجموعة ح"),
+    ("26/06/2026","الجمعة","6:00 صباحاً","نيوزيلندا","بلجيكا","المجموعة ز"),
+    ("26/06/2026","الجمعة","6:00 صباحاً","مصر","إيران","المجموعة ز"),
+    # 27/06
+    ("27/06/2026","السبت","12:00 صباحاً","بنما","إنجلترا","المجموعة ل"),
+    ("27/06/2026","السبت","12:00 صباحاً","كرواتيا","غانا","المجموعة ل"),
+    ("27/06/2026","السبت","2:30 صباحاً","كولومبيا","البرتغال","المجموعة ك"),
+    ("27/06/2026","السبت","2:30 صباحاً","الكونغو الديمقراطية","أوزبكستان","المجموعة ك"),
+    ("27/06/2026","السبت","5:00 صباحاً","الأردن","الأرجنتين","المجموعة ي"),
+    ("27/06/2026","السبت","5:00 صباحاً","الجزائر","النمسا","المجموعة ي"),
+]
+
+
+def _v46_authoritative_all_fixtures():
+    rows = []
+    for i, (d, day, time_s, t1, t2, group) in enumerate(_V46_AUTHORITATIVE_FIXTURES, start=1):
+        nd = _normalize_date_arg(d)
+        rows.append({
+            'id': f"V46-{_v46_date_code(nd)}-{i}",
+            'date': nd,
+            'day': day,
+            'day_name': day,
+            'time': time_s,
+            'team1': t1,
+            'team2': t2,
+            'stage': 'دور المجموعات',
+            'group': group,
+            'source': 'جدول البطولة',
+        })
+    return rows
+
+
+def _v46_fixtures_for_date(d):
+    nd = _normalize_date_arg(d)
+    rows = [dict(m) for m in _v46_authoritative_all_fixtures() if _normalize_date_arg(m.get('date')) == nd]
+    # إذا التاريخ خارج الجدول المصحح، نرجع للجدول القديم فقط كاحتياط.
+    if not rows:
+        try:
+            rows = [dict(x) for x in (_v40_fixtures_for_date(nd) or [])]
+        except Exception:
+            rows = []
+    for idx, m in enumerate(rows):
+        m['v46_idx'] = str(idx)
+        # نحافظ على id ثابت داخل التاريخ حتى لو تغير ترتيب مصادر خارجية.
+        if not str(m.get('id') or '').startswith('V46-'):
+            m['id'] = f"V46-{_v46_date_code(nd)}-{idx}"
+    return rows
+
+
+def _v43_results_fixtures_for_date(d, force=False, debug=None):
+    """PATCH16: العرض دائمًا من جدولنا الصحيح، والتحديث فقط يبحث في ESPN."""
+    debug = debug if debug is not None else []
+    nd = _normalize_date_arg(d)
+    rows = _v46_fixtures_for_date(nd)
+    debug.append(f'PATCH16 جدول داخلي مؤكد {nd}: {len(rows)} مباراة')
+    return rows
+
+
+def _v40_live_rows(date_str=None):
+    active = _normalize_date_arg(date_str) if date_str else _v41_active_live_date()
+    if not active:
+        return []
+    return _v46_fixtures_for_date(active)
+
+
+_v33_live_rows = _v40_live_rows
+
+
+def _v46_result_dates():
+    active = _normalize_date_arg(_v41_active_live_date()) if '_v41_active_live_date' in globals() else ''
+    try:
+        active_key = _v40_date_tuple(active) if active else _v40_today_key()
+    except Exception:
+        active_key = (2026, 6, 99)
+    seen = {}
+    for m in _v46_authoritative_all_fixtures():
+        d = _normalize_date_arg(m.get('date'))
+        if not d or d in seen:
+            continue
+        try:
+            if _v40_date_tuple(d) < active_key:
+                seen[d] = m.get('day') or ''
+        except Exception:
+            seen[d] = m.get('day') or ''
+    return sorted(seen.items(), key=lambda x: _v40_date_tuple(x[0]))
+
+
+def _v28_previous_results_keyboard():
+    rows, row = [], []
+    for d, _dy in _v46_result_dates():
+        row.append(InlineKeyboardButton(d[:5], callback_data=f"res|day|{_v46_date_code(d)}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if not rows:
+        rows.append([InlineKeyboardButton("لا توجد نتائج منتهية حتى الآن", callback_data="noop")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v46_cached_for_button(m):
+    try:
+        cached = _v43_get_cached_match_result(m)
+        if isinstance(cached, dict) and _patch6_numeric_score(cached):
+            return cached
+    except Exception:
+        pass
+    try:
+        cached = _v34_get_fast_live_cache_for_fixture(m)
+        if isinstance(cached, dict) and _patch6_numeric_score(cached):
+            return cached
+    except Exception:
+        pass
+    return None
+
+
+def _v46_match_button_label(m):
+    cached = _v46_cached_for_button(m)
+    t1 = canonical_team_name(m.get('team1')) if 'canonical_team_name' in globals() else m.get('team1')
+    t2 = canonical_team_name(m.get('team2')) if 'canonical_team_name' in globals() else m.get('team2')
+    t1 = t1 or m.get('team1') or ''
+    t2 = t2 or m.get('team2') or ''
+    if isinstance(cached, dict) and _patch6_numeric_score(cached):
+        return f"✅ {t1} {cached.get('score1')} - {cached.get('score2')} {t2}"
+    return f"❌ {t1} × {t2}"
+
+
+def _v33_results_matches_keyboard(d):
+    nd = _normalize_date_arg(d)
+    code = _v46_date_code(nd)
+    rows = [
+        [InlineKeyboardButton("🧹 مسح كاش نتائج هذا اليوم", callback_data=f"res|clearday|{code}")],
+        [InlineKeyboardButton("🔄 تحديث نتائج هذا اليوم من ESPN", callback_data=f"res|refreshday|{code}")],
+    ]
+    matches = _v46_fixtures_for_date(nd)
+    for idx, m in enumerate(matches):
+        rows.append([InlineKeyboardButton(_v46_match_button_label(m)[:62], callback_data=f"res|match|{code}|{idx}")])
+    if not matches:
+        rows.append([InlineKeyboardButton("لا توجد مباريات لهذا التاريخ", callback_data="noop")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع للتواريخ", callback_data="res|dates")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v46_find_fixture_by_mid(d, mid):
+    nd = _normalize_date_arg(d)
+    mid_s = str(mid or '').strip()
+    rows = _v46_fixtures_for_date(nd)
+    if re.fullmatch(r'\d+', mid_s):
+        idx = int(mid_s)
+        if 0 <= idx < len(rows):
+            return rows[idx]
+    for m in rows:
+        ids = {str(m.get('id') or ''), str(m.get('v46_idx') or '')}
+        try:
+            ids.add(_v45_match_short_id(m))
+        except Exception:
+            pass
+        if mid_s in ids:
+            return m
+    return None
+
+
+def _v43_find_fixture_by_mid(d, mid, force=False):
+    return _v46_find_fixture_by_mid(d, mid)
+
+
+def _v29_live_today_keyboard(date_str=None):
+    rows = []
+    active = _normalize_date_arg(date_str) if date_str else _v41_active_live_date()
+    if active:
+        code = _v46_date_code(active)
+        rows.append([InlineKeyboardButton("🧹 مسح كاش مباشر اليوم", callback_data=f"livefx|clearday|{code}")])
+        rows.append([InlineKeyboardButton("🔄 تحديث مباشر الآن من ESPN", callback_data=f"livefx|refreshday|{code}")])
+    matches = _v40_live_rows(active)
+    for idx, m in enumerate(matches):
+        label = _v40_live_button_label(m)[:62] if '_v40_live_button_label' in globals() else _v46_match_button_label(m)[:62]
+        rows.append([InlineKeyboardButton(label, callback_data=f"livefx|match|{_v46_date_code(active)}|{idx}")])
+    if active and not matches:
+        rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def previous_results_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    data = q.data or ''
+    if data == 'noop':
+        return
+    parts = data.split('|')
+    try:
+        if data == 'res|dates':
+            await _v45_try_edit_text(q.message, "اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+            return
+
+        if len(parts) >= 3 and parts[0] == 'res' and parts[1] == 'day':
+            d = _v46_date_from_code(parts[2])
+            title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+            await _v45_try_edit_text(q.message, f"⚽ نتائج {title}\nالمباريات من جدول البطولة الصحيح. التحديث فقط يبحث في ESPN والمصادر.", reply_markup=_v33_results_matches_keyboard(d))
+            return
+
+        if len(parts) >= 3 and parts[0] == 'res' and parts[1] == 'clearday':
+            d = _v46_date_from_code(parts[2])
+            dbg = _v44_clear_day_cache(d) if '_v44_clear_day_cache' in globals() else []
+            title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+            txt = f"🧹 تم مسح كاش نتائج {title}.\nالآن اضغط تحديث نتائج هذا اليوم من ESPN عشان يعيد النتيجة والأهداف من جديد."
+            try:
+                if '_is_admin' in globals() and _is_admin(q.from_user.id) and dbg:
+                    txt += "\n\n🔎 التشخيص:\n" + "\n".join(f"- {x}" for x in dbg[-8:])
+            except Exception:
+                pass
+            await _v45_try_edit_text(q.message, txt, reply_markup=_v33_results_matches_keyboard(d))
+            return
+
+        if len(parts) >= 3 and parts[0] == 'res' and parts[1] == 'refreshday':
+            d = _v46_date_from_code(parts[2])
+            wait_msg = await _v45_send_wait(q.message, f"⏳ تحديث إجباري لـ {d}: جدولنا الصحيح + ESPN + الأهداف...")
+            try:
+                updated, dbg = await asyncio.wait_for(asyncio.to_thread(_v41_update_day_results, d, True), timeout=45)
+            except Exception as e:
+                updated, dbg = 0, [f"انتهى الوقت/خطأ: {str(e)[:80]}"]
+            title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+            txt = f"⚽ نتائج {title}\nتم تحديث {updated} مباراة.\nاختر مباراة للتفاصيل أو أعد التحديث:"
+            try:
+                if '_is_admin' in globals() and _is_admin(q.from_user.id) and dbg:
+                    txt += "\n\n🔎 آخر محاولات:\n" + "\n".join(f"- {x}" for x in dbg[-10:])
+            except Exception:
+                pass
+            await _v45_finish_wait(wait_msg, delete=True)
+            await _v45_try_edit_text(q.message, txt, reply_markup=_v33_results_matches_keyboard(d))
+            return
+
+        if len(parts) >= 4 and parts[0] == 'res' and parts[1] == 'match':
+            d = _v46_date_from_code(parts[2])
+            mid = parts[3]
+            m = _v46_find_fixture_by_mid(d, mid)
+            if not m:
+                await q.message.reply_text("لم أجد المباراة في جدول البطولة لهذا التاريخ.", reply_markup=_v33_results_matches_keyboard(d))
+                return
+            cached = _v46_cached_for_button(m)
+            wait_msg = None
+            if not isinstance(cached, dict) or not _patch6_numeric_score(cached) or not _v43_goals_complete(cached):
+                wait_msg = await _v45_send_wait(q.message, f"⏳ أبحث عن نتيجة وأهداف {m.get('team1')} × {m.get('team2')}...")
+                try:
+                    cached = await asyncio.wait_for(asyncio.to_thread(_v41_fetch_result_for_fixture, m, d, True, True), timeout=35)
+                except Exception as e:
+                    cached = None
+                    try:
+                        _v43_cache_goal_debug(m, [f'PATCH16 match timeout/error: {str(e)[:80]}'])
+                    except Exception:
+                        pass
+            if isinstance(cached, dict) and _patch6_numeric_score(cached):
+                txt = _v41_result_detail_text(m, cached) if '_v41_result_detail_text' in globals() else build_live_caption(cached, cached.get('source','ESPN'))
+                txt += _v43_admin_debug_text(q.from_user.id, m) if '_v43_admin_debug_text' in globals() else ''
+            else:
+                txt = f"⚠️ لم أجد نتيجة {m.get('team1')} × {m.get('team2')} حاليًا.\nباقية ❌ حتى يتم تحديثها."
+                try:
+                    txt += _v43_admin_debug_text(q.from_user.id, m)
+                except Exception:
+                    pass
+            await _v45_finish_wait(wait_msg, delete=True)
+            await q.message.reply_text(txt, reply_markup=_v33_results_matches_keyboard(d))
+            return
+
+        # دعم callbacks قديمة مثل res|17/06/2026
+        if len(parts) >= 2 and parts[0] == 'res':
+            d = _v46_date_from_code(parts[1])
+            title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+            await _v45_try_edit_text(q.message, f"⚽ نتائج {title}\nاختر مباراة للتفاصيل أو اضغط تحديث اليوم:", reply_markup=_v33_results_matches_keyboard(d))
+            return
+    except Exception as e:
+        try:
+            await q.message.reply_text(f"صار خطأ في النتائج وما مسحت الأزرار.\nالخطأ: {str(e)[:120]}")
+        except Exception:
+            pass
+
+
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    data = q.data or ''
+    if data == 'noop':
+        return
+    parts = data.split('|')
+    try:
+        if len(parts) >= 3 and parts[1] == 'clearday':
+            d = _v46_date_from_code(parts[2])
+            dbg = _v44_clear_day_cache(d) if '_v44_clear_day_cache' in globals() else []
+            txt = _v29_live_today_text(d)
+            try:
+                if '_is_admin' in globals() and _is_admin(q.from_user.id):
+                    txt += "\n\n🧹 تم مسح كاش مباشر اليوم."
+                    if dbg:
+                        txt += "\n🔎 " + " / ".join(dbg[-3:])
+            except Exception:
+                pass
+            await _v45_try_edit_text(q.message, txt, reply_markup=_v29_live_today_keyboard(d))
+            return
+
+        if len(parts) >= 3 and parts[1] == 'refreshday':
+            d = _v46_date_from_code(parts[2])
+            wait_msg = await _v45_send_wait(q.message, f"⏳ تحديث إجباري للمباشر {d}: ESPN + الأهداف...")
+            try:
+                updated, dbg = await asyncio.wait_for(asyncio.to_thread(_v41_update_day_results, d, True), timeout=45)
+            except Exception as e:
+                updated, dbg = 0, [f"انتهى الوقت/خطأ: {str(e)[:80]}"]
+            txt = _v29_live_today_text(d)
+            try:
+                if '_is_admin' in globals() and _is_admin(q.from_user.id):
+                    txt += f"\n\n🔄 تم تحديث {updated} مباراة."
+                    if dbg:
+                        txt += "\n🔎 " + " / ".join(dbg[-5:])
+            except Exception:
+                pass
+            await _v45_finish_wait(wait_msg, delete=True)
+            await _v45_try_edit_text(q.message, txt, reply_markup=_v29_live_today_keyboard(d))
+            return
+
+        if len(parts) >= 4 and parts[1] == 'match':
+            d = _v46_date_from_code(parts[2])
+            mid = parts[3]
+        elif len(parts) >= 3 and parts[1] == 'match':
+            d = _normalize_date_arg(_v41_active_live_date())
+            mid = parts[2]
+        else:
+            return
+        m = _v46_find_fixture_by_mid(d, mid)
+        if not m:
+            await q.message.reply_text("لم أجد المباراة في مباشر الآن.", reply_markup=_v29_live_today_keyboard(d))
+            return
+        wait_msg = await _v45_send_wait(q.message, f"⏳ جاري تحديث {m.get('team1')} × {m.get('team2')} من ESPN...")
+        try:
+            obj = await asyncio.wait_for(asyncio.to_thread(_v40_fetch_live_for_fixture, m, True), timeout=35)
+        except Exception as e:
+            obj = None
+            try:
+                _v43_cache_goal_debug(m, [f'PATCH16 live timeout/error: {str(e)[:80]}'])
+            except Exception:
+                pass
+        if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
+            await _v45_finish_wait(wait_msg, f"⚽ {m.get('team1')} × {m.get('team2')}\nالحالة: قيد التحديث\nالمصدر: ESPN/بحث خارجي")
+            return
+        label = obj.get('actual_source') or obj.get('source') or 'ESPN'
+        try:
+            path = render_live_match_card(obj, label)
+            await _v45_finish_wait(wait_msg, delete=True)
+            await send_photo_path(q.message, path, build_live_caption(obj, label))
+        except Exception:
+            await _v45_finish_wait(wait_msg, build_live_caption(obj, label))
+    except Exception as e:
+        try:
+            await q.message.reply_text(f"صار خطأ في مباشر الآن وما مسحت الأزرار.\nالخطأ: {str(e)[:120]}")
+        except Exception:
+            pass
+
+# ==================== END PATCH16 ====================
+
 if __name__ == "__main__":
     main()
