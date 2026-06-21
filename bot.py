@@ -13753,7 +13753,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مباشر(?:\s|$)"), live_match_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:القائمة|menu|Menu)(?:\s|$)"), public_menu_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:الهدافين|هدافين_البطولة|هدافين_كاس_العالم)(?:\s|$)"), public_top_scorers_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تحديث_المتأهلين(?:\s|$)"), admin_only(auto_update_status_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تحديث_المتأهلين|تحديث_الحالة)(?:\s|$)"), admin_only(auto_update_status_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اضافة_ملخص|إضافة_ملخص|اضافه_ملخص|إضافه_ملخص)(?:\s|$)"), admin_only(add_highlight_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اضافة_متأهل|إضافة_متأهل|اضافة_متاهل|إضافة_متاهل)(?:\s|$)"), admin_only(status_picker_qualified_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:استبعاد_بطولة|استبعاد_البطولة)(?:\s|$)"), admin_only(status_picker_eliminated_command)))
@@ -25709,6 +25709,647 @@ async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== END V31 FINAL PATCH ====================
 
 # ==================== END V31.4 PATCH ====================
+
+
+# ==================== V31.5 URGENT PATCH: live auto fallback + ESPN retries + table layout + manual status refresh ====================
+# هذا الباتش يعالج الملاحظات الأخيرة:
+# 1) مباشر الآن: ESPN أولاً وبأكثر من محاولة، ثم مصادر احتياطية تلقائيًا بدون تكديس رسائل.
+# 2) حذف قائمة اختيار المباراة بعد الضغط، والنتيجة/الفشل برسالة نظيفة واحدة.
+# 3) تنسيق أسماء المنتخبات والهدافين داخل الجداول بدون تداخل مع الرقم.
+# 4) المتأهلون/المغادرون: المستخدم يرى المحفوظ مباشرة، والمشرف فقط يحدث من FIFA عند الطلب.
+
+try:
+    TEAM_ALIASES.update({
+        # FIFA/ESPN variants
+        "Côte d'Ivoire": "ساحل العاج",
+        "Cote dIvoire": "ساحل العاج",
+        "Cote d Ivoire": "ساحل العاج",
+        "Cote d'Ivoire": "ساحل العاج",
+        "CIV": "ساحل العاج",
+        "Ivory Coast": "ساحل العاج",
+        "Curaçao": "كوراساو",
+        "Curacao": "كوراساو",
+        "Curaçao National Team": "كوراساو",
+        "Curacao National Team": "كوراساو",
+        "CUW": "كوراساو",
+        "Türkiye": "تركيا",
+        "Turkiye": "تركيا",
+        "Republic of Korea": "كوريا الجنوبية",
+        "Korea Republic": "كوريا الجنوبية",
+        "Korea, Republic of": "كوريا الجنوبية",
+        "USA": "الولايات المتحدة",
+        "United States of America": "الولايات المتحدة",
+        "USMNT": "الولايات المتحدة",
+        "Czech Republic": "التشيك",
+        "Czechia": "التشيك",
+        "Bosnia & Herzegovina": "البوسنة والهرسك",
+        "Bosnia-Herzegovina": "البوسنة والهرسك",
+        "DR Congo": "الكونغو الديمقراطية",
+        "Democratic Republic of Congo": "الكونغو الديمقراطية",
+        "Congo DR": "الكونغو الديمقراطية",
+        "Cape Verde Islands": "الرأس الأخضر",
+        "Cabo Verde": "الرأس الأخضر",
+        "Netherlands": "هولندا",
+        "Holland": "هولندا",
+    })
+except Exception:
+    pass
+
+
+def _v315_key_variants(name):
+    raw = normalize_name(name or "")
+    out = set()
+    if raw:
+        out.add(simple_key(raw))
+    can = canonical_team_name(raw) or raw
+    if can:
+        out.add(simple_key(can))
+    try:
+        en = _v31_team_name_en(can)
+        if en:
+            out.add(simple_key(en))
+    except Exception:
+        pass
+    try:
+        for k, v in TEAM_ALIASES.items():
+            if (canonical_team_name(v) or normalize_name(v)) == can:
+                out.add(simple_key(k))
+                out.add(simple_key(v))
+    except Exception:
+        pass
+    # تبسيط خاص لساحل العاج بسبب الرموز الفرنسية
+    joined = " ".join([raw, can]).lower()
+    if "ivoire" in joined or "ivory" in joined or "civ" == joined.strip():
+        out.add(simple_key("ساحل العاج")); out.add(simple_key("Ivory Coast")); out.add(simple_key("Cote dIvoire"))
+    if "cura" in joined or "curacao" in joined or "curaçao" in joined:
+        out.add(simple_key("كوراساو")); out.add(simple_key("Curacao")); out.add(simple_key("Curaçao"))
+    return {x for x in out if x}
+
+
+def _v31_team_same(a, b):
+    va = _v315_key_variants(a)
+    vb = _v315_key_variants(b)
+    if va & vb:
+        return True
+    # تقريب محافظ: اسم داخل اسم بعد التبسيط، بشرط طول معقول عشان ما يطابق غلط
+    for x in va:
+        for y in vb:
+            if len(x) >= 5 and len(y) >= 5 and (x in y or y in x):
+                return True
+    return False
+
+
+def _v28_team_same(a, b):
+    return _v31_team_same(a, b)
+
+
+def _teams_match(event_team1, event_team2, req1, req2):
+    return (_v31_team_same(event_team1, req1) and _v31_team_same(event_team2, req2)) or (_v31_team_same(event_team1, req2) and _v31_team_same(event_team2, req1))
+
+
+def _v315_date_to_espn(d):
+    s = normalize_name(d or "")
+    if re.fullmatch(r"\d{8}", s):
+        return s
+    nd = _normalize_date_arg(s)
+    if nd:
+        try:
+            return _v28_espn_date(nd)
+        except Exception:
+            pass
+    return ""
+
+
+def _v315_espn_dates_for_match(team1, team2, date_hint=None):
+    dates = []
+    def add(x):
+        x = _v315_date_to_espn(x)
+        if x and x not in dates:
+            dates.append(x)
+    add(date_hint)
+    try:
+        fix = _find_fixture_for_pair(team1, team2, date_hint)
+        if fix:
+            add(fix.get("date"))
+    except Exception:
+        pass
+    try:
+        add(_v29_active_fixture_date())
+    except Exception:
+        pass
+    try:
+        for m in _all_fixtures():
+            if _v31_team_same(m.get("team1"), team1) and _v31_team_same(m.get("team2"), team2):
+                add(m.get("date"))
+            elif _v31_team_same(m.get("team1"), team2) and _v31_team_same(m.get("team2"), team1):
+                add(m.get("date"))
+    except Exception:
+        pass
+    try:
+        for d in _v28_espn_date_candidates(date_hint):
+            add(d)
+    except Exception:
+        pass
+    try:
+        for d in _espn_date_candidates(date_hint, days_back=4, days_forward=3):
+            add(d)
+    except Exception:
+        pass
+    return dates[:18]
+
+
+def _v315_clean_live_obj(obj, fixture=None, fallback_team1=None, fallback_team2=None, source_label=""):
+    if not isinstance(obj, dict):
+        return None
+    if fallback_team1 and not obj.get("team1"):
+        obj["team1"] = canonical_team_name(fallback_team1) or normalize_name(fallback_team1)
+    if fallback_team2 and not obj.get("team2"):
+        obj["team2"] = canonical_team_name(fallback_team2) or normalize_name(fallback_team2)
+    if source_label:
+        obj["actual_source"] = source_label
+        obj["source"] = source_label
+    obj = _merge_manual_match_data(obj, fixture)
+    if _is_zero_zero(obj) and obj.get("goals_source") != "إدارة المصيف":
+        obj["scorers"] = []
+    else:
+        obj["scorers"] = _v28_sanitize_scorers(obj.get("scorers") or [])
+    if not obj.get("status"):
+        obj["status"] = "غير محدد"
+    return obj
+
+
+def _v315_fetch_espn_multi(team1, team2, date_hint=None):
+    fixture = None
+    try:
+        fixture = _find_fixture_for_pair(team1, team2, date_hint)
+    except Exception:
+        fixture = None
+    # محاولة مباشرة بدالة ESPN القديمة أولاً
+    for hint in [date_hint, (fixture or {}).get("date") if fixture else None, _v315_date_to_espn(date_hint)]:
+        try:
+            obj = fetch_match_from_espn(team1, team2, date_hint=hint)
+            if obj:
+                return _v315_clean_live_obj(obj, fixture, team1, team2, "ESPN")
+        except Exception:
+            pass
+    # محاولة ثانية: نمسح أيام ESPN صراحة ونستخدم مطابقة الأسماء المحسنة
+    for d in _v315_espn_dates_for_match(team1, team2, date_hint):
+        try:
+            events = _fetch_espn_events_by_date(d)
+        except Exception:
+            events = []
+        for ev in events or []:
+            try:
+                obj = _v28_event_match_obj(ev, team1, team2)
+                if obj:
+                    return _v315_clean_live_obj(obj, fixture, team1, team2, "ESPN")
+            except Exception:
+                pass
+            # fallback للبارسر القديم إذا تغير شكل الحدث
+            try:
+                obj2 = _parse_espn_match_from_event(ev)
+                if obj2 and _teams_match(obj2.get("team1"), obj2.get("team2"), team1, team2):
+                    return _v315_clean_live_obj(obj2, fixture, team1, team2, "ESPN")
+            except Exception:
+                pass
+    return None
+
+
+def _v315_fetch_source_once(src, team1, team2, date_hint=None):
+    src = _norm_source_mode(src)
+    if src == "espn":
+        return _v315_fetch_espn_multi(team1, team2, date_hint)
+    try:
+        if src == "google":
+            obj = fetch_match_from_serpapi(team1, team2, date_hint=date_hint)
+            return _v315_clean_live_obj(obj, None, team1, team2, "Google Sports")
+        if src == "365":
+            obj = fetch_match_from_365(team1, team2, date_hint=date_hint)
+            return _v315_clean_live_obj(obj, None, team1, team2, "365Scores")
+        if src == "kooora":
+            obj = fetch_match_from_kooora(team1, team2, date_hint=date_hint)
+            return _v315_clean_live_obj(obj, None, team1, team2, "Kooora")
+        if src in {"official", "api"}:
+            obj = fetch_match_from_api_football(team1, team2, date_hint=date_hint)
+            if not obj:
+                obj = fetch_match_from_fifa(team1, team2)
+            return _v315_clean_live_obj(obj, None, team1, team2, "رسمي")
+        if src == "fifa":
+            obj = fetch_match_from_fifa(team1, team2)
+            return _v315_clean_live_obj(obj, None, team1, team2, "FIFA")
+    except Exception:
+        return None
+    return None
+
+
+def _norm_source_mode(mode):
+    m = normalize_name(mode or "").lower().strip()
+    table = {
+        "espn": "espn", "اي اس بي ان": "espn", "إي اس بي ان": "espn",
+        "تلقائي": "auto", "auto": "auto", "افتراضي": "auto",
+        "سريع": "google", "fast": "google", "google": "google", "قوقل": "google", "جوجل": "google",
+        "365": "365", "٣٦٥": "365", "365scores": "365", "365score": "365",
+        "كورة": "kooora", "كوره": "kooora", "كووورة": "kooora", "كووره": "kooora", "kooora": "kooora", "koora": "kooora",
+        "رسمي": "official", "official": "official", "api": "official", "api-football": "official",
+        "الأحدث": "latest", "الاحدث": "latest", "latest": "latest",
+    }
+    return table.get(m, m or "auto")
+
+
+def mode_label_ar(mode):
+    m = _norm_source_mode(mode)
+    return {
+        "auto": "تلقائي",
+        "espn": "ESPN",
+        "google": "قوقل",
+        "365": "365",
+        "kooora": "كورة",
+        "official": "رسمي",
+        "latest": "الأحدث",
+        "fifa": "FIFA",
+    }.get(m, normalize_name(mode or "تلقائي"))
+
+
+def fetch_live_match_data(team1, team2, mode="auto", date_hint=None):
+    """ESPN أولاً بعدة محاولات، ثم مصادر احتياطية تلقائيًا. لا يرفع استثناءات للمستخدم."""
+    norm = _norm_source_mode(mode)
+    # ESPN هو الأساس دائمًا إلا لو المشرف اختار مصدرًا محددًا من أزرار التشخيص.
+    espn_first = _v315_fetch_espn_multi(team1, team2, date_hint)
+    if espn_first:
+        return espn_first
+
+    if norm == "365":
+        fallback = ["365", "google", "kooora", "official", "fifa"]
+    elif norm == "kooora":
+        fallback = ["kooora", "google", "365", "official", "fifa"]
+    elif norm == "google":
+        fallback = ["google", "365", "kooora", "official", "fifa"]
+    elif norm == "official":
+        fallback = ["official", "google", "365", "kooora", "fifa"]
+    elif norm == "latest":
+        fallback = ["google", "365", "kooora", "official", "fifa"]
+    else:
+        fallback = ["google", "365", "kooora", "official", "fifa"]
+
+    for src in fallback:
+        obj = _v315_fetch_source_once(src, team1, team2, date_hint)
+        if obj:
+            # لو النتيجة من مصدر احتياطي، تبقى نظيفة ومعروفة المصدر.
+            return obj
+    return None
+
+
+def source_keyboard(context, payload):
+    token = store_source_request(context, payload)
+    rows = [
+        [
+            InlineKeyboardButton("ESPN", callback_data=f"sportsrc|{token}|espn"),
+            InlineKeyboardButton("قوقل", callback_data=f"sportsrc|{token}|google"),
+            InlineKeyboardButton("365", callback_data=f"sportsrc|{token}|365"),
+        ],
+        [
+            InlineKeyboardButton("كورة", callback_data=f"sportsrc|{token}|kooora"),
+            InlineKeyboardButton("رسمي", callback_data=f"sportsrc|{token}|official"),
+            InlineKeyboardButton("الأحدث", callback_data=f"sportsrc|{token}|latest"),
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+async def _v315_send_live_result_from_message(msg, team1, team2, date_hint=None, source="auto", admin=False):
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
+    try:
+        await msg.edit_text(f"⏳ جاري جلب مباراة {team1} × {team2}\nESPN أولًا ثم المصادر الاحتياطية...")
+        wait_msg = msg
+    except Exception:
+        wait_msg = await msg.reply_text(f"⏳ جاري جلب مباراة {team1} × {team2}\nESPN أولًا ثم المصادر الاحتياطية...")
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(fetch_live_match_data, team1, team2, source, date_hint), timeout=55)
+    except Exception:
+        data = None
+    if not data:
+        # رسالة نظيفة؛ أزرار المصادر لا تظهر تلقائيًا حتى ما يتكدس الشات.
+        try:
+            await wait_msg.edit_text(f"⚠️ تعذر جلب مباراة {team1} × {team2} من كل المصادر حاليًا\nجرّب لاحقًا أو أضف النتيجة/الأهداف يدويًا.")
+        except Exception:
+            await wait_msg.reply_text(f"⚠️ تعذر جلب مباراة {team1} × {team2} من كل المصادر حاليًا")
+        return
+    label = data.get("actual_source") or data.get("source") or mode_label_ar(source)
+    try:
+        path = render_live_match_card(data, label)
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+        await send_photo_path(wait_msg, path, build_live_caption(data, label))
+    except Exception as e:
+        try:
+            await wait_msg.edit_text(f"تم جلب البيانات لكن تعذر تصميم البطاقة ❌\n{str(e)[:180]}\n\n" + build_live_caption(data, label))
+        except Exception:
+            await wait_msg.reply_text(build_live_caption(data, label))
+
+
+async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    team1, team2, mode, date_hint = parse_live_command_text(update.message.text if getattr(update, 'message', None) else "")
+    if mode_override:
+        mode = _norm_source_mode(mode_override)
+    if not team1 or not team2:
+        d = _v29_active_fixture_date() if '_v29_active_fixture_date' in globals() else None
+        if d:
+            await update.message.reply_text(_v29_live_today_text(d), reply_markup=_v29_live_today_keyboard(d, admin=is_admin_user(update)))
+        else:
+            await update.message.reply_text("اكتبها كذا:\n/مباشر السعودية * اسبانيا")
+        return
+    wait = await update.message.reply_text("⏳ جاري المحاولة...")
+    await _v315_send_live_result_from_message(wait, team1, team2, date_hint, mode or "auto", admin=is_admin_user(update))
+
+
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    if len(parts) < 2:
+        await q.message.reply_text("تعذر قراءة اختيار المباراة.")
+        return
+    action = parts[1]
+    if action in {"summary_menu", "goals_menu"}:
+        if not is_admin_user(update):
+            await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+            return
+        d = parts[2] if len(parts) > 2 else _v29_active_fixture_date()
+        rows = _v26_dedupe_fixture_matches(_fixtures_for_date(d)) if '_v26_dedupe_fixture_matches' in globals() else _fixtures_for_date(d)
+        kb = []
+        target_action = "set_summary" if action == "summary_menu" else "set_goals"
+        for m in rows:
+            if _has_unknown(m):
+                continue
+            kb.append([InlineKeyboardButton(f"{m.get('team1')} × {m.get('team2')}", callback_data=f"livefx|{target_action}|{m.get('id')}")])
+        kb.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+        title = "اختر المباراة لإضافة رابط الملخص:" if action == "summary_menu" else "اختر المباراة لإضافة مسجلي الأهداف:"
+        await q.edit_message_text(title, reply_markup=InlineKeyboardMarkup(kb))
+        return
+    if action in {"set_summary", "set_goals"} and len(parts) >= 3:
+        if not is_admin_user(update):
+            await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+            return
+        mid = parts[2]
+        m = _fixture_by_id(mid)
+        if not m:
+            await q.message.reply_text("لم أجد المباراة.")
+            return
+        context.user_data["manual_live_input"] = {"kind": "summary" if action == "set_summary" else "goals", "match_id": mid}
+        prompt = "ارسل رابط ملخص المباراة الآن:" if action == "set_summary" else "ارسل مسجلي الأهداف مع الدقائق الآن:\nمثال:\nميسي 1'\nخاكبو 62'"
+        await q.edit_message_text(f"{m.get('team1')} × {m.get('team2')}\n\n{prompt}")
+        return
+    if action != "match" or len(parts) < 3:
+        return
+    mid = parts[2]
+    m = _fixture_by_id(mid)
+    if not m:
+        await q.message.edit_text("لم أجد المباراة في ملف PDF.")
+        return
+    if _has_unknown(m):
+        await q.message.edit_text("أطراف المباراة لم تتحدد بعد.")
+        return
+    team1, team2 = m.get("team1"), m.get("team2")
+    date_hint = _v28_espn_date(m.get("date")) if '_v28_espn_date' in globals() else m.get("date")
+    await _v315_send_live_result_from_message(q.message, team1, team2, date_hint, "auto", admin=is_admin_user(update))
+
+
+async def sports_source_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    if not is_admin_user(update):
+        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+        return
+    parts = (q.data or "").split("|")
+    if len(parts) != 3:
+        await q.message.reply_text("تعذر قراءة الخيار.")
+        return
+    _tag, token, mode = parts
+    payload = context.bot_data.get("sports_source_requests", {}).get(token)
+    if not payload:
+        await q.message.reply_text("انتهت صلاحية الخيار، أعد تنفيذ الأمر من جديد.")
+        return
+    if payload.get("kind") == "live":
+        team1, team2 = payload.get("team1"), payload.get("team2")
+        msg = await q.message.reply_text("⏳ جاري المحاولة...")
+        await _v315_send_live_result_from_message(msg, team1, team2, payload.get("date_hint"), mode, admin=True)
+        return
+    if payload.get("kind") == "standings":
+        msg = await q.message.reply_text(f"⏳ جاري فحص ترتيب المجموعات من مصدر {mode_label_ar(mode)}...")
+        groups, src = fetch_current_groups(mode)
+        if not groups:
+            await msg.edit_text(_source_help_text("standings", mode))
+            return
+        path = create_all_groups_image(groups)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        await send_photo_path(q.message, path, f"ترتيب المجموعات الآن ✅\nالمصدر الحالي: {mode_label_ar(mode)} ({src})")
+        return
+
+
+# ---------- تنسيق الجداول النهائي ----------
+
+def _v315_single_line(draw, xy, text, font, fill, anchor="mm"):
+    # مهم: لا نمرر max_width هنا لأن draw_text يغير anchor عند max_width.
+    draw_text(draw, xy, text, font, fill=fill, anchor=anchor)
+
+
+def _v31_standings_card(draw, img, box, title, rows, compact=False):
+    x, y, x2, y2 = box
+    w = x2 - x
+    rounded_rect(draw, (x, y, x2, y2), radius=24 if compact else 28, fill="#0638A5E8", outline="#14B8F5", width=3)
+    rounded_rect(draw, (x+14, y+14, x2-14, y+62), radius=16, fill="#FBBF24", outline="#00000055", width=1)
+    gt = clean_group_title_for_design(title) if 'clean_group_title_for_design' in globals() else str(title)
+    if not str(gt).startswith("المجموعة"):
+        gt = f"المجموعة {gt}"
+    draw_text(draw, (x+w//2, y+38), gt, get_font(22 if compact else 31), fill="#061633", max_width=w-50)
+
+    label_y = y + (82 if compact else 88)
+    if compact:
+        rank_x = x2 - 30
+        team_x = x2 - 70
+        played_x = x + int(w * 0.53)
+        diff_x = x + int(w * 0.32)
+        pts_x = x + int(w * 0.14)
+        name_w = max(150, team_x - played_x - 22)
+        row_h, gap = 45, 7
+        font_team, font_num = 17, 17
+        hdr = 14
+    else:
+        rank_x = x2 - 54
+        team_x = x2 - 122
+        played_x = x + int(w * 0.52)
+        diff_x = x + int(w * 0.31)
+        pts_x = x + int(w * 0.14)
+        name_w = max(245, team_x - played_x - 35)
+        row_h, gap = 66, 9
+        font_team, font_num = 25, 22
+        hdr = 19
+    _v315_single_line(draw, (team_x, label_y), "المنتخب", get_font(hdr), "#FDE68A", anchor="rm")
+    _v315_single_line(draw, (played_x, label_y), "لعب", get_font(hdr), "#FDE68A")
+    _v315_single_line(draw, (diff_x, label_y), "فارق", get_font(hdr), "#FDE68A")
+    _v315_single_line(draw, (pts_x, label_y), "نقاط", get_font(hdr), "#FDE68A")
+    yy = y + (105 if compact else 112)
+    for pos, r in enumerate(rows[:4], start=1):
+        team, played, diff, pts = r[0], r[1], r[2], r[3]
+        rounded_rect(draw, (x+14, yy, x2-14, yy+row_h), radius=13 if compact else 16, fill="#061633C8", outline="#FFFFFF30", width=1)
+        cy = yy + row_h//2
+        _v315_single_line(draw, (rank_x, cy), str(pos), get_font(18 if compact else 22), "#FBBF24", anchor="mm")
+        team_name = _clean_display_name(team) if '_clean_display_name' in globals() else normalize_name(team)
+        fnt = _fit_font_to_width(draw, team_name, font_team, name_w, min_size=11 if compact else 15)
+        _v315_single_line(draw, (team_x, cy), team_name, fnt, "#FFFFFF", anchor="rm")
+        _v315_single_line(draw, (played_x, cy), str(played), get_font(font_num), "#FFFFFF")
+        try:
+            diff_txt = f"{int(diff):+d}"
+        except Exception:
+            diff_txt = str(diff)
+        _v315_single_line(draw, (diff_x, cy), diff_txt, get_font(font_num), "#E5E7EB")
+        _v315_single_line(draw, (pts_x, cy), str(pts), get_font(22 if compact else 28), "#FBBF24")
+        yy += row_h + gap
+
+_v28_standings_card = _v31_standings_card
+
+
+def render_top_scorers_v29(items):
+    ensure_generated_dir()
+    items = list(items or [])[:15]
+    width = 1080
+    row_h = 78
+    height = max(1420, 330 + max(1, len(items))*row_h + 180)
+    img, draw = _games_day_background(width, height)
+    overlay = Image.new("RGBA", (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
+    rounded_rect(od, (48, 52, width-48, height-52), radius=42, fill="#06152FCC", outline="#FFFFFF33", width=2)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img, "RGBA")
+    draw_text(draw, (width//2, 95), "MONDIAL AL MASEEF 2026", _v31_latin_font(34) if '_v31_latin_font' in globals() else get_font(34), fill="#FFFFFF", max_width=860)
+    draw_text(draw, (width//2, 162), "TOP SCORERS", _v31_latin_font(62) if '_v31_latin_font' in globals() else get_font(60), fill="#FFFFFF", max_width=940)
+    draw_text(draw, (width//2, 226), "هدافو البطولة", get_font(42), fill="#FBBF24", max_width=830)
+    x0, x1 = 70, width-70
+    y0 = 285
+    rank_x = x1 - 42
+    name_x = x1 - 118
+    team_x = x0 + 565
+    played_x = x0 + 240
+    goals_x = x0 + 92
+    rounded_rect(draw, (x0, y0, x1, y0+50), radius=16, fill="#F0C24A", outline="#00000044", width=1)
+    _v315_single_line(draw, (rank_x, y0+25), "#", get_font(23), "#061633")
+    _v315_single_line(draw, (name_x-120, y0+25), "اللاعب", get_font(24), "#061633")
+    _v315_single_line(draw, (team_x, y0+25), "المنتخب", get_font(24), "#061633")
+    _v315_single_line(draw, (played_x, y0+25), "لعب", get_font(24), "#061633")
+    _v315_single_line(draw, (goals_x, y0+25), "أهداف", get_font(24), "#061633")
+    y = y0 + 62
+    if not items:
+        rounded_rect(draw, (x0, y, x1, y+85), radius=22, fill="#061633D9", outline="#FFFFFF33", width=1)
+        draw_text(draw, (width//2, y+43), "تعذر جلب هدافي البطولة من ESPN حاليًا", get_font(31), fill="#FFFFFF", max_width=850)
+    for idx, it in enumerate(items, start=1):
+        rounded_rect(draw, (x0, y, x1, y+row_h-10), radius=18, fill="#061633D9", outline="#FFFFFF22", width=1)
+        cy = y + (row_h-10)//2
+        rounded_rect(draw, (rank_x-23, cy-22, rank_x+23, cy+22), radius=12, fill="#FBBF24", outline="#FFFFFF22", width=1)
+        _v315_single_line(draw, (rank_x, cy), str(idx), get_font(22), "#061633")
+        raw_name = it.get("name", "") if isinstance(it, dict) else ""
+        name = _player_name_ar(raw_name) if '_player_name_ar' in globals() else normalize_name(raw_name)
+        team = canonical_team_name(it.get("team")) or normalize_name(it.get("team") or "-") if isinstance(it, dict) else "-"
+        name_w = max(235, name_x - team_x - 45)
+        name_font = _fit_font_to_width(draw, name, 27, name_w, min_size=15)
+        _v315_single_line(draw, (name_x, cy), name, name_font, "#FFFFFF", anchor="rm")
+        team_font = _fit_font_to_width(draw, team, 24, 220, min_size=15)
+        _v315_single_line(draw, (team_x, cy), team, team_font, "#CBD5E1", anchor="mm")
+        _v315_single_line(draw, (played_x, cy), str(it.get("played", "") if isinstance(it, dict) else ""), get_font(28), "#FFFFFF")
+        _v315_single_line(draw, (goals_x, cy), str(it.get("goals", "") if isinstance(it, dict) else ""), get_font(34), "#FBBF24")
+        y += row_h
+    draw.line((240, height-120, width-240, height-120), fill="#FFFFFF88", width=2)
+    draw_text(draw, (width//2, height-72), "المصيف يضعكم بالحدث", get_font(34), fill="#FBBF24", max_width=700)
+    path = os.path.join(GENERATED_DIR, "top_scorers_espn_v315_fixed.png")
+    img.save(path, quality=95)
+    return path
+
+
+# ---------- المتأهلون/المغادرون: المحفوظ للمستخدم، تحديث FIFA للمشرف فقط ----------
+
+def _status_admin_keyboard(kind="qualified"):
+    other = "eliminated" if kind == "qualified" else "qualified"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 تحديث من FIFA", callback_data=f"status|refresh|{kind}")],
+        [InlineKeyboardButton("➕ إضافة متأهل", callback_data="status|pick|qualified"), InlineKeyboardButton("🚪 استبعاد منتخب", callback_data="status|pick|eliminated")],
+        [InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")],
+    ])
+
+
+async def _send_status_board_to_message(update, kind):
+    msg = update.message if hasattr(update, "message") and update.message else update.callback_query.message
+    state = load_status_state()
+    teams = _status_effective_teams(kind, state)
+    path = render_qualified32_board(teams) if kind == "qualified" else render_eliminated_board(teams)
+    kb = _status_admin_keyboard(kind) if is_admin_user(update) else None
+    await send_photo_path_markup(msg, path, _status_caption(kind, teams, state), kb)
+
+
+async def _v315_refresh_fifa_and_send(msg, kind="qualified"):
+    wait = await msg.reply_text("⏳ جاري تحديث المتأهلين والمغادرين من FIFA الرسمي...")
+    old_state = load_status_state()
+    try:
+        q_auto, e_auto = await asyncio.wait_for(asyncio.to_thread(_fifa_status_from_html), timeout=45)
+    except Exception:
+        q_auto, e_auto = [], []
+    if not q_auto and not e_auto:
+        await wait.edit_text("⚠️ تعذر التحديث من FIFA حاليًا\nبقيت البيانات السابقة محفوظة كما هي.")
+        return
+    state = old_state
+    state["qualified_auto"] = _unique_teams(q_auto, 32)
+    state["eliminated_auto"] = _unique_teams(e_auto)
+    state["updated_at"] = _now_riyadh_text()
+    state["updated_ts"] = _time.time() if '_time' in globals() else 0
+    state["source"] = "FIFA الرسمي + تحديث المشرف"
+    save_status_state(state)
+    teams = _status_effective_teams(kind, state)
+    path = render_qualified32_board(teams) if kind == "qualified" else render_eliminated_board(teams)
+    try:
+        await wait.delete()
+    except Exception:
+        pass
+    await send_photo_path_markup(msg, path, _status_caption(kind, teams, state), _status_admin_keyboard(kind))
+
+
+async def auto_update_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _v315_refresh_fifa_and_send(update.message, "qualified")
+
+
+async def public_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else "qualified"
+    if action == "refresh":
+        if not is_admin_user(update):
+            await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+            return
+        kind = parts[2] if len(parts) > 2 and parts[2] in {"qualified", "eliminated"} else "qualified"
+        await _v315_refresh_fifa_and_send(q.message, kind)
+        return
+    if action == "pick" and len(parts) >= 3:
+        if not is_admin_user(update):
+            await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+            return
+        kind = parts[2]
+        context.user_data[f"spick_{kind}"] = []
+        title = "اختر المنتخبات المتأهلة مباشرة ثم اضغط تأكيد:" if kind == "qualified" else "اختر المنتخبات المستبعدة مباشرة ثم اضغط تأكيد:"
+        await q.message.reply_text(title, reply_markup=_status_picker_keyboard(kind, []))
+        return
+    kind = action if action in {"qualified", "eliminated"} else "qualified"
+    await _send_status_board_to_message(update, kind)
+
+# ==================== END V31.5 URGENT PATCH ====================
 
 if __name__ == "__main__":
     main()
