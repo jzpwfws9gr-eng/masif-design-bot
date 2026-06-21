@@ -34800,7 +34800,7 @@ def build_live_caption(match, mode_label='ESPN'):
 
 V32_USERS_FILE = "users.json"
 V32_FAVORITES_FILE = "favorite_teams.json"
-V32_TOURNAMENT_CACHE_FILE = "v32_tournament_cache.json"
+V32_TOURNAMENT_CACHE_FILE = "v32_tournament_cache_v2.json"
 V32_SNAPSHOT_TTL = 10 * 60
 V32_PAGE_SIZE = 8
 V32_PATCH_NAME = "V32_TEST_SAFE_ADDON"
@@ -35121,6 +35121,80 @@ def _v32_cannot_top2_by_points(row, rows):
         return False
 
 
+def _v32_group_remaining_fixtures_for_sim(code, group_data):
+    """المتبقي الحقيقي داخل المجموعة: المجموعة 4 منتخبات، وكل منتخب يلعب 3 مباريات فقط."""
+    finished_pairs = {frozenset([r.get('team1'), r.get('team2')]) for r in (group_data.get('results') or [])}
+    out = []
+    for m in (group_data.get('fixtures') or []):
+        t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+        t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+        if not t1 or not t2:
+            continue
+        pair = frozenset([t1, t2])
+        if pair not in finished_pairs:
+            out.append({'team1': t1, 'team2': t2, 'date': m.get('date'), 'time': m.get('time','')})
+    return out
+
+
+def _v32_stats_rows_from_results(teams, results):
+    stats = {t: _v32_blank_stats(t) for t in teams}
+    for r in (results or []):
+        t1, t2 = r.get('team1'), r.get('team2')
+        if t1 in stats and t2 in stats:
+            _v32_add_match_stats(stats, t1, t2, int(r.get('score1') or 0), int(r.get('score2') or 0))
+    return _v32_sort_group_rows(list(stats.values()), results or [])
+
+
+def _v32_group_position_bounds(code, group_data):
+    """يرجع أفضل/أسوأ مركز ممكن لكل منتخب بعد كل سيناريوهات المتبقي.
+    نستخدم نتائج 1-0 / 0-0 / 0-1 للمتبقي. الهدف هنا تحديد الرسميات الواضحة:
+    متأهل رسميًا، أو مستبعد رسميًا من أول/ثاني/ثالث المجموعة. ولا نحسب ذهاب وإياب.
+    """
+    teams = []
+    for c, ts in WORLD_CUP_GROUPS:
+        if c == code:
+            teams = list(ts)
+            break
+    if not teams:
+        teams = [r.get('team') for r in (group_data.get('rows') or []) if r.get('team')]
+    base_results = list(group_data.get('results') or [])
+    remaining = _v32_group_remaining_fixtures_for_sim(code, group_data)
+    # حد أمان: مجموعة واحدة مفروض 6 مباريات فقط، والمتبقي غالبًا لا يزيد عن 6.
+    if len(remaining) > 6:
+        remaining = remaining[:6]
+    bounds = {t: {'best': 99, 'worst': 0} for t in teams}
+    from itertools import product
+    outcomes = [(1,0), (0,0), (0,1)]
+    for combo in product(outcomes, repeat=len(remaining)):
+        sim_results = list(base_results)
+        for m, (s1, s2) in zip(remaining, combo):
+            sim_results.append({'group': code, 'team1': m['team1'], 'team2': m['team2'], 'score1': s1, 'score2': s2, 'status': 'SIM'})
+        sim_rows = _v32_stats_rows_from_results(teams, sim_results)
+        for pos, r in enumerate(sim_rows, start=1):
+            t = r.get('team')
+            if t in bounds:
+                bounds[t]['best'] = min(bounds[t]['best'], pos)
+                bounds[t]['worst'] = max(bounds[t]['worst'], pos)
+    # لو ما فيه متبقي، نعتمد الترتيب الحالي.
+    for t in teams:
+        if bounds[t]['best'] == 99:
+            for pos, r in enumerate(group_data.get('rows') or [], start=1):
+                if r.get('team') == t:
+                    bounds[t] = {'best': pos, 'worst': pos}
+                    break
+        if bounds[t]['best'] == 99:
+            bounds[t] = {'best': 4, 'worst': 4}
+    return bounds
+
+
+def _v32_group_team_remaining_matches(row):
+    """كل منتخب يلعب 3 مباريات فقط في دور المجموعات."""
+    try:
+        return max(0, 3 - int(row.get('P') or 0))
+    except Exception:
+        return 0
+
+
 def _v32_plain_status(text):
     s = str(text or "")
     for x in ["✅", "❌", "🔥", "⚔️", "⚔", "🥉", "⚠️", "⚠"]:
@@ -35177,14 +35251,22 @@ def _v32_build_snapshot(force=False):
     status = {t: "⚔️ ما زال ينافس" for t in WORLD_CUP_TEAMS}
     qualified = []
     eliminated = []
+    # نحسب الرسميات من سيناريوهات المباريات المتبقية داخل كل مجموعة.
+    # كل منتخب يلعب 3 مباريات فقط، والمجموعة كاملة 6 مباريات.
+    for code, g in groups.items():
+        try:
+            g["position_bounds"] = _v32_group_position_bounds(code, g)
+        except Exception:
+            g["position_bounds"] = {}
+
     for code, g in groups.items():
         rows = g.get("rows") or []
         complete = int(g.get("remaining") or 0) == 0 and len(g.get("results") or []) >= 6
+        bounds = g.get("position_bounds") or {}
         if complete:
             for r in rows[:2]:
                 status[r["team"]] = "✅ متأهل رسميًا"
                 qualified.append(r["team"])
-            # الثالث ينتظر أفضل الثوالث حتى تكتمل كل المجموعات.
             if len(rows) >= 3 and status.get(rows[2]["team"]) != "✅ متأهل رسميًا":
                 status[rows[2]["team"]] = "🥉 في حسابات أفضل الثوالث"
             if len(rows) >= 4:
@@ -35192,16 +35274,28 @@ def _v32_build_snapshot(force=False):
                 eliminated.append(rows[3]["team"])
         else:
             for idx, r in enumerate(rows):
-                if _v32_guaranteed_top2(r, rows):
-                    status[r["team"]] = "✅ متأهل رسميًا"
-                    if r["team"] not in qualified:
-                        qualified.append(r["team"])
+                team = r.get("team")
+                b = bounds.get(team, {})
+                best_pos = int(b.get("best") or (idx + 1))   # أفضل مركز ممكن
+                worst_pos = int(b.get("worst") or (idx + 1)) # أسوأ مركز ممكن
+                # إذا أسوأ احتمال له لا ينزل عن الثاني = متأهل رسميًا من المجموعة.
+                if worst_pos <= 2:
+                    status[team] = "✅ متأهل رسميًا"
+                    if team not in qualified:
+                        qualified.append(team)
+                # إذا أفضل احتمال له الرابع = مستبعد رسميًا من البطولة لأنه لا يقدر حتى يصير ثالث.
+                elif best_pos >= 4:
+                    status[team] = "❌ مستبعد رسميًا"
+                    if team not in eliminated:
+                        eliminated.append(team)
+                elif best_pos <= 3 and idx >= 2:
+                    status[team] = "🥉 في حسابات أفضل الثوالث"
                 elif idx <= 1:
-                    status[r["team"]] = "🔥 قريب من التأهل" if int(r.get("Pts", 0) or 0) >= 4 else "⚔️ ما زال ينافس"
+                    status[team] = "🔥 قريب من التأهل" if int(r.get("Pts", 0) or 0) >= 4 else "⚔️ ما زال ينافس"
                 elif idx == 2:
-                    status[r["team"]] = "🥉 في حسابات أفضل الثوالث"
+                    status[team] = "🥉 في حسابات أفضل الثوالث"
                 else:
-                    status[r["team"]] = "⚠️ وضعه صعب" if _v32_cannot_top2_by_points(r, rows) else "⚔️ ما زال ينافس"
+                    status[team] = "⚠️ وضعه صعب"
 
     # أفضل 8 ثوالث: الرسمي لا يثبت إلا بعد اكتمال دور المجموعات، لكن نعرض داخل/خارج حاليًا.
     all_groups_complete = all(int(g.get("remaining") or 0) == 0 and len(g.get("results") or []) >= 6 for g in groups.values())
@@ -35267,7 +35361,7 @@ def _v32_format_group_table(code, snap=None):
     for idx, r in enumerate(rows, start=1):
         st = (snap.get("status") or {}).get(r["team"], "⚔️ ما زال ينافس")
         lines.append(f"{idx}. {r['team']} - {r['Pts']} نقطة")
-        lines.append(f"   لعب: {r['P']} | فوز: {r['W']} | تعادل: {r['D']} | خسارة: {r['L']}")
+        lines.append(f"   لعب: {r['P']}/3 | المتبقي: {_v32_group_team_remaining_matches(r)} | فوز: {r['W']} | تعادل: {r['D']} | خسارة: {r['L']}")
         lines.append(f"   الفارق: {int(r.get('GD') or 0):+d} | الأهداف: {r.get('GF', 0)}")
         lines.append(f"   الحالة: {st}")
         lines.append("")
@@ -35404,7 +35498,7 @@ def _v32_team_summary_text(team, force=False):
     lines = [f"⚡ {team}", f"{_v32_group_name(code)}", f"الحالة: {status_txt}", ""]
     if row:
         pos = 1 + [x.get('team') for x in (snap.get('groups') or {}).get(code, {}).get('rows', [])].index(team)
-        lines.append(f"الترتيب: {pos} | النقاط: {row.get('Pts')} | لعب: {row.get('P')} | فارق: {int(row.get('GD') or 0):+d}")
+        lines.append(f"الترتيب: {pos} | النقاط: {row.get('Pts')} | لعب: {row.get('P')}/3 | المتبقي: {_v32_group_team_remaining_matches(row)} | فارق: {int(row.get('GD') or 0):+d}")
     last = _v32_finished_matches_for_team(team, snap)
     if last:
         r = last[-1]
@@ -35587,11 +35681,11 @@ def _v32_create_race_pdf(force=False):
         for idx, r in enumerate(g.get('rows') or [], start=1):
             st = _v32_plain_status((snap.get('status') or {}).get(r.get('team'), 'ما زال ينافس'))
             y = _v32_pdf_draw_line(draw, f"{idx}. {r.get('team')} - {r.get('Pts')} نقطة", width-margin, y, row_font, fill="#FFFFFF")
-            y = _v32_pdf_draw_line(draw, f"   لعب {r.get('P')} - فوز {r.get('W')} - تعادل {r.get('D')} - خسارة {r.get('L')} - فارق {int(r.get('GD') or 0):+d} - أهداف {r.get('GF')}", width-margin, y, small_font, fill="#CBD5E1")
+            y = _v32_pdf_draw_line(draw, f"   لعب {r.get('P')}/3 - المتبقي { _v32_group_team_remaining_matches(r) } - فوز {r.get('W')} - تعادل {r.get('D')} - خسارة {r.get('L')} - فارق {int(r.get('GD') or 0):+d} - أهداف {r.get('GF')}", width-margin, y, small_font, fill="#CBD5E1")
             y = _v32_pdf_draw_line(draw, f"   الحالة: {st}", width-margin, y, small_font, fill="#A7F3D0" if 'متأهل' in st else "#FDE68A")
         rem = int(g.get('remaining') or 0)
         if rem:
-            y = _v32_pdf_draw_line(draw, f"المباريات المتبقية: {rem}", width-margin, y, small_font, fill="#FDE68A")
+            y = _v32_pdf_draw_line(draw, f"المباريات المتبقية في المجموعة: {rem}", width-margin, y, small_font, fill="#FDE68A")
         y += 28
         group_count += 1
     pages.append(img)
