@@ -28019,5 +28019,584 @@ async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # ==================== END V31.9 SAFE PATCH ====================
 
+
+# ==================== V32 FAST LIVE/RESULTS PATCH: football-data.org + fast cache ====================
+# اعتماد فهد:
+# - لا نلمس التصاميم.
+# - لا نلمس الفانتزي الأساسي.
+# - المباشر والنتائج: مصدر سريع من FOOTBALL_DATA_TOKEN + كاش + ESPN كإثراء للهدافين.
+# - نتائج المباريات: التواريخ إلى اليوم فقط، 3 أزرار جنب بعض، والمستقبل مخفي.
+# - مباشر الآن: ما يعلّق أكثر من ثواني، ويعرض قيد التحديث إذا المصادر تأخرت.
+
+FOOTBALL_DATA_BASE_URL = "https://api.football-data.org/v4"
+FOOTBALL_DATA_CACHE_FILE = "football_data_match_cache.json"
+LIVE_MATCH_CACHE_FILE = "live_match_fast_cache.json"
+
+# إزالة سطر "اليوم العاشر" من نموذج فانتزي المصيف الملحق بمباريات اليوم فقط.
+try:
+    FANTASY_MATCH_DAY_FORM_V26 = (
+        "🏆 فانتزي المصيف 2026  🏆\n"
+        "📋 نموذج المشاركة الرسمي المعتمد\n"
+        "🏆 تشكيلة الفانتزي - اليوم (    )\n"
+        "🧤 الحارس:\n"
+        " اللاعب 1:\n"
+        " اللاعب 2:\n"
+        " اللاعب 3:\n"
+        "👑 الكابتن :"
+    )
+except Exception:
+    pass
+
+
+def _fd_token():
+    return (os.getenv("FOOTBALL_DATA_TOKEN") or os.getenv("FOOTBALLDATA_TOKEN") or "").strip()
+
+
+def _fd_now_ts():
+    try:
+        return _time.time() if '_time' in globals() else __import__('time').time()
+    except Exception:
+        return 0
+
+
+def _fd_load_cache():
+    try:
+        return _json_load_file(FOOTBALL_DATA_CACHE_FILE, {})
+    except Exception:
+        try:
+            if os.path.exists(FOOTBALL_DATA_CACHE_FILE):
+                with open(FOOTBALL_DATA_CACHE_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f) or {}
+        except Exception:
+            pass
+    return {}
+
+
+def _fd_save_cache(data):
+    try:
+        return _json_save_file(FOOTBALL_DATA_CACHE_FILE, data)
+    except Exception:
+        try:
+            with open(FOOTBALL_DATA_CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data or {}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+
+def _live_load_cache():
+    try:
+        return _json_load_file(LIVE_MATCH_CACHE_FILE, {})
+    except Exception:
+        try:
+            if os.path.exists(LIVE_MATCH_CACHE_FILE):
+                with open(LIVE_MATCH_CACHE_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f) or {}
+        except Exception:
+            pass
+    return {}
+
+
+def _live_save_cache(data):
+    try:
+        return _json_save_file(LIVE_MATCH_CACHE_FILE, data)
+    except Exception:
+        try:
+            with open(LIVE_MATCH_CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data or {}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+
+def _fd_iso_date(d):
+    d = _normalize_date_arg(d)
+    try:
+        dd, mm, yy = d.split('/')
+        return f"{int(yy):04d}-{int(mm):02d}-{int(dd):02d}"
+    except Exception:
+        return ""
+
+
+def _fd_from_iso_date(s):
+    try:
+        yy, mm, dd = str(s)[:10].split('-')
+        return f"{int(dd):02d}/{int(mm):02d}/{int(yy):04d}"
+    except Exception:
+        return ""
+
+
+def _fd_strip_ar_en(s):
+    s = normalize_name(s or "")
+    s = s.lower()
+    rep = {
+        'أ':'ا','إ':'ا','آ':'ا','ى':'ي','ة':'ه','ؤ':'و','ئ':'ي',
+        "'":'', '’':'', '`':'', '´':'', '.':' ', '-':' ', '_':' ', '  ':' '
+    }
+    for a,b in rep.items():
+        s = s.replace(a,b)
+    s = re.sub(r"[^\w\u0600-\u06FF]+", " ", s, flags=re.UNICODE)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+_FD_TEAM_ALIASES = {
+    'المكسيك': ['mexico','mex','المكسيك'],
+    'جنوب أفريقيا': ['south africa','rsa','جنوب افريقيا','جنوب أفريقيا'],
+    'كوريا الجنوبية': ['south korea','korea republic','kor','كوريا الجنوبيه','كوريا الجنوبية'],
+    'التشيك': ['czechia','czech republic','cze','التشيك'],
+    'كندا': ['canada','can','كندا'],
+    'البوسنة والهرسك': ['bosnia and herzegovina','bosnia','bih','البوسنه والهرسك','البوسنة والهرسك'],
+    'قطر': ['qatar','qat','قطر'],
+    'سويسرا': ['switzerland','sui','سويسرا'],
+    'الولايات المتحدة': ['united states','usa','usmnt','الولايات المتحدة','امريكا','أمريكا'],
+    'باراغواي': ['paraguay','par','باراغواي','باراجواي'],
+    'أستراليا': ['australia','aus','استراليا','أستراليا'],
+    'تركيا': ['turkey','tur','turkiye','تركيا'],
+    'البرازيل': ['brazil','bra','البرازيل'],
+    'المغرب': ['morocco','mar','المغرب'],
+    'هايتي': ['haiti','hti','هايتي'],
+    'اسكتلندا': ['scotland','sco','اسكتلندا'],
+    'ألمانيا': ['germany','ger','المانيا','ألمانيا'],
+    'كوراساو': ['curacao','curaçao','cuw','كوراساو'],
+    'ساحل العاج': ['ivory coast','cote d ivoire','côte d ivoire','civ','ساحل العاج'],
+    'الإكوادور': ['ecuador','ecu','الاكوادور','الإكوادور'],
+    'هولندا': ['netherlands','ned','holland','هولندا'],
+    'اليابان': ['japan','jpn','اليابان'],
+    'السويد': ['sweden','swe','السويد'],
+    'تونس': ['tunisia','tun','تونس'],
+    'بلجيكا': ['belgium','bel','بلجيكا'],
+    'مصر': ['egypt','egy','مصر'],
+    'إيران': ['iran','iri','ايران','إيران'],
+    'نيوزيلندا': ['new zealand','nzl','نيوزيلندا'],
+    'إسبانيا': ['spain','esp','اسبانيا','إسبانيا'],
+    'الرأس الأخضر': ['cape verde','cpv','الرأس الاخضر','الرأس الأخضر'],
+    'السعودية': ['saudi arabia','ksa','saudi','السعودية'],
+    'الأوروغواي': ['uruguay','uru','اوروجواي','الأوروغواي','الأورغواي'],
+    'فرنسا': ['france','fra','فرنسا'],
+    'السنغال': ['senegal','sen','السنغال'],
+    'العراق': ['iraq','irq','العراق'],
+    'النرويج': ['norway','nor','النرويج'],
+    'الأرجنتين': ['argentina','arg','الارجنتين','الأرجنتين'],
+    'الجزائر': ['algeria','dza','الجزائر'],
+    'النمسا': ['austria','aut','النمسا'],
+    'الأردن': ['jordan','jor','الاردن','الأردن'],
+    'البرتغال': ['portugal','por','البرتغال'],
+    'الكونغو الديمقراطية': ['dr congo','congo dr','democratic republic of congo','cod','الكونغو الديمقراطية'],
+    'أوزبكستان': ['uzbekistan','uzb','اوزبكستان','أوزبكستان'],
+    'كولومبيا': ['colombia','col','كولومبيا'],
+    'إنجلترا': ['england','eng','انجلترا','إنجلترا'],
+    'كرواتيا': ['croatia','cro','كرواتيا'],
+    'غانا': ['ghana','gha','غانا'],
+    'بنما': ['panama','pan','بنما'],
+}
+
+
+def _fd_team_names(team):
+    names = []
+    try:
+        c = canonical_team_name(team) or normalize_name(team)
+    except Exception:
+        c = normalize_name(team)
+    for x in [team, c]:
+        if x and x not in names:
+            names.append(x)
+    for x in _FD_TEAM_ALIASES.get(c, []) + _FD_TEAM_ALIASES.get(normalize_name(team), []):
+        if x and x not in names:
+            names.append(x)
+    return [_fd_strip_ar_en(x) for x in names if x]
+
+
+def _fd_team_match(a, b):
+    aa = set(_fd_team_names(a))
+    bb = set(_fd_team_names(b))
+    if aa & bb:
+        return True
+    # تطابق جزئي محافظ للأسماء الإنجليزية المركبة
+    for x in aa:
+        for y in bb:
+            if x and y and (x in y or y in x) and min(len(x), len(y)) >= 5:
+                return True
+    return False
+
+
+def _fd_status_ar(status):
+    st = str(status or '').upper().strip()
+    mapping = {
+        'SCHEDULED': 'لم تبدأ', 'TIMED': 'لم تبدأ', 'POSTPONED': 'مؤجلة',
+        'IN_PLAY': 'مباشر الآن', 'LIVE': 'مباشر الآن', 'PAUSED': 'استراحة',
+        'FINISHED': 'FT — انتهت المباراة', 'AWARDED': 'انتهت',
+        'SUSPENDED': 'موقفة', 'CANCELED': 'ملغاة', 'CANCELLED': 'ملغاة',
+    }
+    return mapping.get(st, status or 'قيد التحديث')
+
+
+def _fd_get_score(match):
+    score = match.get('score') or {}
+    ft = score.get('fullTime') or {}
+    rt = score.get('regularTime') or {}
+    ht = score.get('halfTime') or {}
+    for part in (ft, rt, ht):
+        h = part.get('home')
+        a = part.get('away')
+        if h is not None and a is not None:
+            return str(h), str(a)
+    return '-', '-'
+
+
+def _fd_match_to_obj(match, fixture=None):
+    home = (match.get('homeTeam') or {}).get('name') or ''
+    away = (match.get('awayTeam') or {}).get('name') or ''
+    t1 = (fixture or {}).get('team1') or canonical_team_name(home) or home
+    t2 = (fixture or {}).get('team2') or canonical_team_name(away) or away
+    s1, s2 = _fd_get_score(match)
+    obj = {
+        'team1': t1,
+        'team2': t2,
+        'score1': s1,
+        'score2': s2,
+        'status': _fd_status_ar(match.get('status')),
+        'source': 'football-data.org',
+        'actual_source': 'football-data.org',
+        'football_data_id': match.get('id'),
+        'utcDate': match.get('utcDate'),
+        'scorers': [],
+    }
+    return obj
+
+
+def _fd_request_matches_for_date(d, timeout=6, force=False):
+    token = _fd_token()
+    if not token or not requests:
+        return []
+    d = _normalize_date_arg(d)
+    iso = _fd_iso_date(d)
+    if not iso:
+        return []
+    cache = _fd_load_cache()
+    now = _fd_now_ts()
+    key = f'date:{iso}'
+    item = cache.get(key)
+    # كاش قصير للمباشر، أطول للأيام القديمة
+    ttl = 45 if _patch6_safe_date_key(d) >= _patch6_today_key() else 12 * 60 * 60
+    if not force and isinstance(item, dict) and item.get('matches') is not None and now - float(item.get('ts', 0) or 0) < ttl:
+        return item.get('matches') or []
+    try:
+        url = f"{FOOTBALL_DATA_BASE_URL}/matches"
+        params = {'dateFrom': iso, 'dateTo': iso}
+        r = requests.get(url, headers={'X-Auth-Token': token, 'User-Agent': 'AlMaseefBot/1.0'}, params=params, timeout=timeout)
+        if int(getattr(r, 'status_code', 0) or 0) >= 400:
+            cache[key] = {'ts': now, 'matches': item.get('matches') if isinstance(item, dict) else [], 'error': f"HTTP {getattr(r,'status_code', '')}"}
+            _fd_save_cache(cache)
+            return cache[key].get('matches') or []
+        data = r.json() or {}
+        matches = data.get('matches') or []
+        cache[key] = {'ts': now, 'matches': matches, 'count': len(matches)}
+        _fd_save_cache(cache)
+        return matches
+    except Exception as e:
+        # لا نكسر البوت، رجّع آخر نسخة محفوظة إن وجدت
+        if isinstance(item, dict) and item.get('matches') is not None:
+            return item.get('matches') or []
+        return []
+
+
+def _fd_find_match_for_fixture(fixture, d=None, timeout=6, force=False):
+    if not fixture:
+        return None
+    d = _normalize_date_arg(d or fixture.get('date'))
+    t1, t2 = fixture.get('team1'), fixture.get('team2')
+    for m in _fd_request_matches_for_date(d, timeout=timeout, force=force):
+        home = (m.get('homeTeam') or {}).get('name') or ''
+        away = (m.get('awayTeam') or {}).get('name') or ''
+        if (_fd_team_match(t1, home) and _fd_team_match(t2, away)) or (_fd_team_match(t1, away) and _fd_team_match(t2, home)):
+            obj = _fd_match_to_obj(m, fixture)
+            # football-data score is home/away. If fixture order is away/home, swap score to match our team1/team2.
+            if _fd_team_match(t1, away) and _fd_team_match(t2, home):
+                obj['score1'], obj['score2'] = obj.get('score2', '-'), obj.get('score1', '-')
+            return obj
+    return None
+
+
+def _fast_live_key(team1, team2, date_hint=None):
+    d = _normalize_date_arg(date_hint) if date_hint else ''
+    return f"{d}|{simple_key(team1)}|{simple_key(team2)}"
+
+
+def _get_fast_live_cache(team1, team2, date_hint=None, ttl=75):
+    try:
+        cache = _live_load_cache()
+        item = cache.get(_fast_live_key(team1, team2, date_hint))
+        if isinstance(item, dict) and item.get('data') and _fd_now_ts() - float(item.get('ts', 0) or 0) <= ttl:
+            return item.get('data')
+    except Exception:
+        pass
+    return None
+
+
+def _save_fast_live_cache(team1, team2, date_hint, data):
+    try:
+        cache = _live_load_cache()
+        cache[_fast_live_key(team1, team2, date_hint)] = {'ts': _fd_now_ts(), 'data': data or {}}
+        _live_save_cache(cache)
+    except Exception:
+        pass
+
+
+def _is_finished_obj(obj):
+    st = str((obj or {}).get('status') or '').lower()
+    return any(x in st for x in ['ft', 'انتهت', 'finished', 'full time'])
+
+
+def _v32_try_espn_fast(team1, team2, date_hint=None, timeout=7):
+    def work():
+        try:
+            fix = _find_fixture_for_pair(team1, team2, date_hint)
+        except Exception:
+            fix = None
+        if fix:
+            try:
+                return _patch6_fetch_espn_result_for_fixture(fix, fix.get('date') or date_hint)
+            except Exception:
+                return None
+        try:
+            return _patch6_fetch_espn_result_for_fixture({'team1': team1, 'team2': team2, 'date': date_hint}, date_hint)
+        except Exception:
+            return None
+    # هذه الدالة sync؛ التايم آوت الحقيقي في async caller. هنا فقط نجعل نداءات requests الداخلية أسرع إن كانت تستخدم _requests_get.
+    return work()
+
+
+def _enrich_with_espn_scorers(base_obj, team1, team2, date_hint=None):
+    if not isinstance(base_obj, dict):
+        return base_obj
+    # لا نطول: محاولة واحدة فقط. إذا فشلت، football-data يبقى يعطي النتيجة والحالة.
+    try:
+        espn = _v32_try_espn_fast(team1, team2, date_hint, timeout=6)
+        if isinstance(espn, dict):
+            sc = _v31_match_scorers(espn) if '_v31_match_scorers' in globals() else _v28_sanitize_scorers(espn.get('scorers') or [])
+            if sc:
+                base_obj['scorers'] = sc
+                base_obj['actual_source'] = f"{base_obj.get('actual_source','football-data.org')} + ESPN"
+            # إذا ESPN أعطى نتيجة رقمية أدق، لا مانع من اعتمادها إلا إذا football-data عنده نتيجة.
+            if not _patch6_numeric_score(base_obj) and _patch6_numeric_score(espn):
+                base_obj['score1'], base_obj['score2'] = espn.get('score1'), espn.get('score2')
+                base_obj['status'] = espn.get('status') or base_obj.get('status')
+    except Exception:
+        pass
+    return base_obj
+
+
+def _v32_fetch_live_fast(team1, team2, date_hint=None, force=False):
+    # 1) كاش سريع: يمنع التعليق وتكرار الطلبات على كل مستخدم
+    if not force:
+        cached = _get_fast_live_cache(team1, team2, date_hint, ttl=75)
+        if cached:
+            return cached
+    try:
+        fix = _find_fixture_for_pair(team1, team2, date_hint)
+    except Exception:
+        fix = None
+    d = (fix or {}).get('date') or date_hint
+
+    # 2) football-data سريع للنتيجة والحالة
+    obj = None
+    if fix:
+        obj = _fd_find_match_for_fixture(fix, d, timeout=6, force=force)
+    if not obj:
+        # 3) ESPN بمحاولة محدودة، خصوصًا للأهداف والدقائق
+        try:
+            obj = _v32_try_espn_fast(team1, team2, d, timeout=7)
+        except Exception:
+            obj = None
+    if isinstance(obj, dict):
+        obj = _enrich_with_espn_scorers(obj, team1, team2, d)
+        try:
+            obj = _merge_manual_match_data(obj, fix)
+        except Exception:
+            pass
+        _save_fast_live_cache(team1, team2, d, obj)
+        return obj
+
+    # 4) لو كل المصادر تأخرت والمباراة موجودة عندنا، لا نعتذر
+    obj = _patch6_placeholder_live(team1, team2, d)
+    if obj:
+        _save_fast_live_cache(team1, team2, d, obj)
+    return obj
+
+
+def fetch_live_match_data(team1, team2, mode='auto', date_hint=None):
+    # override نهائي: football-data سريع + ESPN للإثراء، بدون شرط رسمي.
+    return _v32_fetch_live_fast(team1, team2, date_hint, force=(mode in ['force', 'تحديث']))
+
+
+def _v32_result_text_for_date_uncached(d, force=False):
+    d = _normalize_date_arg(d)
+    try:
+        matches = list(_fixtures_for_date(d) or [])
+    except Exception:
+        matches = []
+    try:
+        matches = _v26_dedupe_fixture_matches(matches)
+    except Exception:
+        pass
+    if not matches:
+        return f"ما فيه مباريات بتاريخ {d}\nتأكد أن هذا التاريخ موجود في جدول البطولة.", False
+    try:
+        title = _v26_fixture_title(d)
+    except Exception:
+        title = d
+    lines = [f"🏆 نتائج مباريات {title} 🏆", "المصدر: football-data.org + ESPN عند توفر الهدافين", ""]
+    found = False
+    for i, m in enumerate(matches, start=1):
+        if (_has_unknown(m) if '_has_unknown' in globals() else False):
+            lines.append(f"{i}) {m.get('note', 'تحدد لاحقًا')} — لم تتحدد الأطراف")
+            lines.append("")
+            continue
+        obj = _fd_find_match_for_fixture(m, d, timeout=6, force=force)
+        if not obj:
+            try:
+                obj = _patch6_fetch_espn_result_for_fixture(m, d)
+            except Exception:
+                obj = None
+        if isinstance(obj, dict) and (_patch6_numeric_score(obj) or obj.get('status')):
+            t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+            t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+            s1, s2 = obj.get('score1', '-'), obj.get('score2', '-')
+            if _patch6_numeric_score(obj):
+                found = True
+                lines.append(f"{i}) {t1} {s1} - {s2} {t2}")
+                # حاول إثراء الهدافين من ESPN فقط إذا فيه أهداف
+                try:
+                    if not (str(s1) == '0' and str(s2) == '0'):
+                        obj = _enrich_with_espn_scorers(obj, m.get('team1'), m.get('team2'), d)
+                except Exception:
+                    pass
+                lines.extend(_patch6_goal_lines(obj))
+                lines.append(f"المصدر: {obj.get('actual_source') or obj.get('source') or 'football-data.org'}")
+            else:
+                lines.append(f"{i}) {t1} × {t2} — {obj.get('status') or 'قيد التحديث'}")
+                lines.append("⚽ الهدافون قيد التحديث")
+        else:
+            lines.append(f"{i}) {m.get('team1')} × {m.get('team2')} — قيد التحديث")
+            lines.append("⚽ الهدافون قيد التحديث")
+        lines.append("")
+    lines.append("المصيف يضعكم بالحدث")
+    return "\n".join(lines).strip(), found
+
+
+def _v28_result_text_for_date(date, force_refresh=False):
+    d = _normalize_date_arg(date)
+    if not force_refresh:
+        cached = _patch6_cached_results_text(d)
+        if cached:
+            return cached
+    txt, found = _v32_result_text_for_date_uncached(d, force=force_refresh)
+    if found and txt:
+        _patch6_save_results_text(d, txt)
+    return txt
+
+
+def _v28_previous_result_dates():
+    # تواريخ اليوم وما قبله فقط، المستقبل مخفي حتى يأتي يومه بتوقيت مكة.
+    return _patch6_fixture_dates_from_table(past_only=True)
+
+
+def _v28_previous_results_keyboard():
+    rows, row = [], []
+    for d, day in _v28_previous_result_dates():
+        label = f"{d[:5]}"
+        row.append(InlineKeyboardButton(label, callback_data=f"res|day|{d}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if not rows:
+        rows.append([InlineKeyboardButton("لا توجد أيام نتائج حتى الآن", callback_data="noop")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def previous_results_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    data = q.data or ''
+    if data == 'noop':
+        return
+    parts = data.split('|')
+    d = ''
+    if len(parts) >= 3 and parts[1] == 'day':
+        d = _normalize_date_arg(parts[2])
+    elif len(parts) >= 2:
+        d = _normalize_date_arg(parts[1])
+    if not d:
+        await q.message.reply_text("تعذر قراءة تاريخ النتائج.")
+        return
+    try:
+        await q.message.edit_text(f"⏳ أحدث نتائج {d} من football-data.org ثم ESPN للهدافين...")
+    except Exception:
+        pass
+    try:
+        txt = await asyncio.wait_for(asyncio.to_thread(_v28_result_text_for_date, d, False), timeout=16)
+    except Exception:
+        txt = f"⚽ نتائج {d}\nالحالة: قيد التحديث\nالمصدر تأخر، جرّب بعد قليل أو استخدم /تحديث_نتائج {d[:5]}"
+    try:
+        await q.message.edit_text(txt)
+    except Exception:
+        await q.message.reply_text(txt)
+
+
+async def refresh_results_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = _extract_fixture_dates_from_text(update.message.text)
+    if not dates:
+        await update.message.reply_text('اكتبها كذا:\n/تحديث_نتائج 13/06')
+        return
+    d = _normalize_date_arg(dates[0])
+    wait = await update.message.reply_text(f"⏳ أجبر تحديث نتائج {d} من football-data.org ثم ESPN...")
+    try:
+        txt = await asyncio.wait_for(asyncio.to_thread(_v28_result_text_for_date, d, True), timeout=20)
+        await wait.edit_text(txt)
+    except Exception:
+        await wait.edit_text(f"⚠️ تعذر تحديث نتائج {d} خلال الوقت المحدد. بقيت البيانات السابقة كما هي.")
+
+
+async def _v315_send_live_result_from_message(msg, team1, team2, date_hint=None, source='auto', admin=False):
+    # رد سريع، لا تعليق 4 دقايق.
+    try:
+        await msg.edit_text(f"⏳ جاري تحديث {team1} × {team2}\nfootball-data أولًا، ثم ESPN للهدافين...")
+        wait_msg = msg
+    except Exception:
+        wait_msg = await msg.reply_text(f"⏳ جاري تحديث {team1} × {team2}\nfootball-data أولًا، ثم ESPN للهدافين...")
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(_v32_fetch_live_fast, team1, team2, date_hint, False), timeout=12)
+    except Exception:
+        data = _patch6_placeholder_live(team1, team2, date_hint)
+    if not data:
+        data = _patch6_placeholder_live(team1, team2, date_hint)
+    if not data:
+        text = f"⚽ {team1} × {team2}\nالحالة: قيد التحديث\nآخر محاولة: الآن"
+        try:
+            await wait_msg.edit_text(text)
+        except Exception:
+            await wait_msg.reply_text(text)
+        return
+    label = data.get('actual_source') or data.get('source') or 'football-data.org'
+    try:
+        path = render_live_match_card(data, label)
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+        await send_photo_path(wait_msg, path, build_live_caption(data, label))
+    except Exception:
+        text = build_live_caption(data, label)
+        try:
+            await wait_msg.edit_text(text)
+        except Exception:
+            await wait_msg.reply_text(text)
+
+# ==================== END V32 FAST LIVE/RESULTS PATCH ====================
+
 if __name__ == "__main__":
     main()
