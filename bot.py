@@ -28598,5 +28598,448 @@ async def _v315_send_live_result_from_message(msg, team1, team2, date_hint=None,
 
 # ==================== END V32 FAST LIVE/RESULTS PATCH ====================
 
+
+# ==================== V33 RESULTS DATE/MATCH FLOW + LIVE WINDOW FIX ====================
+# اعتماد فهد:
+# - لا نلمس التصاميم ولا الفانتزي.
+# - نتائج المباريات: التواريخ إلى اليوم فقط، 3 أزرار جنب بعض.
+# - عند اختيار تاريخ: نعرض مباريات هذا التاريخ من جدول البطولة أولاً كأزرار ✅/❌.
+# - الضغط على مباراة ❌ يبحث بالاسم + التاريخ في football-data ثم ESPN، ويحفظ ويحدث الزر.
+# - مباشر الآن: لا يعرض مباريات قديمة؛ فقط قبل المباراة بساعة والجارية والمنتهية قبل وقت بسيط.
+# - مباشر الآن يمرر تاريخ الجدول العربي، وليس صيغة ESPN، حتى لا يخرب البحث.
+
+RESULT_MATCH_CACHE_FILE = "match_results_by_fixture_cache.json"
+
+
+def _v33_now_riyadh_dt():
+    try:
+        return datetime.utcnow() + timedelta(hours=3)
+    except Exception:
+        return datetime.now()
+
+
+def _v33_today_riyadh_date():
+    try:
+        return _v33_now_riyadh_dt().strftime("%d/%m/%Y")
+    except Exception:
+        try:
+            return _today_riyadh_date()
+        except Exception:
+            return ""
+
+
+def _v33_date_key(d):
+    d = _normalize_date_arg(d)
+    try:
+        dd, mm, yy = [int(x) for x in d.split('/')]
+        return yy * 10000 + mm * 100 + dd
+    except Exception:
+        return 99999999
+
+
+def _v33_load_match_cache():
+    try:
+        return _json_load_file(RESULT_MATCH_CACHE_FILE, {})
+    except Exception:
+        try:
+            if os.path.exists(RESULT_MATCH_CACHE_FILE):
+                with open(RESULT_MATCH_CACHE_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f) or {}
+        except Exception:
+            pass
+    return {}
+
+
+def _v33_save_match_cache(data):
+    try:
+        return _json_save_file(RESULT_MATCH_CACHE_FILE, data or {})
+    except Exception:
+        try:
+            with open(RESULT_MATCH_CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data or {}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+
+def _v33_fixture_key(m):
+    if not isinstance(m, dict):
+        return ""
+    mid = str(m.get('id') or '').strip()
+    if mid:
+        return f"id:{mid}"
+    return f"{m.get('date','')}|{simple_key(m.get('team1',''))}|{simple_key(m.get('team2',''))}"
+
+
+def _v33_get_cached_match_result(m):
+    cache = _v33_load_match_cache()
+    obj = cache.get(_v33_fixture_key(m))
+    if isinstance(obj, dict) and _patch6_numeric_score(obj):
+        return obj
+    return None
+
+
+def _v33_put_cached_match_result(m, obj, source_note=None):
+    if not isinstance(obj, dict):
+        return
+    cache = _v33_load_match_cache()
+    obj = dict(obj)
+    obj['saved_at'] = _now_riyadh_text() if '_now_riyadh_text' in globals() else str(_v33_now_riyadh_dt())
+    if source_note:
+        obj['source_note'] = source_note
+    cache[_v33_fixture_key(m)] = obj
+    _v33_save_match_cache(cache)
+
+
+def _v33_match_label(m):
+    cached = _v33_get_cached_match_result(m)
+    t1 = canonical_team_name(m.get('team1')) or m.get('team1') or ''
+    t2 = canonical_team_name(m.get('team2')) or m.get('team2') or ''
+    if cached and _patch6_numeric_score(cached):
+        return f"✅ {t1} {cached.get('score1')} - {cached.get('score2')} {t2}"
+    return f"❌ {t1} × {t2}"
+
+
+def _v33_fixtures_for_date_safe(d):
+    d = _normalize_date_arg(d)
+    try:
+        rows = list(_fixtures_for_date(d) or [])
+    except Exception:
+        rows = []
+    try:
+        rows = _v26_dedupe_fixture_matches(rows)
+    except Exception:
+        pass
+    return rows
+
+
+def _v33_result_match_detail(m, obj=None):
+    t1 = canonical_team_name(m.get('team1')) or m.get('team1') or ''
+    t2 = canonical_team_name(m.get('team2')) or m.get('team2') or ''
+    if not isinstance(obj, dict):
+        obj = _v33_get_cached_match_result(m)
+    if isinstance(obj, dict) and _patch6_numeric_score(obj):
+        lines = [f"✅ {t1} {obj.get('score1')} - {obj.get('score2')} {t2}", obj.get('status') or 'FT — انتهت المباراة', ""]
+        try:
+            lines.extend(_patch6_goal_lines(obj))
+        except Exception:
+            sc = obj.get('scorers') or []
+            if sc:
+                lines.append('⚽ الهدافون:')
+                for x in sc:
+                    lines.append(f"- {x}")
+            else:
+                if str(obj.get('score1')) == '0' and str(obj.get('score2')) == '0':
+                    lines.append('⚽ لا يوجد أهداف')
+                else:
+                    lines.append('⚽ الهدافون قيد التحديث')
+        lines.append(f"المصدر: {obj.get('actual_source') or obj.get('source') or obj.get('source_note') or 'مصدر خارجي'}")
+        return "\n".join([x for x in lines if x is not None]).strip()
+    return f"❌ {t1} × {t2}\nالنتيجة غير محفوظة حتى الآن. اضغط الزر للبحث والتحديث."
+
+
+def _v33_fetch_result_for_fixture(m, d=None, force=True):
+    d = _normalize_date_arg(d or m.get('date'))
+    obj = None
+    # 1) football-data سريع للنتيجة والحالة
+    try:
+        obj = _fd_find_match_for_fixture(m, d, timeout=7, force=force)
+    except Exception:
+        obj = None
+    # 2) ESPN للإثراء أو إذا football-data لم يجد النتيجة
+    if isinstance(obj, dict) and _patch6_numeric_score(obj):
+        try:
+            obj = _enrich_with_espn_scorers(obj, m.get('team1'), m.get('team2'), d)
+        except Exception:
+            pass
+        _v33_put_cached_match_result(m, obj, 'football-data.org')
+        return obj
+    try:
+        espn = _patch6_fetch_espn_result_for_fixture(m, d)
+    except Exception:
+        espn = None
+    if isinstance(espn, dict) and _patch6_numeric_score(espn):
+        try:
+            espn = _enrich_with_espn_scorers(espn, m.get('team1'), m.get('team2'), d)
+        except Exception:
+            pass
+        _v33_put_cached_match_result(m, espn, 'ESPN')
+        return espn
+    return None
+
+
+def _v28_previous_result_dates():
+    today_key = _v33_date_key(_v33_today_riyadh_date())
+    rows, seen = [], set()
+
+    def add(d, day=''):
+        d = _normalize_date_arg(d)
+        if not d or d in seen:
+            return
+        if _v33_date_key(d) > today_key:
+            return
+        seen.add(d)
+        rows.append((d, day or ''))
+
+    try:
+        for d, day in _fixture_dates() or []:
+            add(d, day)
+    except Exception:
+        pass
+    try:
+        for m in _all_fixtures() or []:
+            add(m.get('date'), m.get('day_name') or m.get('day') or '')
+    except Exception:
+        pass
+    try:
+        for m in globals().get('_EARLY_GROUP_FIXTURES_1106_1906', []) or []:
+            add(m.get('date'), m.get('day_name') or m.get('day') or '')
+    except Exception:
+        pass
+    rows.sort(key=lambda x: _v33_date_key(x[0]))
+    return rows
+
+
+def _v28_previous_results_keyboard():
+    rows, row = [], []
+    for d, day in _v28_previous_result_dates():
+        row.append(InlineKeyboardButton(d[:5], callback_data=f"res|day|{d}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if not rows:
+        rows.append([InlineKeyboardButton("لا توجد أيام نتائج حتى الآن", callback_data="noop")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v33_results_matches_keyboard(d):
+    d = _normalize_date_arg(d)
+    rows = []
+    matches = _v33_fixtures_for_date_safe(d)
+    for m in matches:
+        if _has_unknown(m) if '_has_unknown' in globals() else False:
+            label = f"❌ {m.get('note','تحدد لاحقًا')}"
+        else:
+            label = _v33_match_label(m)
+        rows.append([InlineKeyboardButton(label[:60], callback_data=f"res|match|{d}|{m.get('id')}")])
+    if not rows:
+        rows.append([InlineKeyboardButton("ما فيه مباريات بهذا التاريخ", callback_data="noop")])
+    rows.append([InlineKeyboardButton("↩️ رجوع للتواريخ", callback_data="res|dates"), InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def previous_results_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+
+
+async def previous_results_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    data = q.data or ''
+    if data == 'noop':
+        return
+    parts = data.split('|')
+    if data == 'res|dates':
+        try:
+            await q.message.edit_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        except Exception:
+            await q.message.reply_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        return
+    if len(parts) >= 2 and parts[0] == 'res' and parts[1] == 'day':
+        d = _normalize_date_arg(parts[2] if len(parts) > 2 else '')
+        matches = _v33_fixtures_for_date_safe(d)
+        if not matches:
+            txt = f"ما فيه مباريات بتاريخ {d}\nتأكد أن التاريخ موجود في جدول البطولة."
+            await q.message.edit_text(txt, reply_markup=_v28_previous_results_keyboard())
+            return
+        title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+        txt = f"⚽ نتائج {title}\nاختر مباراة للتفاصيل أو للتحديث:"
+        await q.message.edit_text(txt, reply_markup=_v33_results_matches_keyboard(d))
+        return
+    if len(parts) >= 4 and parts[0] == 'res' and parts[1] == 'match':
+        d = _normalize_date_arg(parts[2])
+        mid = parts[3]
+        m = _fixture_by_id(mid) if '_fixture_by_id' in globals() else None
+        if not m:
+            for x in _v33_fixtures_for_date_safe(d):
+                if str(x.get('id')) == str(mid):
+                    m = x
+                    break
+        if not m:
+            await q.message.edit_text("لم أجد المباراة في جدول البطولة.", reply_markup=_v33_results_matches_keyboard(d))
+            return
+        cached = _v33_get_cached_match_result(m)
+        if cached:
+            await q.message.edit_text(_v33_result_match_detail(m, cached), reply_markup=_v33_results_matches_keyboard(d))
+            return
+        try:
+            await q.message.edit_text(f"⏳ أبحث عن نتيجة {m.get('team1')} × {m.get('team2')}...", reply_markup=None)
+        except Exception:
+            pass
+        try:
+            obj = await asyncio.wait_for(asyncio.to_thread(_v33_fetch_result_for_fixture, m, d, True), timeout=14)
+        except Exception:
+            obj = None
+        if isinstance(obj, dict) and _patch6_numeric_score(obj):
+            txt = _v33_result_match_detail(m, obj)
+        else:
+            txt = f"⚠️ لم يتم العثور على نتيجة {m.get('team1')} × {m.get('team2')} حاليًا.\nبقيت المباراة ❌، جرّب لاحقًا أو حدثها يدويًا."
+        try:
+            await q.message.edit_text(txt, reply_markup=_v33_results_matches_keyboard(d))
+        except Exception:
+            await q.message.reply_text(txt, reply_markup=_v33_results_matches_keyboard(d))
+        return
+    # توافق مع صيغ قديمة res|13/06/2026
+    if len(parts) >= 2 and parts[0] == 'res':
+        d = _normalize_date_arg(parts[1])
+        title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+        await q.message.edit_text(f"⚽ نتائج {title}\nاختر مباراة للتفاصيل أو للتحديث:", reply_markup=_v33_results_matches_keyboard(d))
+
+
+def _v33_parse_fixture_datetime(m):
+    d = _normalize_date_arg((m or {}).get('date'))
+    t = str((m or {}).get('time') or '').strip()
+    try:
+        dd, mm, yy = [int(x) for x in d.split('/')]
+    except Exception:
+        return None
+    hour = 0
+    minute = 0
+    mmatch = re.search(r'(\d{1,2})(?::(\d{2}))?', t)
+    if mmatch:
+        hour = int(mmatch.group(1))
+        minute = int(mmatch.group(2) or 0)
+    low = t.lower()
+    # ص/صباح/فجر = AM، م/مساء = PM. 12 صباحًا = 0، 12 مساءً = 12
+    is_am = any(x in t for x in ['ص', 'صباح', 'فجر']) or 'am' in low
+    is_pm = any(x in t for x in ['م', 'مساء']) or 'pm' in low
+    if is_pm and hour < 12:
+        hour += 12
+    if is_am and hour == 12:
+        hour = 0
+    try:
+        return datetime(yy, mm, dd, hour, minute)
+    except Exception:
+        return None
+
+
+def _v33_fixture_in_live_window(m, now=None):
+    now = now or _v33_now_riyadh_dt()
+    dt = _v33_parse_fixture_datetime(m)
+    if not dt:
+        # إذا ما قدرنا نقرأ الوقت، لا نعرض القديم. نعرض فقط لو تاريخه اليوم.
+        return _v33_date_key((m or {}).get('date')) == _v33_date_key(_v33_today_riyadh_date())
+    start = dt - timedelta(hours=1)
+    end = dt + timedelta(hours=3)
+    return start <= now <= end
+
+
+def _v33_live_rows(date_str=None):
+    # نبحث في كل جدول اليوم وما حوله، ثم نفلتر بنافذة المباشر.
+    now = _v33_now_riyadh_dt()
+    rows = []
+    try:
+        candidates = list(_all_fixtures() or [])
+    except Exception:
+        candidates = []
+    if date_str:
+        candidates = [m for m in candidates if _normalize_date_arg(m.get('date')) == _normalize_date_arg(date_str)]
+    for m in candidates:
+        try:
+            if _has_unknown(m):
+                continue
+        except Exception:
+            pass
+        if _v33_fixture_in_live_window(m, now):
+            rows.append(m)
+    try:
+        rows = _v26_dedupe_fixture_matches(rows)
+    except Exception:
+        pass
+    rows.sort(key=lambda x: _v33_parse_fixture_datetime(x) or now)
+    return rows
+
+
+def _v29_live_today_keyboard(date_str=None):
+    rows = _v33_live_rows(date_str)
+    kb_rows = []
+    for m in rows:
+        label = f"{m.get('team1')} × {m.get('team2')}"
+        kb_rows.append([InlineKeyboardButton(label[:58], callback_data=f"livefx|match|{m.get('id')}")])
+    if not kb_rows:
+        kb_rows.append([InlineKeyboardButton("لا توجد مباريات مباشرة الآن", callback_data="noop")])
+    kb_rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(kb_rows)
+
+
+def _v29_live_today_text(date_str=None):
+    rows = _v33_live_rows(date_str)
+    lines = [
+        "اختر مباراة للمتابعة المباشرة:",
+        "يعرض المباريات قبلها بساعة والجارية فقط.",
+        "",
+    ]
+    if not rows:
+        lines.append("لا توجد مباريات مباشرة الآن حسب جدول البطولة.")
+    return "\n".join(lines)
+
+
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or '').split('|')
+    if len(parts) < 3 or parts[1] != 'match':
+        return
+    mid = parts[2]
+    m = _fixture_by_id(mid) if '_fixture_by_id' in globals() else None
+    if not m:
+        await q.message.reply_text("لم أجد المباراة في جدول البطولة.")
+        return
+    if not _v33_fixture_in_live_window(m):
+        d = _normalize_date_arg(m.get('date'))
+        try:
+            await q.message.reply_text(
+                "هذه المباراة خارج وقت المباشر الآن.\n"
+                "إذا كانت منتهية تلقاها في نتائج المباريات.",
+                reply_markup=_v33_results_matches_keyboard(d)
+            )
+        except Exception:
+            await q.message.reply_text("هذه المباراة خارج وقت المباشر الآن.")
+        return
+    team1, team2 = m.get('team1'), m.get('team2')
+    date_hint = m.get('date')
+    try:
+        await q.message.edit_text(f"⏳ جاري تحديث {team1} × {team2}...\nfootball-data أولًا ثم ESPN للهدافين.")
+        wait_msg = q.message
+    except Exception:
+        wait_msg = await q.message.reply_text(f"⏳ جاري تحديث {team1} × {team2}...\nfootball-data أولًا ثم ESPN للهدافين.")
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(_v32_fetch_live_fast, team1, team2, date_hint, False), timeout=12)
+    except Exception:
+        data = None
+    if not data:
+        data = _patch6_placeholder_live(team1, team2, date_hint) if '_patch6_placeholder_live' in globals() else None
+    if not data:
+        await wait_msg.edit_text(f"⚽ {team1} × {team2}\nالحالة: قيد التحديث")
+        return
+    label = data.get('actual_source') or data.get('source') or 'football-data.org'
+    try:
+        path = render_live_match_card(data, label)
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+        await send_photo_path(q.message, path, build_live_caption(data, label))
+    except Exception:
+        await wait_msg.edit_text(build_live_caption(data, label))
+
+# ==================== END V33 RESULTS DATE/MATCH FLOW + LIVE WINDOW FIX ====================
+
 if __name__ == "__main__":
     main()
