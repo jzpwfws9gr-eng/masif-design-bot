@@ -13776,6 +13776,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:ملخصات|الملخصات|بحث_ملخص|بحث\s+ملخص)(?:\s|$)"), v32_highlights_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:لوحة_البطولة|البطولة_الآن|البطولة_الان)(?:\s|$)"), v32_tournament_board_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:سباق_التأهل|سباق_التاهل)(?:\s|$)"), v32_qualification_race_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:ملف_سباق_التأهل|ملف_سباق_التاهل|سباق_التأهل_PDF|سباق_التاهل_PDF)(?:\s|$)"), v32_qualification_pdf_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:افضل_الثوالث|أفضل_الثوالث)(?:\s|$)"), v32_best_thirds_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:مباريات_الحسم|حسم)(?:\s|$)"), v32_decisive_matches_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:يحتاج|ماذا_يحتاج)(?:\s|$)"), v32_team_needs_command))
@@ -35085,6 +35086,47 @@ def _v32_sort_group_rows(rows, results):
     return final
 
 
+
+def _v32_team_max_points(row):
+    try:
+        return int(row.get("Pts") or 0) + max(0, 3 - int(row.get("P") or 0)) * 3
+    except Exception:
+        return int(row.get("Pts") or 0)
+
+
+def _v32_guaranteed_top2(row, rows):
+    """Conservative official top-2 check using points ceiling only.
+    If at most one other team can even tie/reach this team's current points,
+    the team cannot fall below top 2 regardless of remaining results/tiebreaks.
+    """
+    try:
+        current = int(row.get("Pts") or 0)
+        others = [x for x in (rows or []) if x.get("team") != row.get("team")]
+        can_reach = sum(1 for x in others if _v32_team_max_points(x) >= current)
+        return can_reach <= 1
+    except Exception:
+        return False
+
+
+def _v32_cannot_top2_by_points(row, rows):
+    """Conservative group top-2 elimination check only.
+    This does NOT mean eliminated from the tournament because best thirds may still apply.
+    """
+    try:
+        max_pts = _v32_team_max_points(row)
+        others = [x for x in (rows or []) if x.get("team") != row.get("team")]
+        already_above = sum(1 for x in others if int(x.get("Pts") or 0) > max_pts)
+        return already_above >= 2
+    except Exception:
+        return False
+
+
+def _v32_plain_status(text):
+    s = str(text or "")
+    for x in ["✅", "❌", "🔥", "⚔️", "⚔", "🥉", "⚠️", "⚠"]:
+        s = s.replace(x, "")
+    return re.sub(r"\s+", " ", s).strip() or "ما زال ينافس"
+
 def _v32_build_snapshot(force=False):
     cache = _v32_load_json(V32_TOURNAMENT_CACHE_FILE, {})
     now = _v32_now_ts()
@@ -35142,20 +35184,24 @@ def _v32_build_snapshot(force=False):
             for r in rows[:2]:
                 status[r["team"]] = "✅ متأهل رسميًا"
                 qualified.append(r["team"])
+            # الثالث ينتظر أفضل الثوالث حتى تكتمل كل المجموعات.
+            if len(rows) >= 3 and status.get(rows[2]["team"]) != "✅ متأهل رسميًا":
+                status[rows[2]["team"]] = "🥉 في حسابات أفضل الثوالث"
             if len(rows) >= 4:
                 status[rows[3]["team"]] = "❌ مستبعد رسميًا"
                 eliminated.append(rows[3]["team"])
         else:
-            # حالات مختصرة بدون مبالغة رسمية
             for idx, r in enumerate(rows):
-                played = int(r.get("P") or 0)
-                max_pts = int(r.get("Pts") or 0) + max(0, 3 - played) * 3
-                if idx <= 1:
-                    status[r["team"]] = "🔥 قريب من التأهل" if r.get("Pts",0) >= 4 else "⚔️ ما زال ينافس"
+                if _v32_guaranteed_top2(r, rows):
+                    status[r["team"]] = "✅ متأهل رسميًا"
+                    if r["team"] not in qualified:
+                        qualified.append(r["team"])
+                elif idx <= 1:
+                    status[r["team"]] = "🔥 قريب من التأهل" if int(r.get("Pts", 0) or 0) >= 4 else "⚔️ ما زال ينافس"
                 elif idx == 2:
                     status[r["team"]] = "🥉 في حسابات أفضل الثوالث"
                 else:
-                    status[r["team"]] = "⚠️ وضعه صعب" if max_pts >= 3 else "❌ مستبعد حسابيًا من المجموعة"
+                    status[r["team"]] = "⚠️ وضعه صعب" if _v32_cannot_top2_by_points(r, rows) else "⚔️ ما زال ينافس"
 
     # أفضل 8 ثوالث: الرسمي لا يثبت إلا بعد اكتمال دور المجموعات، لكن نعرض داخل/خارج حاليًا.
     all_groups_complete = all(int(g.get("remaining") or 0) == 0 and len(g.get("results") or []) >= 6 for g in groups.values())
@@ -35214,14 +35260,21 @@ def _v32_snapshot(force=False):
 def _v32_format_group_table(code, snap=None):
     snap = snap or _v32_snapshot(False)
     g = (snap.get("groups") or {}).get(code, {})
-    lines = [f"🏁 سباق التأهل — {_v32_group_name(code)}", f"آخر تحديث: {snap.get('updated_at','-')}", ""]
-    for idx, r in enumerate(g.get("rows") or [], start=1):
+    lines = [f"🏁 سباق التأهل - {_v32_group_name(code)}", f"آخر تحديث: {snap.get('updated_at','-')}", ""]
+    rows = g.get("rows") or []
+    if not rows:
+        lines.append("لا توجد بيانات كافية لهذه المجموعة.")
+    for idx, r in enumerate(rows, start=1):
         st = (snap.get("status") or {}).get(r["team"], "⚔️ ما زال ينافس")
-        lines.append(f"{idx}. {r['team']} — {r['Pts']} نقطة | لعب {r['P']} | ف {r['W']} ت {r['D']} خ {r['L']} | فارق {r['GD']:+d}")
+        lines.append(f"{idx}. {r['team']} - {r['Pts']} نقطة")
+        lines.append(f"   لعب: {r['P']} | فوز: {r['W']} | تعادل: {r['D']} | خسارة: {r['L']}")
+        lines.append(f"   الفارق: {int(r.get('GD') or 0):+d} | الأهداف: {r.get('GF', 0)}")
         lines.append(f"   الحالة: {st}")
-    if g.get("remaining"):
-        lines.append(f"\nالمباريات المتبقية في المجموعة: {g.get('remaining')}")
-    return "\n".join(lines).strip()
+        lines.append("")
+    rem = int(g.get("remaining") or 0)
+    if rem:
+        lines.append(f"المباريات المتبقية في المجموعة: {rem}")
+PLACEHOLDER
 
 
 def _v32_groups_keyboard(prefix="race"):
@@ -35231,23 +35284,44 @@ def _v32_groups_keyboard(prefix="race"):
         if len(row)==3:
             rows.append(row); row=[]
     if row: rows.append(row)
-    rows.append([InlineKeyboardButton("🥉 أفضل الثوالث", callback_data="v32|thirds"), InlineKeyboardButton("🔥 مباريات الحسم", callback_data="v32|decisive")])
+    if prefix == "race":
+        rows.append([InlineKeyboardButton("📄 كل المجموعات PDF", callback_data="v32|race_pdf")])
+        rows.append([InlineKeyboardButton("🥉 أفضل الثوالث", callback_data="v32|thirds"), InlineKeyboardButton("🔥 مباريات الحسم", callback_data="v32|decisive")])
+        rows.append([InlineKeyboardButton("🧮 ماذا يحتاج منتخبك؟", callback_data="v32|needs_pick")])
     rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="v32|board")])
     return InlineKeyboardMarkup(rows)
 
 
 def _v32_best_thirds_text(force=False):
     snap = _v32_snapshot(force)
+    thirds = snap.get("thirds") or []
     lines = ["🥉 أفضل الثوالث", f"آخر تحديث: {snap.get('updated_at','-')}", ""]
-    if not snap.get("thirds"):
+    if not thirds:
         return "🥉 أفضل الثوالث\nلا توجد بيانات كافية حتى الآن."
-    for i, r in enumerate(snap.get("thirds") or [], start=1):
-        line = f"{i}. {r.get('team')} — {_v32_group_name(r.get('group'))} — {r.get('Pts')} نقطة | فارق {int(r.get('GD') or 0):+d} | أهداف {r.get('GF')} — {r.get('third_status','')}"
-        if i == 9:
-            lines.append("━━━━━━━━")
-        lines.append(line)
-    lines.append("\nأفضل 8 ثوالث يتأهلون لدور الـ32. قبل نهاية كل المجموعات تظهر الحالة كـ داخل/خارج حاليًا فقط.")
-    return "\n".join(lines)
+
+    inside = list(enumerate(thirds[:8], start=1))
+    outside = list(enumerate(thirds[8:], start=9))
+
+    lines.append("✅ داخلين حاليًا")
+    if not inside:
+        lines.append("لا يوجد.")
+    for i, r in inside:
+        lines.append(f"{i}. {r.get('team')} - {_v32_group_name(r.get('group'))}")
+        lines.append(f"   النقاط: {r.get('Pts')} | الفارق: {int(r.get('GD') or 0):+d} | الأهداف: {r.get('GF')}")
+        lines.append(f"   الحالة: {r.get('third_status','✅ داخل حاليًا')}")
+        lines.append("")
+
+    lines.append("❌ خارجين حاليًا")
+    if not outside:
+        lines.append("لا يوجد.")
+    for i, r in outside:
+        lines.append(f"{i}. {r.get('team')} - {_v32_group_name(r.get('group'))}")
+        lines.append(f"   النقاط: {r.get('Pts')} | الفارق: {int(r.get('GD') or 0):+d} | الأهداف: {r.get('GF')}")
+        lines.append(f"   الحالة: {r.get('third_status','❌ خارج حاليًا')}")
+        lines.append("")
+
+    lines.append("أفضل 8 ثوالث يتأهلون لدور الـ32. قبل نهاية كل المجموعات تظهر الحالة كـ داخل/خارج حاليًا فقط.")
+    return "\n".join(lines).strip()
 
 
 def _v32_find_team(team_text):
@@ -35260,6 +35334,26 @@ def _v32_find_team(team_text):
         if key and (key in simple_key(t) or simple_key(t) in key):
             matches.append(t)
     return matches[0] if len(matches) == 1 else None
+
+
+def _v32_team_suggestions(team_text, limit=6):
+    key = simple_key(team_text)
+    if not key:
+        return []
+    scored = []
+    for t in WORLD_CUP_TEAMS:
+        tk = simple_key(t)
+        if key in tk or tk in key:
+            scored.append((0, t))
+        elif tk[:2] and key[:2] == tk[:2]:
+            scored.append((1, t))
+    out = []
+    for _score, t in sorted(scored, key=lambda x: (x[0], x[1])):
+        if t not in out:
+            out.append(t)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _v32_team_group(team):
@@ -35370,21 +35464,26 @@ def _v32_decisive_matches_text(force=False):
             t2 = canonical_team_name(m.get('team2')) or m.get('team2')
             s1 = (snap.get('status') or {}).get(t1, '')
             s2 = (snap.get('status') or {}).get(t2, '')
-            # حاسمة إذا أحد الفريقين على الحافة/ثالث/قريب أو الجولة الأخيرة للمجموعة.
             if any(x in (s1+s2) for x in ['قريب', 'صعب', 'ثوالث', 'ينافس']) or len(g.get('results') or []) >= 4:
                 note = []
                 for t, st in [(t1,s1),(t2,s2)]:
                     if 'قريب' in st: note.append(f"{t} قريب من التأهل")
                     elif 'ثوالث' in st: note.append(f"{t} في حسابات أفضل الثوالث")
                     elif 'صعب' in st: note.append(f"{t} يحتاج نتيجة")
+                    elif 'ينافس' in st and len(g.get('results') or []) >= 4: note.append(f"{t} ما زال ينافس")
                 rows.append((m.get('date'), m.get('time',''), code, t1, t2, '، '.join(note[:2]) or 'تؤثر على ترتيب المجموعة'))
     rows = sorted(rows, key=lambda x: (_date_key(x[0]), x[1]))[:12]
     lines = ["🔥 مباريات الحسم القادمة", f"آخر تحديث: {snap.get('updated_at','-')}", ""]
     if not rows:
         lines.append("ما فيه مباريات حسم واضحة حاليًا.")
-    for d,t,code,a,b,note in rows:
-        lines.append(f"- {a} × {b} — {_v32_group_name(code)} — {d} {t}")
-        lines.append(f"  {note}")
+    for idx, (d,t,code,a,b,note) in enumerate(rows, start=1):
+        lines.append(f"{idx}. {a} × {b}")
+        lines.append(f"   📅 {d}")
+        lines.append(f"   ⏰ {t or '-'}")
+        lines.append(f"   📊 {_v32_group_name(code)}")
+        lines.append(f"   🎯 التأثير: {note}")
+        lines.append("")
+    lines.append("ملاحظة: مباريات الحسم تتغير تلقائيًا حسب نتائج المجموعات وأفضل الثوالث.")
     return "\n".join(lines).strip()
 
 
@@ -35396,7 +35495,7 @@ def _v32_tournament_board_text(force=False):
     bd = snap.get('best_defense') or ('-',0)
     last_q = (snap.get('qualified') or ['-'])[-1]
     last_e = (snap.get('eliminated') or ['-'])[-1]
-    decisive_count = max(0, len([1 for _ in re.finditer(r'^-', _v32_decisive_matches_text(False), flags=re.M)]))
+    decisive_count = max(0, len([1 for _ in re.finditer(r'^\d+\.', _v32_decisive_matches_text(False), flags=re.M)]))
     lines = [
         "🏆 لوحة البطولة الآن",
         f"آخر تحديث: {snap.get('updated_at','-')}",
@@ -35439,6 +35538,97 @@ def _v32_short_today_text():
         lines.append(f"{m.get('time','-')} — {m.get('team1')} × {m.get('team2')}")
     return "\n".join(lines).strip()
 
+
+
+# ---------- Qualification race PDF ----------
+
+def _v32_pdf_draw_line(draw, text, x, y, font, fill="white", max_width=1060):
+    # رسم من اليمين لليسار مع لفّ سطور آمن.
+    lines = wrap_text(draw, str(text or ""), font, max_width)
+    line_h = int(font_size(font, 24) * 1.45)
+    for ln in lines:
+        draw_text(draw, (x, y), ln, font, fill=fill, anchor="ra", align="right")
+        y += line_h
+    return y
+
+
+def _v32_pdf_new_page(title, subtitle):
+    width, height = 1240, 1754
+    img, draw = make_canvas(width, height, "purple")
+    title_font = get_font(48)
+    sub_font = get_font(28)
+    draw_text(draw, (width-80, 70), title, title_font, fill="#F2B705", anchor="ra", align="right")
+    draw_text(draw, (width-80, 125), subtitle, sub_font, fill="#E5E7EB", anchor="ra", align="right")
+    draw.line([(80, 165), (width-80, 165)], fill="#8B5CF6", width=3)
+    return img, draw, 200
+
+
+def _v32_create_race_pdf(force=False):
+    snap = _v32_snapshot(force)
+    ensure_generated_dir()
+    pages = []
+    width, height = 1240, 1754
+    margin = 80
+    title = "ملف سباق التأهل - مونديال المصيف 2026"
+    subtitle = f"آخر تحديث: {snap.get('updated_at','-')} - المصدر: ESPN + حسبة المصيف الرسمية"
+    group_title_font = get_font(34)
+    row_font = get_font(25)
+    small_font = get_font(22)
+
+    img, draw, y = _v32_pdf_new_page(title, subtitle)
+    groups_per_page = 3
+    group_count = 0
+    for code, _teams in WORLD_CUP_GROUPS:
+        if group_count and group_count % groups_per_page == 0:
+            pages.append(img)
+            img, draw, y = _v32_pdf_new_page(title, subtitle)
+        g = (snap.get("groups") or {}).get(code, {})
+        y = _v32_pdf_draw_line(draw, f"🏁 {_v32_group_name(code)}", width-margin, y, group_title_font, fill="#F2B705")
+        for idx, r in enumerate(g.get('rows') or [], start=1):
+            st = _v32_plain_status((snap.get('status') or {}).get(r.get('team'), 'ما زال ينافس'))
+            y = _v32_pdf_draw_line(draw, f"{idx}. {r.get('team')} - {r.get('Pts')} نقطة", width-margin, y, row_font, fill="#FFFFFF")
+            y = _v32_pdf_draw_line(draw, f"   لعب {r.get('P')} - فوز {r.get('W')} - تعادل {r.get('D')} - خسارة {r.get('L')} - فارق {int(r.get('GD') or 0):+d} - أهداف {r.get('GF')}", width-margin, y, small_font, fill="#CBD5E1")
+            y = _v32_pdf_draw_line(draw, f"   الحالة: {st}", width-margin, y, small_font, fill="#A7F3D0" if 'متأهل' in st else "#FDE68A")
+        rem = int(g.get('remaining') or 0)
+        if rem:
+            y = _v32_pdf_draw_line(draw, f"المباريات المتبقية: {rem}", width-margin, y, small_font, fill="#FDE68A")
+        y += 28
+        group_count += 1
+    pages.append(img)
+
+    # صفحة أفضل الثوالث
+    img, draw, y = _v32_pdf_new_page("أفضل الثوالث", subtitle)
+    y = _v32_pdf_draw_line(draw, "أفضل 8 ثوالث يتأهلون لدور الـ32", width-margin, y, group_title_font, fill="#F2B705")
+    y += 8
+    thirds = snap.get('thirds') or []
+    y = _v32_pdf_draw_line(draw, "داخلين حاليًا", width-margin, y, get_font(32), fill="#86EFAC")
+    for i, r in enumerate(thirds[:8], start=1):
+        y = _v32_pdf_draw_line(draw, f"{i}. {r.get('team')} - {_v32_group_name(r.get('group'))}", width-margin, y, row_font, fill="#FFFFFF")
+        y = _v32_pdf_draw_line(draw, f"   النقاط: {r.get('Pts')} - الفارق: {int(r.get('GD') or 0):+d} - الأهداف: {r.get('GF')} - {_v32_plain_status(r.get('third_status'))}", width-margin, y, small_font, fill="#CBD5E1")
+    y += 24
+    y = _v32_pdf_draw_line(draw, "خارجين حاليًا", width-margin, y, get_font(32), fill="#FCA5A5")
+    for i, r in enumerate(thirds[8:], start=9):
+        y = _v32_pdf_draw_line(draw, f"{i}. {r.get('team')} - {_v32_group_name(r.get('group'))}", width-margin, y, row_font, fill="#FFFFFF")
+        y = _v32_pdf_draw_line(draw, f"   النقاط: {r.get('Pts')} - الفارق: {int(r.get('GD') or 0):+d} - الأهداف: {r.get('GF')} - {_v32_plain_status(r.get('third_status'))}", width-margin, y, small_font, fill="#CBD5E1")
+    pages.append(img)
+
+    label = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    out_path = os.path.join(GENERATED_DIR, f"qualification_race_{label}.pdf")
+    rgb_pages = [p.convert("RGB") for p in pages]
+    rgb_pages[0].save(out_path, "PDF", resolution=120.0, save_all=True, append_images=rgb_pages[1:])
+    return out_path
+
+
+async def v32_qualification_pdf_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _v32_track_user(update)
+    msg = update.effective_message
+    await msg.reply_text("⏳ جاري تجهيز ملف سباق التأهل PDF...")
+    try:
+        path = await asyncio.wait_for(asyncio.to_thread(_v32_create_race_pdf, True), timeout=90)
+        with open(path, "rb") as f:
+            await msg.reply_document(document=f, filename="سباق_التأهل_مونديال_المصيف_2026.pdf", caption="📄 كل المجموعات - سباق التأهل")
+    except Exception as e:
+        await msg.reply_text(f"تعذر تجهيز ملف PDF ❌\n{str(e)[:180]}")
 
 # ---------- Highlights V32 ----------
 
@@ -35735,6 +35925,19 @@ async def _v32_send_broadcast(update, context, text):
 
 
 async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get('v32_pending_needs'):
+        context.user_data.pop('v32_pending_needs', None)
+        query = normalize_name(update.message.text or '')
+        team = _v32_find_team(query)
+        if not team:
+            suggestions = _v32_team_suggestions(query)
+            if suggestions:
+                await update.message.reply_text("ما عرفت المنتخب بالضبط. يمكن تقصد:\n" + "\n".join([f"- {x}" for x in suggestions[:6]]) + "\n\nاكتب اسم المنتخب مرة ثانية.")
+            else:
+                await update.message.reply_text("ما لقيت المنتخب. اكتب مثلًا: السعودية أو اليابان أو Japan")
+            return
+        await update.message.reply_text(_v32_team_needs_text(team), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🥉 أفضل الثوالث", callback_data="v32|thirds"), InlineKeyboardButton("⬅️ لوحة البطولة", callback_data="v32|board")]]))
+        return
     if context.user_data.get('v32_pending_broadcast'):
         context.user_data.pop('v32_pending_broadcast', None)
         text = normalize_name(update.message.text or '')
@@ -35900,11 +36103,21 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             teams = _v32_calculated_eliminated(); txt = "❌ المستبعدون رسميًا\n" + ("\n".join([f"- {x}" for x in teams]) if teams else "لا يوجد حتى الآن.")
             await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ لوحة البطولة", callback_data="v32|board")]])); return
         if action == 'needs_pick':
-            await q.edit_message_text("اختر مجموعة المنتخب:", reply_markup=_v32_groups_keyboard(prefix='needs')); return
+            context.user_data['v32_pending_needs'] = True
+            await q.edit_message_text("🧮 ماذا يحتاج منتخبك؟\n\nاكتب اسم المنتخب الآن، مثال: السعودية أو Japan أو JPN", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ لوحة البطولة", callback_data="v32|board")]])); return
         if action == 'needs_group' and len(parts)>=3:
-            await q.edit_message_text("اختر المنتخب:", reply_markup=_v32_group_teams_keyboard(parts[2], action='needs_team')); return
+            await q.edit_message_text("اكتب اسم المنتخب بدل اختيار المجموعة. مثال: السعودية", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ لوحة البطولة", callback_data="v32|board")]])); return
         if action == 'needs_team' and len(parts)>=3:
             team = _v32_team_from_key(parts[2]); await q.edit_message_text(_v32_team_needs_text(team), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ لوحة البطولة", callback_data="v32|board")]])); return
+        if action == 'race_pdf':
+            await q.message.reply_text("⏳ جاري تجهيز ملف سباق التأهل PDF...")
+            try:
+                path = await asyncio.wait_for(asyncio.to_thread(_v32_create_race_pdf, True), timeout=90)
+                with open(path, "rb") as f:
+                    await q.message.reply_document(document=f, filename="سباق_التأهل_مونديال_المصيف_2026.pdf", caption="📄 كل المجموعات - سباق التأهل")
+            except Exception as e:
+                await q.message.reply_text(f"تعذر تجهيز ملف PDF ❌\n{str(e)[:180]}")
+            return
         if action == 'fav_home':
             await q.edit_message_text("اختر منتخبك المفضل ⭐", reply_markup=_v32_favorite_team_keyboard()); return
         if action == 'fav_group' and len(parts)>=3:
