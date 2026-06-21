@@ -34308,5 +34308,473 @@ def build_live_caption(match, mode_label="تلقائي"):
 
 # ==================== END PATCH17 ====================
 
+
+# ==================== PATCH18: FAST HIGHLIGHTS SAVE + LIVE GOALS USE RESULTS PATH ====================
+# إصلاحان فقط:
+# 1) الملخصات: حفظ مباشر بدون فحص روابط/بدون تعليق، وحفظ ملف JSON مرة واحدة للدفعات حتى 60.
+# 2) مباشر الآن: إذا النتيجة فيها أهداف، يستخدم نفس مسار النتائج لإكمال الهدافين قبل إرسال الصورة/الكلام.
+
+V48_PATCH_NAME = "PATCH18_FAST_SUMMARIES_LIVE_GOALS_FIX"
+V48_HIGHLIGHTS_BULK_LIMIT = 60
+
+
+def _v48_norm_txt(x):
+    try:
+        return normalize_name(x)
+    except Exception:
+        return str(x or '').strip()
+
+
+def _v48_is_url(url):
+    s = str(url or '').strip()
+    return bool(re.search(r'^(?:https?://|www\.)\S+', s, re.I) or re.search(r'(?:youtube\.com|youtu\.be|t\.me|x\.com|twitter\.com|fifa\.com)', s, re.I))
+
+
+def _v48_pair_from_text(pair):
+    raw = _v48_norm_txt(pair)
+    # لا نستدعي _parse_match_pair هنا عشان ما يتأثر بـ | أو أمر السلاش.
+    for sep in ['*', '×', ' x ', ' X ', ' - ', '–', '—']:
+        if sep in raw:
+            a, b = raw.split(sep, 1)
+            a = canonical_team_name(a) or _v48_norm_txt(a)
+            b = canonical_team_name(b) or _v48_norm_txt(b)
+            if a and b:
+                return a, b
+    return '', ''
+
+
+def _v48_parse_highlight_line(line, require_url=True):
+    raw = _v48_norm_txt(line)
+    if not raw:
+        return '', '', '', 'فارغ'
+    if '|' in raw:
+        pair, url = raw.split('|', 1)
+        url = url.strip()
+    else:
+        pair, url = raw, ''
+    a, b = _v48_pair_from_text(pair)
+    if not a or not b:
+        return '', '', url, 'صيغة المباراة غير صحيحة'
+    if require_url and not _v48_is_url(url):
+        return a, b, url, 'الرابط ناقص أو غير صحيح'
+    return a, b, url, ''
+
+
+def _v48_highlight_key(team1, team2):
+    try:
+        return _match_hash_key(team1, team2)
+    except Exception:
+        a = simple_key(team1) if 'simple_key' in globals() else re.sub(r'\W+', '', str(team1))
+        b = simple_key(team2) if 'simple_key' in globals() else re.sub(r'\W+', '', str(team2))
+        return 'hl_' + '_'.join(sorted([a, b]))
+
+
+def _v48_direct_save_highlight(team1, team2, url, data=None):
+    team1 = canonical_team_name(team1) or _v48_norm_txt(team1)
+    team2 = canonical_team_name(team2) or _v48_norm_txt(team2)
+    url = str(url or '').strip()
+    if data is None:
+        data = _load_highlights() if '_load_highlights' in globals() else {}
+    key = _v48_highlight_key(team1, team2)
+    existed = key in (data or {})
+    try:
+        now_txt = _now_riyadh_text()
+    except Exception:
+        now_txt = ''
+    data[key] = {'team1': team1, 'team2': team2, 'url': url, 'updated_at': now_txt}
+    return key, existed
+
+
+def _v48_direct_delete_highlight(team1, team2, data=None):
+    team1 = canonical_team_name(team1) or _v48_norm_txt(team1)
+    team2 = canonical_team_name(team2) or _v48_norm_txt(team2)
+    if data is None:
+        data = _load_highlights() if '_load_highlights' in globals() else {}
+    removed = 0
+    keys = {_v48_highlight_key(team1, team2), _v48_highlight_key(team2, team1)}
+    for k, item in list((data or {}).items()):
+        a = canonical_team_name((item or {}).get('team1')) or _v48_norm_txt((item or {}).get('team1'))
+        b = canonical_team_name((item or {}).get('team2')) or _v48_norm_txt((item or {}).get('team2'))
+        try:
+            same_pair = {simple_key(a), simple_key(b)} == {simple_key(team1), simple_key(team2)}
+        except Exception:
+            same_pair = {a, b} == {team1, team2}
+        if k in keys or same_pair:
+            data.pop(k, None)
+            removed += 1
+    return removed
+
+
+async def add_highlights_bulk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # رد فوري عشان المستخدم يعرف أن البوت استلم الطلب.
+    text = update.message.text or ''
+    body = re.sub(r'^/\S+', '', text, count=1).strip()
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    if not lines:
+        await update.message.reply_text(
+            'اكتبها كذا:\n'
+            '/اضافة_ملخصات\n'
+            'الإكوادور * كوراساو | https://youtube.com/...\n'
+            'هولندا * السويد | https://youtube.com/...\n\n'
+            'الحد الأقصى 60 ملخص بالرسالة الواحدة.'
+        )
+        return
+    if len(lines) > V48_HIGHLIGHTS_BULK_LIMIT:
+        await update.message.reply_text(f'⚠️ أرسلت {len(lines)} سطر. الحد الأقصى {V48_HIGHLIGHTS_BULK_LIMIT}.\nقسمها على رسالتين.')
+        return
+
+    wait = await update.message.reply_text(f'⏳ جاري حفظ {len(lines)} ملخص...')
+    saved = updated = failed = 0
+    errors = []
+    data = _load_highlights() if '_load_highlights' in globals() else {}
+    if not isinstance(data, dict):
+        data = {}
+    for i, line in enumerate(lines, start=1):
+        team1, team2, url, err = _v48_parse_highlight_line(line, require_url=True)
+        if err:
+            failed += 1
+            errors.append(f'السطر {i}: {err}')
+            continue
+        try:
+            _key, existed = _v48_direct_save_highlight(team1, team2, url, data=data)
+            if existed:
+                updated += 1
+            else:
+                saved += 1
+        except Exception as e:
+            failed += 1
+            errors.append(f'السطر {i}: خطأ {str(e)[:60]}')
+    try:
+        _save_highlights(data)
+    except Exception as e:
+        await wait.edit_text(f'❌ تعذر حفظ ملف الملخصات: {str(e)[:160]}')
+        return
+    msg = [
+        '🎞️ تقرير إضافة الملخصات',
+        f'✅ تم حفظ: {saved}',
+        f'🔁 تم تحديث: {updated}',
+        f'⚠️ فشل: {failed}',
+        '',
+        'تم الحفظ مباشرة بدون فحص روابط عشان ما يعلق البوت.'
+    ]
+    if errors:
+        msg += ['', 'الأسطر التي لم تُحفظ:'] + [f'- {x}' for x in errors[:10]]
+        if len(errors) > 10:
+            msg.append(f'... وباقي {len(errors)-10} سطر')
+    await wait.edit_text('\n'.join(msg))
+
+
+async def add_highlight_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = re.sub(r'^/\S+', '', update.message.text or '', count=1).strip()
+    team1, team2, url, err = _v48_parse_highlight_line(body, require_url=False)
+    if not team1 or not team2:
+        await update.message.reply_text('اكتبها كذا:\n/اضافة_ملخص السعودية * إسبانيا | https://youtube.com/...\nأو:\n/اضافة_ملخص السعودية * إسبانيا\nثم ارسل الرابط')
+        return
+    if url and _v48_is_url(url):
+        data = _load_highlights() if '_load_highlights' in globals() else {}
+        _key, existed = _v48_direct_save_highlight(team1, team2, url, data=data)
+        _save_highlights(data)
+        await update.message.reply_text(('🔁 تم تحديث' if existed else '✅ تم حفظ') + f' ملخص مباراة {team1} × {team2}')
+        return
+    context.user_data['pending_highlight_add'] = {'team1': team1, 'team2': team2}
+    await update.message.reply_text(f'ارسل رابط ملخص مباراة {team1} × {team2} الآن:')
+
+
+async def _pending_highlight_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pending = context.user_data.get('pending_highlight_add')
+    if not isinstance(pending, dict):
+        return False
+    url = str(update.message.text or '').strip()
+    if not _v48_is_url(url):
+        await update.message.reply_text('ارسل رابط الملخص كاملًا.')
+        return True
+    team1, team2 = pending.get('team1'), pending.get('team2')
+    data = _load_highlights() if '_load_highlights' in globals() else {}
+    _key, existed = _v48_direct_save_highlight(team1, team2, url, data=data)
+    _save_highlights(data)
+    context.user_data.pop('pending_highlight_add', None)
+    await update.message.reply_text(('🔁 تم تحديث' if existed else '✅ تم حفظ') + f' ملخص مباراة {team1} × {team2}')
+    return True
+
+
+async def delete_highlight_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    body = re.sub(r'^/\S+', '', update.message.text or '', count=1).strip()
+    team1, team2, _url, err = _v48_parse_highlight_line(body, require_url=False)
+    if not team1 or not team2:
+        await update.message.reply_text('اكتبها كذا:\n/حذف_ملخص السعودية * إسبانيا')
+        return
+    data = _load_highlights() if '_load_highlights' in globals() else {}
+    n = _v48_direct_delete_highlight(team1, team2, data=data)
+    _save_highlights(data)
+    if n:
+        await update.message.reply_text(f'🗑️ تم حذف ملخص مباراة {team1} × {team2}')
+    else:
+        await update.message.reply_text(f'ما لقيت ملخص محفوظ لمباراة {team1} × {team2}')
+
+
+async def delete_highlights_bulk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text or ''
+    body = re.sub(r'^/\S+', '', text, count=1).strip()
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    if not lines:
+        await update.message.reply_text('اكتبها كذا:\n/حذف_ملخصات\nالإكوادور * كوراساو\nهولندا * السويد')
+        return
+    if len(lines) > V48_HIGHLIGHTS_BULK_LIMIT:
+        await update.message.reply_text(f'⚠️ أرسلت {len(lines)} سطر. الحد الأقصى {V48_HIGHLIGHTS_BULK_LIMIT}.')
+        return
+    wait = await update.message.reply_text(f'⏳ جاري حذف {len(lines)} ملخص...')
+    data = _load_highlights() if '_load_highlights' in globals() else {}
+    deleted = failed = 0
+    errors = []
+    for i, line in enumerate(lines, start=1):
+        team1, team2, _url, err = _v48_parse_highlight_line(line, require_url=False)
+        if not team1 or not team2:
+            failed += 1; errors.append(f'السطر {i}: صيغة المباراة غير صحيحة'); continue
+        n = _v48_direct_delete_highlight(team1, team2, data=data)
+        if n:
+            deleted += 1
+        else:
+            failed += 1; errors.append(f'السطر {i}: غير موجود')
+    _save_highlights(data)
+    msg = ['🗑️ تقرير حذف الملخصات', f'✅ تم حذف: {deleted}', f'⚠️ لم يُحذف: {failed}']
+    if errors:
+        msg += ['', 'التفاصيل:'] + [f'- {x}' for x in errors[:10]]
+    await wait.edit_text('\n'.join(msg))
+
+
+# تحسين استخراج أسماء الهدافين من ESPN Summary بشكل أوسع للمباشر والنتائج.
+def _v48_extract_scorers_from_summary_json(data, debug=None):
+    debug = debug if debug is not None else []
+    out = []
+
+    def add(name, minute='', own=False, pen=False):
+        try:
+            _v43_add_goal(out, name, minute, own=own, pen=pen)
+        except Exception:
+            line = str(name or '').strip()
+            if line and line not in out:
+                out.append(line)
+
+    def get_name_from_any(x):
+        if not isinstance(x, dict):
+            return ''
+        # مباشر من dict اللاعب
+        for path in [('athlete',), ('player',), ('scorer',), ('participant',)]:
+            v = x.get(path[0])
+            if isinstance(v, dict):
+                nm = v.get('displayName') or v.get('shortName') or v.get('name') or v.get('fullName')
+                nm = _v43_clean_person_name(nm) if '_v43_clean_person_name' in globals() else str(nm or '').strip()
+                if nm: return nm
+        # قوائم المشاركين، الأهم أول اسم في حدث goal
+        for k in ['athletes','players','participants','competitors']:
+            arr = x.get(k)
+            if isinstance(arr, list):
+                for it in arr:
+                    if isinstance(it, dict):
+                        a = it.get('athlete') if isinstance(it.get('athlete'), dict) else it
+                        nm = a.get('displayName') or a.get('shortName') or a.get('name') or a.get('fullName')
+                        nm = _v43_clean_person_name(nm) if '_v43_clean_person_name' in globals() else str(nm or '').strip()
+                        if nm: return nm
+        return ''
+
+    def node_blob(x):
+        try:
+            return _v43_node_text_blob(x)
+        except Exception:
+            vals=[]
+            if isinstance(x, dict):
+                for k,v in x.items():
+                    if k.lower() in ['text','description','displaytext','shorttext','headline','summary','name','type','playtype']:
+                        vals.append(str(v))
+            return ' '.join(vals)
+
+    def minute_from(x, blob=''):
+        try:
+            return _v43_minute_from_node(x, blob)
+        except Exception:
+            m = re.search(r"([1-9][0-9]{0,2}(?:\+[0-9]{1,2})?)\s*['’]", str(blob or ''))
+            return m.group(1) if m else ''
+
+    def is_goal_node(x, blob):
+        if not isinstance(x, dict):
+            return False
+        b = str(blob or '')
+        # ESPN كثير يستخدم type.id=70/scoreValue أو scoringPlay
+        typ = x.get('type')
+        tblob = ''
+        if isinstance(typ, dict):
+            tblob = ' '.join(str(typ.get(k,'')) for k in ['text','description','displayName','name','abbreviation','id'])
+        elif typ is not None:
+            tblob = str(typ)
+        if x.get('scoringPlay') is True or x.get('scoreValue') in (1, '1'):
+            return True
+        if re.search(r'\b(goal|penalty goal|own goal|scored|scores)\b', b + ' ' + tblob, re.I):
+            if not re.search(r'goals against|goals for|expected goals|goal difference|shots on goal|total goals|standings|highlight|preview', b, re.I):
+                return True
+        return False
+
+    def walk(x):
+        if isinstance(x, dict):
+            blob = node_blob(x)
+            if is_goal_node(x, blob):
+                own = bool(re.search(r'own goal', blob, re.I))
+                pen = bool(re.search(r'penalty', blob, re.I))
+                name = get_name_from_any(x)
+                if not name:
+                    try:
+                        name = _v43_extract_goal_name_from_text(blob)
+                    except Exception:
+                        name = ''
+                add(name, minute_from(x, blob), own=own, pen=pen)
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for it in x:
+                walk(it)
+
+    # بعض ESPN dumps فيها صيغ وصفية فقط
+    try:
+        dump = json.dumps(data, ensure_ascii=False)
+        patterns = [
+            r'Goal!.*?\.\s*([A-ZÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ\'’\.\- ]{2,55})\s*\(',
+            r'([A-ZÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ\'’\.\- ]{2,55})\s+(?:Penalty Goal|Own Goal|Goal)\b',
+        ]
+        for pat in patterns:
+            for mm in re.finditer(pat, dump, re.I):
+                add(mm.group(1), '')
+    except Exception:
+        pass
+    walk(data)
+    # تنظيف وتكرار
+    seen, clean = set(), []
+    for x in out:
+        s = str(x or '').strip()
+        if not s: continue
+        key = re.sub(r'\s+', ' ', s.lower())
+        if key not in seen:
+            seen.add(key); clean.append(s)
+    debug.append(f'PATCH18 ESPN Summary parser: {len(clean)}')
+    return clean[:12]
+
+
+# Override parser المستخدم داخل _v43_fetch_espn_summary_scorers
+_v43_extract_scorers_from_summary_json = _v48_extract_scorers_from_summary_json
+
+
+def _v48_event_id_from_obj(obj):
+    eid = str((obj or {}).get('event_id') or '').replace('espn_', '').strip()
+    if eid:
+        return eid
+    for k in ['summary_url','highlight_url','url']:
+        s = str((obj or {}).get(k) or '')
+        m = re.search(r'(?:gameId|event)[=/](\d{5,})|gameId/(\d{5,})', s)
+        if m:
+            return next(g for g in m.groups() if g)
+    return ''
+
+
+def _v48_complete_live_goals(obj, m, d=None, force=True):
+    if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
+        return obj
+    total = _v41_total_goals(obj) if '_v41_total_goals' in globals() else 0
+    if total <= 0:
+        obj['scorers'] = []
+        obj['goals_source'] = 'لا يوجد أهداف'
+        return obj
+    debug = []
+    eid = _v48_event_id_from_obj(obj) or str((m or {}).get('event_id') or '').replace('espn_', '')
+    if eid:
+        obj['event_id'] = eid
+    try:
+        # هذا نفس مسار النتائج متعدد المصادر
+        obj = _v43_complete_goals_multi(obj, m, d or (m or {}).get('date'), force=True, debug=debug)
+    except Exception as e:
+        debug.append(f'complete_goals_multi error: {str(e)[:70]}')
+    # إذا لسه ناقص، نضرب ESPN Summary مباشرة مرة ثانية بالـ event_id
+    try:
+        if not _v43_goals_complete(obj) and eid:
+            sc = _v43_fetch_espn_summary_scorers(eid, debug=debug)
+            merged = _v43_merge_scorers(obj.get('scorers') or [], sc, total=total)
+            obj['scorers'] = merged[:total]
+            if sc:
+                obj['goals_source'] = 'ESPN Summary'
+    except Exception as e:
+        debug.append(f'ESPN direct goals error: {str(e)[:70]}')
+    # لا تكتب لا يوجد أهداف إذا النتيجة فيها أهداف.
+    if not (obj.get('scorers') or []):
+        obj['goals_source'] = 'قيد التحديث'
+    obj['goal_debug'] = list(debug)[-12:]
+    try:
+        _v43_cache_goal_debug(m, debug)
+    except Exception:
+        pass
+    return obj
+
+
+# Override مباشر الآن: لا يرجع للمستخدم قبل محاولة إكمال الأهداف بنفس دوال النتائج.
+def _v40_fetch_live_for_fixture(m, force=False):
+    d = _normalize_date_arg((m or {}).get('date')) or _normalize_date_arg(_v41_active_live_date())
+    if not force:
+        try:
+            cached = _v43_get_cached_match_result(m)
+            if isinstance(cached, dict) and _patch6_numeric_score(cached) and _v43_goals_complete(cached):
+                return cached
+        except Exception:
+            pass
+    try:
+        obj = _v41_fetch_result_for_fixture(m, d, force=True, allow_seed=True)
+    except Exception:
+        obj = None
+    if isinstance(obj, dict) and _patch6_numeric_score(obj):
+        obj = _v48_complete_live_goals(obj, m, d, force=True)
+        try:
+            _v43_put_cached_match_result(m, obj, obj.get('actual_source') or obj.get('source') or 'ESPN')
+        except Exception:
+            pass
+        try:
+            _save_fast_live_cache(m.get('team1'), m.get('team2'), d, obj)
+        except Exception:
+            pass
+        return obj
+    return obj
+
+
+# الكابشن: نفس النتائج، لا يكتب لا يوجد أهداف إلا إذا 0-0.
+def build_live_caption(match, mode_label='ESPN'):
+    match = match or {}
+    lines = [f"{match.get('team1','')} {match.get('score1','-')} - {match.get('score2','-')} {match.get('team2','')}"]
+    st = match.get('status') or match.get('minute') or ''
+    if st:
+        lines.append(str(st))
+    lines.append('')
+    total = 0
+    try:
+        total = _v41_total_goals(match)
+    except Exception:
+        pass
+    scorers = match.get('scorers') or []
+    if total <= 0:
+        lines.append('⚽ لا يوجد أهداف')
+    elif scorers:
+        lines.append('⚽ الهدافون:')
+        for s in scorers[:total]:
+            lines.append(f'- {s}')
+        if len(scorers) < total:
+            for i in range(len(scorers)+1, total+1):
+                lines.append(f'- الهدف رقم {i} قيد التحديث')
+    else:
+        lines.append('⚽ الهدافون قيد التحديث')
+        for i in range(1, total+1):
+            lines.append(f'- الهدف رقم {i} قيد التحديث')
+    src = match.get('actual_source') or match.get('source') or mode_label
+    gsrc = match.get('goals_source') or ''
+    lines += ['', f'المصدر: {src}' + (f' | الأهداف: {gsrc}' if gsrc else '')]
+    link = match.get('summary_url_manual') or match.get('highlight_url') or match.get('summary_url') or ''
+    if link:
+        lines.append(f'🎞️ ملخص المباراة: {link}')
+    return '\n'.join([str(x) for x in lines if x is not None]).strip()
+
+# ==================== END PATCH18 ====================
+
 if __name__ == "__main__":
     main()
