@@ -13684,7 +13684,7 @@ def main():
     app.add_handler(CallbackQueryHandler(previous_results_callback, pattern=r"^res\|"))
     # مهم: لا نخلي معالج تحديث المباريات يلقط أوامر السلاش العربية مثل /استيراد_ملف و /إضافة_متسابق
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^(?:📺 مباشر الآن|📅 مباريات اليوم|📅 المباريات القادمة|📊 ترتيب المجموعات|🏆 هدافين البطولة|✅ المتأهلون لدور 32|🚪 المغادرون من البطولة|📋 نتائج المباريات|🎮 فانتزي المصيف|ℹ️ طريقة الاستخدام|(?:↩️\s*)?إلغاء|الغاء|القائمة|ابدا|اطل|زبد|المصيف|ستارت)$"), public_reply_menu_router))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.Regex(r"^/"), admin_only(fixtures_update_text_handler)))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.Regex(r"^/"), admin_only(text_state_router)))
 
     # استيراد ونسخ
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:استيراد_ملف|استيراد\s+ملف|استيراد|استيراد_اكسل|استيراد_إكسل|استيراد_excel)(?:\s|$)"), admin_only(import_excel_file)))
@@ -24048,6 +24048,895 @@ async def fixtures_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text(f"تعذر تنفيذ خيار المباريات ❌\n{str(e)[:400]}")
 
 # ==================== END V31.2 PATCH ====================
+
+
+
+# ==================== V31.4 PATCH: FIFA status + strict scorers + manual summaries/goals + full results ====================
+
+FIFA_STATUS_URL = "https://www.fifa.com/ar/tournaments/mens/worldcup/canadamexicousa2026/articles/group-stage-permutations-qualify-ar"
+MANUAL_MATCH_DATA_FILE = "manual_match_data.json"
+WORLD_CUP_START_RESULTS_DATE = "11/06/2026"
+
+
+def _load_manual_match_data():
+    if os.path.exists(MANUAL_MATCH_DATA_FILE):
+        try:
+            with open(MANUAL_MATCH_DATA_FILE, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+    return {}
+
+
+def _save_manual_match_data(data):
+    with open(MANUAL_MATCH_DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data or {}, f, ensure_ascii=False, indent=2)
+
+
+def _manual_key_from_fixture(m):
+    if not m:
+        return ""
+    mid = normalize_name(m.get("id") or "")
+    if mid:
+        return mid
+    return simple_key(f"{m.get('date','')}|{m.get('team1','')}|{m.get('team2','')}")
+
+
+def _manual_key_from_match(match):
+    if not isinstance(match, dict):
+        return ""
+    if match.get("fixture_id"):
+        return normalize_name(match.get("fixture_id"))
+    return simple_key(f"{match.get('date','')}|{match.get('team1','')}|{match.get('team2','')}")
+
+
+def _find_fixture_for_pair(team1, team2, date_hint=None):
+    dates = []
+    if date_hint:
+        d = _normalize_date_arg(date_hint)
+        if d:
+            dates.append(d)
+        elif re.fullmatch(r"\d{8}", str(date_hint or "")):
+            dates.append(f"{str(date_hint)[6:8]}/{str(date_hint)[4:6]}/{str(date_hint)[0:4]}")
+    try:
+        d = _v29_active_fixture_date()
+        if d:
+            dates.append(d)
+    except Exception:
+        pass
+    for d in [x for x in dates if x]:
+        for m in _fixtures_for_date(d):
+            if _v31_team_same(m.get("team1"), team1) and _v31_team_same(m.get("team2"), team2):
+                return m
+            if _v31_team_same(m.get("team1"), team2) and _v31_team_same(m.get("team2"), team1):
+                return m
+    for m in _all_fixtures():
+        if _v31_team_same(m.get("team1"), team1) and _v31_team_same(m.get("team2"), team2):
+            return m
+        if _v31_team_same(m.get("team1"), team2) and _v31_team_same(m.get("team2"), team1):
+            return m
+    return None
+
+
+def _merge_manual_match_data(obj, fixture=None):
+    if not isinstance(obj, dict):
+        return obj
+    data = _load_manual_match_data()
+    key = ""
+    if fixture:
+        key = _manual_key_from_fixture(fixture)
+        obj["fixture_id"] = key
+        obj["date"] = fixture.get("date") or obj.get("date")
+    if not key:
+        match_fixture = _find_fixture_for_pair(obj.get("team1"), obj.get("team2"), obj.get("date") or obj.get("date_hint"))
+        if match_fixture:
+            key = _manual_key_from_fixture(match_fixture)
+            obj["fixture_id"] = key
+            obj["date"] = match_fixture.get("date") or obj.get("date")
+    manual = data.get(key, {}) if key else {}
+    # اليدوي فوق كل شيء
+    if manual.get("scorers"):
+        obj["scorers"] = _v28_sanitize_scorers(manual.get("scorers") or [])
+        obj["goals_source"] = "إدارة المصيف"
+    else:
+        obj["scorers"] = _v28_sanitize_scorers(obj.get("scorers") or [])
+    if manual.get("summary_url"):
+        obj["summary_url_manual"] = manual.get("summary_url")
+    return obj
+
+
+def _score_int_safe(v):
+    try:
+        s = str(v).strip()
+        if not re.fullmatch(r"\d{1,2}", s):
+            return 0
+        return int(s)
+    except Exception:
+        return 0
+
+
+def _is_zero_zero(obj):
+    return _score_int_safe((obj or {}).get("score1")) == 0 and _score_int_safe((obj or {}).get("score2")) == 0
+
+
+_BAD_SCORER_TEXT = re.compile(
+    r"(?i)\b("
+    r"volley|header|super substitute|substitute|highlights?|match report|preview|recap|"
+    r"goal of the match|video|watch|assist|own goal against|goals against|goals for|expected goals|"
+    r"ملخص|فيديو|تقرير|تصدي|فرصة|القائم|العارضة|تسديدة"
+    r")\b"
+)
+
+
+def _minute_regex():
+    # من 1 إلى 999 + وقت بدل ضائع، مثل 1' / 90+4' / 103'
+    return re.compile(r"(?<!\d)([1-9]\d{0,2}(?:\+\d{1,2})?)\s*['’]")
+
+
+def _clean_strict_scorer_line(s):
+    s = normalize_name(s)
+    s = re.sub(r"\s+", " ", s).strip(" -–—:•|،")
+    if not s or len(s) > 80:
+        return ""
+    if _BAD_SCORER_TEXT.search(s):
+        return ""
+    mins = _minute_regex().findall(s)
+    if not mins:
+        return ""
+    # الاسم قبل أول دقيقة
+    first = _minute_regex().search(s)
+    name_part = s[:first.start()].strip(" -–—:•|،")
+    # أحيانًا يجي "Goal - Player 12'" أو "Penalty Goal - Player 12'"
+    name_part = re.sub(r"(?i)\b(goal|penalty goal|own goal|scores|scored)\b", " ", name_part)
+    name_part = re.sub(r"\s+", " ", name_part).strip(" -–—:•|،")
+    if len(name_part) < 2:
+        return ""
+    # منع الاسم إذا كله وصف قصير أو رقم
+    if re.fullmatch(r"[\d\s'’+\-–—]+", name_part):
+        return ""
+    # إزالة الرموز الطويلة وترك الاسم
+    mins_txt = "، ".join([m + "'" for m in mins])
+    return f"{name_part} — {mins_txt}"
+
+
+def _v28_sanitize_scorers(items):
+    out = []
+    for item in items or []:
+        line = _clean_strict_scorer_line(item)
+        if line and line not in out:
+            out.append(line)
+    return out[:10]
+
+
+def _v28_extract_minutes(text):
+    text = str(text or "")
+    vals = []
+    for m in _minute_regex().finditer(text):
+        vals.append(m.group(1) + "'")
+    if not vals:
+        for m in re.finditer(r"(?:minute|min|دقيقة|الدقيقة)\s*([1-9]\d{0,2}(?:\+\d{1,2})?)", text, re.I):
+            vals.append(m.group(1) + "'")
+    return vals
+
+
+def _v28_extract_scorers_from_json(data):
+    records = []
+
+    # صيغ نصية واضحة فقط: Player - 1', 90+3'
+    try:
+        dump = json.dumps(data, ensure_ascii=False)
+    except Exception:
+        dump = str(data)
+    direct_pat = re.compile(r"([A-Z][A-Za-zÀ-ÖØ-öø-ÿ'\-. ]{2,60})\s*[-–—]\s*((?:[1-9]\d{0,2}(?:\+\d{1,2})?['’]\s*,?\s*)+)")
+    for m in direct_pat.finditer(dump):
+        raw = f"{m.group(1)} — {m.group(2)}"
+        clean = _clean_strict_scorer_line(raw)
+        if clean:
+            records.append(clean)
+
+    # أحداث ESPN الرسمية: لازم نوع الحدث هدف + لاعب + دقيقة
+    for node in _v28_walk_json(data) if '_v28_walk_json' in globals() else []:
+        if not isinstance(node, dict):
+            continue
+
+        fields = []
+        type_obj = node.get("type")
+        if isinstance(type_obj, dict):
+            fields.extend(str(type_obj.get(x, "")) for x in ["name", "displayName", "text", "description", "abbreviation", "shortName"])
+        for k in ["type", "playType", "eventType"]:
+            v = node.get(k)
+            if isinstance(v, str):
+                fields.append(v)
+        type_blob = " ".join(fields)
+        if not re.search(r"\b(goal|penalty goal|own goal)\b|هدف", type_blob, re.I):
+            continue
+        if re.search(r"goals against|goals for|expected goals|total goals", type_blob, re.I):
+            continue
+
+        name = ""
+        for k in ["athlete", "player", "participant", "scorer"]:
+            v = node.get(k)
+            if isinstance(v, dict):
+                name = v.get("displayName") or v.get("shortName") or v.get("name") or ""
+                if name:
+                    break
+        # fallback محدود من النص، لكن لازم دقيقة
+        blob_parts = []
+        for k in ["text", "detail", "displayText", "shortText"]:
+            v = node.get(k)
+            if isinstance(v, str):
+                blob_parts.append(v)
+        blob = " ".join(blob_parts)
+
+        minutes = []
+        for k in ["clock", "time", "minute", "displayTime", "shortDisplayTime", "gameTime", "displayClock"]:
+            v = node.get(k)
+            if isinstance(v, dict):
+                v = v.get("displayValue") or v.get("value") or v.get("text") or ""
+            if v is None:
+                continue
+            minutes.extend(_v28_extract_minutes(str(v)))
+            if not minutes and re.fullmatch(r"[1-9]\d{0,2}(?:\+\d{1,2})?", str(v).strip()):
+                minutes.append(str(v).strip() + "'")
+        minutes.extend(_v28_extract_minutes(blob))
+
+        if not name and minutes:
+            # مثال: Brian Brobbey Goal - Header - 5'
+            m = re.search(r"([A-Z][A-Za-zÀ-ÖØ-öø-ÿ'\-. ]{2,60})\s+(?:Goal|scores|scored)\b", blob, re.I)
+            if m:
+                name = m.group(1)
+
+        if name and minutes:
+            clean = _clean_strict_scorer_line(f"{name} — {'، '.join(minutes)}")
+            if clean:
+                records.append(clean)
+
+    out = []
+    for r in records:
+        if r not in out:
+            out.append(r)
+    return out[:10]
+
+
+_v314_old_fetch_live_match_data = fetch_live_match_data
+
+def fetch_live_match_data(team1, team2, mode="google", date_hint=None):
+    obj = None
+    try:
+        obj = _v314_old_fetch_live_match_data(team1, team2, mode, date_hint)
+    except Exception:
+        obj = None
+    if obj:
+        fixture = _find_fixture_for_pair(team1, team2, date_hint)
+        obj = _merge_manual_match_data(obj, fixture)
+        if _is_zero_zero(obj) and not (obj.get("goals_source") == "إدارة المصيف"):
+            obj["scorers"] = []
+        else:
+            obj["scorers"] = _v28_sanitize_scorers(obj.get("scorers") or [])
+    return obj
+
+
+def _manual_admin_live_keyboard(date_str=None):
+    rows = []
+    if date_str:
+        rows.append([
+            InlineKeyboardButton("🎞️ الملخصات", callback_data=f"livefx|summary_menu|{date_str}"),
+            InlineKeyboardButton("⚽ مسجلي الأهداف", callback_data=f"livefx|goals_menu|{date_str}"),
+        ])
+    return rows
+
+
+def _v29_live_today_keyboard(date_str=None, admin=False):
+    d = date_str or _v29_active_fixture_date()
+    rows = _v26_dedupe_fixture_matches(_fixtures_for_date(d)) if '_v26_dedupe_fixture_matches' in globals() else _fixtures_for_date(d)
+    kb_rows = []
+    if admin:
+        kb_rows.extend(_manual_admin_live_keyboard(d))
+    for m in rows:
+        if _has_unknown(m):
+            label = f"{_v26_short_time(m.get('time'))} — {m.get('note','تحدد لاحقًا')}"
+        else:
+            label = f"{m.get('team1')} × {m.get('team2')}"
+        kb_rows.append([InlineKeyboardButton(label[:58], callback_data=f"livefx|match|{m.get('id')}")])
+    kb_rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(kb_rows)
+
+
+async def live_match_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_override=None):
+    team1, team2, mode, date_hint = parse_live_command_text(update.message.text)
+    if mode_override:
+        mode = _norm_source_mode(mode_override)
+    if not team1 or not team2:
+        d = _v29_active_fixture_date()
+        if not d:
+            await update.message.reply_text("ما لقيت مباريات في ملف PDF.")
+            return
+        await update.message.reply_text(_v29_live_today_text(d), reply_markup=_v29_live_today_keyboard(d, admin=is_admin_user(update)))
+        return
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
+    kb = source_keyboard(context, payload)
+    wait = await update.message.reply_text(f"⏳ جاري البحث عن مباراة {team1} × {team2}\nالمصدر: {mode_label_ar(mode)}")
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(fetch_live_match_data, team1, team2, mode, date_hint), timeout=28)
+    except Exception:
+        data = None
+    if not data:
+        await wait.edit_text(
+            f"تعذر جلب المباراة من مصدر {mode_label_ar(mode)} ❌\n"
+            f"مباراة: {team1} × {team2}\nجرب مصدر ثاني من الأزرار.",
+            reply_markup=kb,
+        )
+        return
+    try:
+        path = render_live_match_card(data, mode_label_ar(mode))
+        await send_photo_path_markup(update.message, path, build_live_caption(data, mode_label_ar(mode)), kb)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await wait.edit_text(f"تم جلب النتيجة لكن تعذر تصميم الصورة ❌\n{str(e)[:180]}\n\n" + build_live_caption(data, mode_label_ar(mode)), reply_markup=kb)
+
+
+async def _manual_live_input_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mode = context.user_data.get("manual_live_input")
+    if not isinstance(mode, dict):
+        return False
+    kind = mode.get("kind")
+    mid = mode.get("match_id")
+    m = _fixture_by_id(mid)
+    if not m:
+        context.user_data.pop("manual_live_input", None)
+        await update.message.reply_text("لم أجد المباراة، أعد المحاولة من مباشر الآن.")
+        return True
+    key = _manual_key_from_fixture(m)
+    data = _load_manual_match_data()
+    data.setdefault(key, {
+        "date": m.get("date"),
+        "team1": m.get("team1"),
+        "team2": m.get("team2"),
+    })
+    txt = (update.message.text or "").strip()
+    if kind == "summary":
+        data[key]["summary_url"] = txt
+        msg = f"✅ تم حفظ رابط الملخص لـ {m.get('team1')} × {m.get('team2')}"
+    else:
+        lines = []
+        for line in txt.splitlines():
+            line = normalize_name(line)
+            if not line:
+                continue
+            clean = _clean_strict_scorer_line(line)
+            # إذا كتب الاسم بدون دقيقة، نحفظه يدويًا كما هو؟ القاعدة المعتمدة لا؛ نطلب دقيقة.
+            if clean:
+                lines.append(clean)
+        if not lines:
+            await update.message.reply_text("اكتب مسجلي الأهداف مع الدقيقة مثل:\nميسي 1'\nخاكبو 62'\n90+3' مقبولة.")
+            return True
+        data[key]["scorers"] = _unique_text(lines)
+        msg = f"✅ تم حفظ مسجلي الأهداف لـ {m.get('team1')} × {m.get('team2')}"
+    _save_manual_match_data(data)
+    context.user_data.pop("manual_live_input", None)
+    await update.message.reply_text(msg)
+    return True
+
+
+def _unique_text(seq):
+    out = []
+    for s in seq or []:
+        s = normalize_name(s)
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _manual_live_input_process(update, context):
+        return
+    return await fixtures_update_text_handler(update, context)
+
+
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    if len(parts) < 2:
+        await q.message.reply_text("تعذر قراءة اختيار المباراة.")
+        return
+    action = parts[1]
+    if action in {"summary_menu", "goals_menu"}:
+        if not is_admin_user(update):
+            await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+            return
+        d = parts[2] if len(parts) > 2 else _v29_active_fixture_date()
+        rows = _v26_dedupe_fixture_matches(_fixtures_for_date(d)) if '_v26_dedupe_fixture_matches' in globals() else _fixtures_for_date(d)
+        kb = []
+        target_action = "set_summary" if action == "summary_menu" else "set_goals"
+        for m in rows:
+            if _has_unknown(m):
+                continue
+            kb.append([InlineKeyboardButton(f"{m.get('team1')} × {m.get('team2')}", callback_data=f"livefx|{target_action}|{m.get('id')}")])
+        kb.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+        title = "اختر المباراة لإضافة رابط الملخص:" if action == "summary_menu" else "اختر المباراة لإضافة مسجلي الأهداف:"
+        await q.edit_message_text(title, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if action in {"set_summary", "set_goals"} and len(parts) >= 3:
+        if not is_admin_user(update):
+            await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+            return
+        mid = parts[2]
+        m = _fixture_by_id(mid)
+        if not m:
+            await q.message.reply_text("لم أجد المباراة.")
+            return
+        context.user_data["manual_live_input"] = {"kind": "summary" if action == "set_summary" else "goals", "match_id": mid}
+        prompt = "ارسل رابط ملخص المباراة الآن:" if action == "set_summary" else "ارسل مسجلي الأهداف مع الدقائق الآن:\nمثال:\nميسي 1'\nخاكبو 62'"
+        await q.edit_message_text(f"{m.get('team1')} × {m.get('team2')}\n\n{prompt}")
+        return
+
+    if action != "match" or len(parts) < 3:
+        return
+    mid = parts[2]
+    m = _fixture_by_id(mid)
+    if not m:
+        await q.message.reply_text("لم أجد المباراة في ملف PDF.")
+        return
+    if _has_unknown(m):
+        await q.message.reply_text("أطراف المباراة لم تتحدد بعد.")
+        return
+    team1, team2 = m.get("team1"), m.get("team2")
+    date_hint = _v28_espn_date(m.get("date")) if '_v28_espn_date' in globals() else m.get("date")
+    payload = {"kind": "live", "team1": team1, "team2": team2, "date_hint": date_hint}
+    kb = source_keyboard(context, payload)
+    wait = await q.message.reply_text(f"⏳ أجهز بطاقة {team1} × {team2} من ESPN...")
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(fetch_live_match_data, team1, team2, "espn", date_hint), timeout=28)
+    except Exception:
+        data = None
+    if not data:
+        await wait.edit_text(f"تعذر جلب المباراة من ESPN ❌\n{team1} × {team2}", reply_markup=kb)
+        return
+    data = _merge_manual_match_data(data, m)
+    try:
+        path = render_live_match_card(data, "ESPN")
+        await send_photo_path_markup(q.message, path, build_live_caption(data, "ESPN"), kb)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await wait.edit_text(f"تم جلب البيانات لكن تعذر تصميم البطاقة ❌\n{str(e)[:180]}\n\n" + build_live_caption(data, "ESPN"), reply_markup=kb)
+
+
+def _goal_status_lines(match):
+    scorers = _v28_sanitize_scorers((match or {}).get("scorers") or [])
+    if scorers:
+        return "⚽ الهدافون", scorers
+    if _is_zero_zero(match or {}):
+        return "⚽ لا يوجد أهداف", []
+    if _score_int_safe((match or {}).get("score1")) + _score_int_safe((match or {}).get("score2")) > 0:
+        return "⚽ الهدافون قيد التحديث", []
+    return "⚽ الهدافون قيد التحديث", []
+
+
+def build_live_caption(match, mode_label="رسمي"):
+    lines = [f"{match['team1']} {match['score1']} - {match['score2']} {match['team2']}"]
+    status_line = match.get("minute") or match.get("status") or ""
+    if match.get("status") and match.get("minute") and match.get("status") not in status_line:
+        status_line = f"{match['status']} — {match['minute']}"
+    if status_line:
+        lines.append(status_line)
+
+    title, scorers = _goal_status_lines(match)
+    lines.append("")
+    lines.append(title + (":" if scorers else ""))
+    for s in scorers[:8]:
+        lines.append(f"- {normalize_name(s)}")
+    if match.get("summary_url_manual"):
+        lines.append("")
+        lines.append(f"🎞️ ملخص المباراة: {match.get('summary_url_manual')}")
+    lines.append("")
+    lines.append(f"المصدر: {mode_label}")
+    return "\n".join(lines)
+
+
+def render_live_match_card(match, mode_label="رسمي"):
+    ensure_generated_dir()
+    width, height = 1200, 1350
+    img = _style4_clean_background(width, height)
+    draw = ImageDraw.Draw(img)
+    draw_text(draw, (width//2, 100), "مباشر الآن", get_font(62), fill="#FFFFFF")
+    draw_text(draw, (width//2, 165), f"المصدر: {mode_label}", get_font(28), fill="#FDE68A")
+
+    rounded_rect(draw, (80, 235, width-80, 820), radius=40, fill="#07132FDD", outline="#38BDF855", width=2)
+    paste_flag(img, match["team1"], (160, 320, 310, 420))
+    paste_flag(img, match["team2"], (width-310, 320, width-160, 420))
+    draw_text(draw, (245, 470), match["team1"], get_font(40), fill="#FFFFFF", max_width=280)
+    draw_text(draw, (width-245, 470), match["team2"], get_font(40), fill="#FFFFFF", max_width=280)
+    draw_text(draw, (width//2, 430), f"{match['score1']} - {match['score2']}", get_font(96), fill="#FFFFFF")
+    rounded_rect(draw, (width//2-170, 520, width//2+170, 590), radius=22, fill="#FBBF24", outline="#FFFFFF33", width=1)
+    status_line = match.get("minute") or match.get("status") or ""
+    if match.get("status") and match.get("minute") and match.get("status") not in status_line:
+        status_line = f"{match['status']} — {match['minute']}"
+    draw_text(draw, (width//2, 555), status_line, get_font(30), fill="#061633")
+
+    title, scorers = _goal_status_lines(match)
+    y = 640
+    draw_text(draw, (width//2, y), title, get_font(34), fill="#FDE68A")
+    y += 60
+    if scorers:
+        for item in scorers[:6]:
+            rounded_rect(draw, (120, y-18, width-120, y+36), radius=18, fill="#0B1E46", outline="#FFFFFF22", width=1)
+            draw_text(draw, (width//2, y+10), normalize_name(item), get_font(28), fill="#FFFFFF", max_width=880)
+            y += 64
+    else:
+        draw_text(draw, (width//2, y+12), title.replace("⚽ ", ""), get_font(32), fill="#FFFFFF", max_width=880)
+
+    if match.get("summary_url_manual"):
+        rounded_rect(draw, (140, 940, width-140, 1020), radius=22, fill="#FBBF24", outline="#FFFFFF33", width=1)
+        draw_text(draw, (width//2, 980), "🎞️ ملخص المباراة مضاف من إدارة المصيف", get_font(30), fill="#061633", max_width=820)
+
+    footer_event(draw, width, height)
+    out = os.path.join(GENERATED_DIR, f"live_{_safe_filename(match['team1'])}_{_safe_filename(match['team2'])}.png")
+    img.save(out, quality=95)
+    return out
+
+
+def _date_from_key_tuple(t):
+    y, m, d = t
+    return f"{d:02d}/{m:02d}/{y:04d}"
+
+
+def _date_to_datetime(d):
+    try:
+        dd, mm, yy = map(int, _normalize_date_arg(d).split("/"))
+        return datetime(yy, mm, dd)
+    except Exception:
+        return None
+
+
+def _v28_previous_result_dates():
+    start = _date_to_datetime(WORLD_CUP_START_RESULTS_DATE)
+    today_dt = datetime.utcnow() + timedelta(hours=3)
+    # لا نتجاوز آخر تاريخ في جدول البطولة لو كان اليوم أكبر
+    dates_from_fixtures = [_date_to_datetime(d) for d, _day in _fixture_dates()]
+    dates_from_fixtures = [d for d in dates_from_fixtures if d]
+    max_fixture = max(dates_from_fixtures) if dates_from_fixtures else today_dt
+    end = min(today_dt, max_fixture)
+    if not start or end < start:
+        return []
+    out = []
+    cur = start
+    day_names = ["الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
+    while cur.date() <= end.date():
+        dstr = f"{cur.day:02d}/{cur.month:02d}/{cur.year:04d}"
+        out.append((dstr, day_names[cur.weekday()]))
+        cur += timedelta(days=1)
+    return out
+
+
+def _v28_previous_results_keyboard():
+    rows, row = [], []
+    for d, day in _v28_previous_result_dates():
+        row.append(InlineKeyboardButton(f"{day} {d[:5]}", callback_data=f"res|day|{d}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _event_result_obj_for_text(event):
+    comp, competitors = _v28_event_competitors(event)
+    if len(competitors) < 2:
+        return None
+    parsed = []
+    for c in competitors[:2]:
+        tm = c.get("team") or {}
+        name = tm.get("displayName") or tm.get("shortDisplayName") or tm.get("name") or c.get("displayName") or ""
+        name = canonical_team_name(name) or normalize_name(name)
+        score = c.get("score", "0")
+        if isinstance(score, dict):
+            score = score.get("value") or score.get("displayValue") or score.get("score") or "0"
+        parsed.append((name, str(score)))
+    status = comp.get("status") or event.get("status") or {}
+    st_type = status.get("type") or {}
+    status_text = normalize_name(st_type.get("shortDetail") or st_type.get("detail") or st_type.get("name") or "")
+    event_id = str(event.get("id") or comp.get("id") or "")
+    obj = {
+        "team1": parsed[0][0],
+        "team2": parsed[1][0],
+        "score1": parsed[0][1],
+        "score2": parsed[1][1],
+        "status": status_text,
+        "event_id": event_id,
+        "scorers": [],
+        "source": "ESPN",
+    }
+    if event_id:
+        try:
+            obj["scorers"] = _v28_fetch_espn_scorers(event_id)
+        except Exception:
+            obj["scorers"] = []
+    # اربط اليدوي لو المباراة موجودة بجدولنا
+    fixture = _find_fixture_for_pair(obj["team1"], obj["team2"], comp.get("date") or "")
+    obj = _merge_manual_match_data(obj, fixture)
+    if _is_zero_zero(obj) and obj.get("goals_source") != "إدارة المصيف":
+        obj["scorers"] = []
+    else:
+        obj["scorers"] = _v28_sanitize_scorers(obj.get("scorers") or [])
+    return obj
+
+
+def _v28_result_text_for_date(date):
+    d = _normalize_date_arg(date)
+    espn_date = _v28_espn_date(d)
+    events = _fetch_espn_events_by_date(espn_date) if espn_date else []
+    title = d
+    for dd, day in _v28_previous_result_dates():
+        if dd == d:
+            title = f"{day} {d}"
+            break
+    lines = [f"🏆 نتائج مباريات {title} 🏆", "المصدر: ESPN", ""]
+    objs = []
+    for ev in events or []:
+        obj = _event_result_obj_for_text(ev)
+        if obj:
+            objs.append(obj)
+
+    if not objs:
+        # fallback على جدول PDF الموجود في البوت إذا ما رجع ESPN
+        matches = _v26_dedupe_fixture_matches(_fixtures_for_date(d)) if '_v26_dedupe_fixture_matches' in globals() else _fixtures_for_date(d)
+        for m in matches:
+            obj = _v28_fetch_espn_match_by_fixture(d, m)
+            if obj:
+                obj = _merge_manual_match_data(obj, m)
+                objs.append(obj)
+
+    if not objs:
+        return f"ما لقيت نتائج من ESPN بتاريخ {d} حاليًا."
+
+    for i, obj in enumerate(objs, start=1):
+        lines.append(f"{i}) {obj.get('team1')} {obj.get('score1','-')} - {obj.get('score2','-')} {obj.get('team2')}")
+        title_line, scorers = _goal_status_lines(obj)
+        if scorers:
+            lines.append("⚽ الهدافون:")
+            for s in scorers[:8]:
+                lines.append(f"- {s}")
+        else:
+            lines.append(title_line)
+        if obj.get("summary_url_manual"):
+            lines.append(f"🎞️ ملخص المباراة: {obj.get('summary_url_manual')}")
+        lines.append("")
+    lines.append("المصيف يضعكم بالحدث")
+    return "\n".join(lines).strip()
+
+
+# FIFA فقط للمتأهلين والمغادرين، بدون أخبار وبدون ESPN.
+def _fifa_status_from_html():
+    if not requests:
+        return [], []
+    try:
+        r = _requests_get(FIFA_STATUS_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+        if int(getattr(r, "status_code", 200) or 200) >= 400:
+            return [], []
+        html = getattr(r, "text", "") or ""
+    except Exception:
+        return [], []
+
+    # نحاول قراءة JSON أو HTML. FIFA قد يغير أسماء الكلاسات؛ لذلك هذا best-effort فقط.
+    txt = _v31_strip_html(html) if '_v31_strip_html' in globals() else re.sub(r"<[^>]+>", " ", html)
+    qualified, eliminated = [], []
+    # إذا الصفحة فيها ألفاظ عربية/إنجليزية حول المنتخب وحالة التأهل/الإقصاء
+    for team in WORLD_CUP_TEAMS:
+        variants = [team, _v31_team_name_en(team)]
+        hit_q = hit_e = False
+        for v in [x for x in variants if x]:
+            low = txt.lower()
+            for m in re.finditer(re.escape(str(v).lower()), low):
+                snip = low[max(0, m.start()-180):m.end()+180]
+                if any(k in snip for k in ["qualified", "qualify", "متأهل", "تأهل", "حسم التأهل", "الأخضر", "green"]):
+                    hit_q = True
+                if any(k in snip for k in ["eliminated", "out", "غادر", "إقصاء", "أقصي", "خرج", "الرمادي", "grey", "gray"]):
+                    hit_e = True
+        if hit_q and not hit_e:
+            qualified.append(team)
+        elif hit_e and not hit_q:
+            eliminated.append(team)
+    return _unique_teams(qualified, 32), _unique_teams(eliminated)
+
+
+def _v31_refresh_status_from_news(state=None):
+    # الاسم قديم للتوافق، لكن المصدر الآن FIFA فقط.
+    state = state or load_status_state()
+    q_auto, e_auto = _fifa_status_from_html()
+    state["qualified_auto"] = _unique_teams(q_auto, 32)
+    state["eliminated_auto"] = _unique_teams(e_auto)
+    state["updated_at"] = _now_riyadh_text()
+    state["updated_ts"] = _time.time()
+    state["source"] = "FIFA الرسمي فقط + تعديل يدوي"
+    save_status_state(state)
+    return state
+
+
+def _status_admin_keyboard(kind="qualified"):
+    if kind == "qualified":
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ إضافة متأهل", callback_data="status|pick|qualified")],
+            [InlineKeyboardButton("🚪 استبعاد منتخب", callback_data="status|pick|eliminated")],
+            [InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")],
+        ])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚪 استبعاد منتخب", callback_data="status|pick|eliminated")],
+        [InlineKeyboardButton("➕ إضافة متأهل", callback_data="status|pick|qualified")],
+        [InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")],
+    ])
+
+
+async def public_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else "qualified"
+    if action == "pick" and len(parts) >= 3:
+        if not is_admin_user(update):
+            await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
+            return
+        kind = parts[2]
+        key = f"spick_{kind}"
+        context.user_data[key] = []
+        title = "اختر المنتخبات المتأهلة من المجموعات ثم اضغط تأكيد:" if kind == "qualified" else "اختر المنتخبات المستبعدة من البطولة ثم اضغط تأكيد:"
+        await q.message.reply_text(title, reply_markup=_status_picker_keyboard(kind, []))
+        return
+
+    kind = action if action in {"qualified", "eliminated"} else "qualified"
+    state = load_status_state()
+    if _v31_state_needs_refresh(state):
+        try:
+            state = await asyncio.wait_for(asyncio.to_thread(_v31_refresh_status_from_news, state), timeout=45)
+        except Exception:
+            state = load_status_state()
+
+    if kind == "qualified":
+        teams = _status_effective_teams("qualified", state)
+        path = render_qualified32_board(teams)
+        kb = _status_admin_keyboard("qualified") if is_admin_user(update) else None
+        await send_photo_path_markup(q.message, path, _status_caption("qualified", teams, state), kb)
+    else:
+        teams = _status_effective_teams("eliminated", state)
+        path = render_eliminated_board(teams)
+        kb = _status_admin_keyboard("eliminated") if is_admin_user(update) else None
+        await send_photo_path_markup(q.message, path, _status_caption("eliminated", teams, state), kb)
+
+
+def _group_teams_from_fixtures():
+    return {f"المجموعة {code}": list(teams) for code, teams in WORLD_CUP_GROUPS}
+
+
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(update.message.text or "")
+    trigger_words = {"القائمة", "ابدا", "اطل", "زبد", "المصيف", "ستارت", "إلغاء", "الغاء", "↩️ إلغاء"}
+    if txt in trigger_words:
+        await public_menu_command(update, context)
+        return
+    if txt == "📺 مباشر الآن":
+        d = _v29_active_fixture_date() if '_v29_active_fixture_date' in globals() else None
+        await update.message.reply_text(_v29_live_today_text(d), reply_markup=_v29_live_today_keyboard(d, admin=is_admin_user(update)))
+        return
+    if txt in ["📅 مباريات اليوم", "📅 المباريات القادمة"]:
+        await update.message.reply_text("اختر اليوم المطلوب من المباريات القادمة:", reply_markup=_fixtures_dates_keyboard("single"))
+        return
+    if txt == "📊 ترتيب المجموعات":
+        await update.message.reply_text("اختر المجموعة أو 6 مجموعات أو جميع المجموعات:", reply_markup=_v29_group_menu_keyboard())
+        return
+    if txt == "🏆 هدافين البطولة":
+        wait = await update.message.reply_text("⏳ أسحب هدافي البطولة من ESPN...")
+        try:
+            items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers), timeout=35)
+            path = render_top_scorers_v29(items)
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+            await send_photo_path(update.message, path, "هدافو البطولة ✅\nالمصدر: ESPN")
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب هدافي البطولة ❌\n{str(e)[:300]}")
+        return
+    if txt == "✅ المتأهلون لدور 32":
+        state = load_status_state()
+        if _v31_state_needs_refresh(state):
+            try:
+                state = await asyncio.wait_for(asyncio.to_thread(_v31_refresh_status_from_news, state), timeout=45)
+            except Exception:
+                state = load_status_state()
+        teams = _status_effective_teams("qualified", state)
+        path = render_qualified32_board(teams)
+        kb = _status_admin_keyboard("qualified") if is_admin_user(update) else None
+        await send_photo_path_markup(update.message, path, _status_caption("qualified", teams, state), kb)
+        return
+    if txt == "🚪 المغادرون من البطولة":
+        state = load_status_state()
+        if _v31_state_needs_refresh(state):
+            try:
+                state = await asyncio.wait_for(asyncio.to_thread(_v31_refresh_status_from_news, state), timeout=45)
+            except Exception:
+                state = load_status_state()
+        teams = _status_effective_teams("eliminated", state)
+        path = render_eliminated_board(teams)
+        kb = _status_admin_keyboard("eliminated") if is_admin_user(update) else None
+        await send_photo_path_markup(update.message, path, _status_caption("eliminated", teams, state), kb)
+        return
+    if txt == "📋 نتائج المباريات":
+        prev = _v28_previous_result_dates()
+        if not prev:
+            await update.message.reply_text("ما فيه أيام سابقة للنتائج حتى الآن.")
+            return
+        await update.message.reply_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        return
+    if txt == "🎮 فانتزي المصيف":
+        await update.message.reply_text("قائمة فانتزي المصيف:", reply_markup=_fantasy_public_keyboard())
+        return
+    if txt == "ℹ️ طريقة الاستخدام":
+        await update.message.reply_text(_public_help_text())
+        return
+
+
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    action = (q.data or "").split("|", 1)[1] if "|" in (q.data or "") else "home"
+    if action == "home":
+        await q.edit_message_text("القائمة الرئيسية: اختر القسم المطلوب، أو استخدم القائمة الثابتة أسفل المحادثة.")
+        return
+    if action == "live":
+        d = _v29_active_fixture_date() if '_v29_active_fixture_date' in globals() else None
+        await q.edit_message_text(_v29_live_today_text(d), reply_markup=_v29_live_today_keyboard(d, admin=is_admin_user(update)))
+        return
+    if action == "fixtures":
+        await q.edit_message_text("اختر اليوم المطلوب من المباريات القادمة:", reply_markup=_fixtures_dates_keyboard("single"))
+        return
+    if action == "groups":
+        await q.edit_message_text("اختر المجموعة أو 6 مجموعات أو جميع المجموعات:", reply_markup=_v29_group_menu_keyboard())
+        return
+    if action == "fantasy":
+        await q.edit_message_text("قائمة فانتزي المصيف:", reply_markup=_fantasy_public_keyboard())
+        return
+    if action == "results":
+        prev = _v28_previous_result_dates()
+        if not prev:
+            await q.edit_message_text("ما فيه أيام سابقة للنتائج حتى الآن.")
+            return
+        await q.edit_message_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        return
+    if action == "scorers":
+        wait = await q.message.reply_text("⏳ أسحب هدافي البطولة من ESPN...")
+        try:
+            items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers), timeout=35)
+            path = render_top_scorers_v29(items)
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+            await send_photo_path(q.message, path, "هدافو البطولة ✅\nالمصدر: ESPN")
+        except Exception as e:
+            await wait.edit_text(f"تعذر جلب هدافي البطولة ❌\n{str(e)[:300]}")
+        return
+    if action == "help":
+        await q.edit_message_text(_public_help_text())
+        return
+
+# ==================== END V31.4 PATCH ====================
 
 if __name__ == "__main__":
     main()
