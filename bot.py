@@ -32372,6 +32372,806 @@ async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception:
         await wait_msg.edit_text(build_live_caption(obj, label), reply_markup=_v29_live_today_keyboard(active))
 
+
+
+# ==================== PATCH14: DATE WINDOW + FORCE CACHE CLEAR + MULTI SEARCH + FANTASY CARD BUTTON ====================
+# هذا الباتش محصور في:
+# - تصحيح جدول الأيام المبكرة داخل الكود.
+# - ربط النتائج والمباشر بنافذة 4 العصر إلى 4 العصر.
+# - تحديث/مسح كاش اليوم مع إجبار ESPN + مصادر البحث للأهداف.
+# - زر بطاقة فانتزي يربط على أمر /بطاقة الحالي مع كابشن مختصر.
+
+V44_PATCH_NAME = "PATCH14_DATE_CACHE_GOALS_FANTASY_CARD"
+V44_SEARCH_DEBUG_FILE = "search_attempts_v44.json"
+
+
+def _v44_apply_correct_early_fixtures():
+    """تصحيح جدول الأيام 11-19 داخل الكود؛ كان بعضه منسوخ من أيام لاحقة."""
+    fixed = [
+        {"id":"G11-1","date":"11/06/2026","day":"الخميس","time":"10:00 م","team1":"المكسيك","team2":"جنوب أفريقيا","stage":"دور المجموعات","group":"المجموعة أ"},
+        {"id":"G11-2","date":"11/06/2026","day":"الخميس","time":"5:00 فجراً","team1":"كوريا الجنوبية","team2":"التشيك","stage":"دور المجموعات","group":"المجموعة أ"},
+        {"id":"G12-1","date":"12/06/2026","day":"الجمعة","time":"10:00 م","team1":"كندا","team2":"البوسنة والهرسك","stage":"دور المجموعات","group":"المجموعة ب"},
+        {"id":"G12-2","date":"12/06/2026","day":"الجمعة","time":"4:00 فجراً","team1":"الولايات المتحدة","team2":"باراغواي","stage":"دور المجموعات","group":"المجموعة د"},
+        {"id":"G13-1","date":"13/06/2026","day":"السبت","time":"10:00 م","team1":"قطر","team2":"سويسرا","stage":"دور المجموعات","group":"المجموعة ب"},
+        {"id":"G13-2","date":"13/06/2026","day":"السبت","time":"1:00 فجراً","team1":"البرازيل","team2":"المغرب","stage":"دور المجموعات","group":"المجموعة ج"},
+        {"id":"G13-3","date":"13/06/2026","day":"السبت","time":"4:00 فجراً","team1":"هايتي","team2":"اسكتلندا","stage":"دور المجموعات","group":"المجموعة ج"},
+        {"id":"G13-4","date":"13/06/2026","day":"السبت","time":"7:00 صباحاً","team1":"أستراليا","team2":"تركيا","stage":"دور المجموعات","group":"المجموعة د"},
+        {"id":"G14-1","date":"14/06/2026","day":"الأحد","time":"8:00 م","team1":"ألمانيا","team2":"كوراساو","stage":"دور المجموعات","group":"المجموعة هـ"},
+        {"id":"G14-2","date":"14/06/2026","day":"الأحد","time":"11:00 م","team1":"هولندا","team2":"اليابان","stage":"دور المجموعات","group":"المجموعة و"},
+        {"id":"G14-3","date":"14/06/2026","day":"الأحد","time":"2:00 فجراً","team1":"ساحل العاج","team2":"الإكوادور","stage":"دور المجموعات","group":"المجموعة هـ"},
+        {"id":"G14-4","date":"14/06/2026","day":"الأحد","time":"5:00 فجراً","team1":"السويد","team2":"تونس","stage":"دور المجموعات","group":"المجموعة و"},
+        {"id":"G15-1","date":"15/06/2026","day":"الإثنين","time":"7:00 م","team1":"إسبانيا","team2":"الرأس الأخضر","stage":"دور المجموعات","group":"المجموعة ح"},
+        {"id":"G15-2","date":"15/06/2026","day":"الإثنين","time":"10:00 م","team1":"بلجيكا","team2":"مصر","stage":"دور المجموعات","group":"المجموعة ز"},
+        {"id":"G15-3","date":"15/06/2026","day":"الإثنين","time":"1:00 فجراً","team1":"السعودية","team2":"الأوروغواي","stage":"دور المجموعات","group":"المجموعة ح"},
+        {"id":"G15-4","date":"15/06/2026","day":"الإثنين","time":"4:00 فجراً","team1":"إيران","team2":"نيوزيلندا","stage":"دور المجموعات","group":"المجموعة ز"},
+        {"id":"G16-1","date":"16/06/2026","day":"الثلاثاء","time":"10:00 م","team1":"فرنسا","team2":"السنغال","stage":"دور المجموعات","group":"المجموعة ط"},
+        {"id":"G16-2","date":"16/06/2026","day":"الثلاثاء","time":"1:00 صباحاً","team1":"العراق","team2":"النرويج","stage":"دور المجموعات","group":"المجموعة ط"},
+        {"id":"G16-3","date":"16/06/2026","day":"الثلاثاء","time":"4:00 فجراً","team1":"الأرجنتين","team2":"الجزائر","stage":"دور المجموعات","group":"المجموعة ي"},
+        {"id":"G16-4","date":"16/06/2026","day":"الثلاثاء","time":"7:00 صباحاً","team1":"النمسا","team2":"الأردن","stage":"دور المجموعات","group":"المجموعة ي"},
+        {"id":"G17-1","date":"17/06/2026","day":"الأربعاء","time":"8:00 م","team1":"البرتغال","team2":"الكونغو الديمقراطية","stage":"دور المجموعات","group":"المجموعة ك"},
+        {"id":"G17-2","date":"17/06/2026","day":"الأربعاء","time":"11:00 م","team1":"إنجلترا","team2":"كرواتيا","stage":"دور المجموعات","group":"المجموعة ل"},
+        {"id":"G17-3","date":"17/06/2026","day":"الأربعاء","time":"2:00 صباحاً","team1":"غانا","team2":"بنما","stage":"دور المجموعات","group":"المجموعة ل"},
+        {"id":"G17-4","date":"17/06/2026","day":"الأربعاء","time":"5:00 فجراً","team1":"أوزبكستان","team2":"كولومبيا","stage":"دور المجموعات","group":"المجموعة ك"},
+        {"id":"G18-1","date":"18/06/2026","day":"الخميس","time":"7:00 م","team1":"التشيك","team2":"جنوب أفريقيا","stage":"دور المجموعات","group":"المجموعة أ"},
+        {"id":"G18-2","date":"18/06/2026","day":"الخميس","time":"10:00 م","team1":"سويسرا","team2":"البوسنة والهرسك","stage":"دور المجموعات","group":"المجموعة ب"},
+        {"id":"G18-3","date":"18/06/2026","day":"الخميس","time":"1:00 صباحاً","team1":"كندا","team2":"قطر","stage":"دور المجموعات","group":"المجموعة ب"},
+        {"id":"G18-4","date":"18/06/2026","day":"الخميس","time":"4:00 فجراً","team1":"المكسيك","team2":"كوريا الجنوبية","stage":"دور المجموعات","group":"المجموعة أ"},
+        {"id":"G19-1","date":"19/06/2026","day":"الجمعة","time":"10:00 م","team1":"الولايات المتحدة","team2":"أستراليا","stage":"دور المجموعات","group":"المجموعة د"},
+        {"id":"G19-2","date":"19/06/2026","day":"الجمعة","time":"1:00 صباحاً","team1":"اسكتلندا","team2":"المغرب","stage":"دور المجموعات","group":"المجموعة ج"},
+        {"id":"G19-3","date":"19/06/2026","day":"الجمعة","time":"3:30 فجراً","team1":"البرازيل","team2":"هايتي","stage":"دور المجموعات","group":"المجموعة ج"},
+        {"id":"G19-4","date":"19/06/2026","day":"الجمعة","time":"6:00 صباحاً","team1":"تركيا","team2":"باراغواي","stage":"دور المجموعات","group":"المجموعة د"},
+    ]
+    try:
+        globals()['_EARLY_GROUP_FIXTURES_1106_1906'] = fixed
+    except Exception:
+        pass
+
+_v44_apply_correct_early_fixtures()
+
+
+def _v44_parse_date(d):
+    d = _normalize_date_arg(d)
+    m = re.match(r'(\d{1,2})/(\d{1,2})/(\d{4})', d or '')
+    if not m:
+        return None
+    day, mo, yr = map(int, m.groups())
+    return datetime(yr, mo, day)
+
+
+def _v44_shift_date(d, days=0):
+    base = _v44_parse_date(d)
+    if not base:
+        return _normalize_date_arg(d)
+    return (base + timedelta(days=days)).strftime('%d/%m/%Y')
+
+
+def _v44_window_bounds_ksa(d):
+    base = _v44_parse_date(d)
+    if not base:
+        return None, None
+    start = base.replace(hour=16, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    return start, end
+
+
+def _v44_event_dt_ksa(ev):
+    try:
+        iso = (ev or {}).get('date') or ''
+        if not iso:
+            return None
+        dt = datetime.fromisoformat(iso.replace('Z', '+00:00'))
+        try:
+            from zoneinfo import ZoneInfo
+            dt = dt.astimezone(ZoneInfo('Asia/Riyadh')).replace(tzinfo=None)
+        except Exception:
+            # إذا تعذر zoneinfo نضيف 3 ساعات لتوقيت UTC.
+            if getattr(dt, 'tzinfo', None) is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            dt = dt + timedelta(hours=3)
+        return dt
+    except Exception:
+        return None
+
+
+def _v44_event_in_window(ev, d):
+    start, end = _v44_window_bounds_ksa(d)
+    dt = _v44_event_dt_ksa(ev)
+    if not (start and end and dt):
+        return False
+    return start <= dt < end
+
+
+def _v44_event_sort_key(ev):
+    dt = _v44_event_dt_ksa(ev)
+    return dt or datetime(2099, 1, 1)
+
+
+def _v44_espn_events_around_date(d, force=False, debug=None):
+    """يسحب ESPN لليوم السابق/المختار/التالي؛ ثم يستخدم نافذة 4 العصر-4 العصر."""
+    debug = debug if debug is not None else []
+    d = _normalize_date_arg(d)
+    all_events, seen = [], set()
+    for off in (-1, 0, 1):
+        dd = _v44_shift_date(d, off)
+        try:
+            evs = _v41_espn_day_events(dd, force=force, debug=debug) if '_v41_espn_day_events' in globals() else []
+        except Exception as e:
+            debug.append(f'ESPN {dd}: خطأ {str(e)[:70]}')
+            evs = []
+        debug.append(f'ESPN تاريخ مرن {dd}: {len(evs or [])} مباراة')
+        for ev in evs or []:
+            eid = str((ev or {}).get('id') or '')
+            key = eid or str(hash(str(ev)))
+            if key not in seen:
+                seen.add(key)
+                all_events.append(ev)
+    filtered = [ev for ev in all_events if _v44_event_in_window(ev, d)]
+    filtered.sort(key=_v44_event_sort_key)
+    debug.append(f'نافذة {d} 4م→4م: {len(filtered)} مباراة من {len(all_events)}')
+    return filtered
+
+
+def _v44_clear_espn_day_cache(d):
+    try:
+        cache = _v41_load_json_file(V41_ESPN_DAY_CACHE_FILE, {})
+        if isinstance(cache, dict):
+            for off in (-1, 0, 1):
+                dd = _v44_shift_date(d, off)
+                key = f'espn:{_v41_date_to_espn(dd)}'
+                cache.pop(key, None)
+            _v41_save_json_file(V41_ESPN_DAY_CACHE_FILE, cache)
+    except Exception:
+        pass
+
+
+def _v44_clear_results_cache_for_matches(matches):
+    files = []
+    try:
+        files.append(V316_RESULTS_CACHE_FILE if 'V316_RESULTS_CACHE_FILE' in globals() else globals().get('MATCH_RESULTS_CACHE_FILE', 'match_results_cache.json'))
+    except Exception:
+        files.append('match_results_cache.json')
+    try:
+        if 'FAST_LIVE_CACHE_FILE' in globals():
+            files.append(FAST_LIVE_CACHE_FILE)
+    except Exception:
+        pass
+    keys = set()
+    for m in matches or []:
+        try:
+            keys.add(_v43_fixture_key(m))
+        except Exception:
+            pass
+        try:
+            keys.add(_v33_fixture_key(m))
+        except Exception:
+            pass
+        eid = str((m or {}).get('event_id') or '').replace('espn_', '').strip()
+        if eid:
+            keys.add('espn_event_' + eid)
+            keys.add('espn_' + eid)
+            keys.add(eid)
+    for fn in set([x for x in files if x]):
+        try:
+            data = _v41_load_json_file(fn, {})
+            if isinstance(data, dict):
+                changed = False
+                for k in list(data.keys()):
+                    if k in keys or any(str(k).endswith(str(x)) for x in keys if x):
+                        data.pop(k, None); changed = True
+                if changed:
+                    _v41_save_json_file(fn, data)
+        except Exception:
+            pass
+    # مسح تشخيص اليوم لهذه المباريات.
+    for fn in [V41_RESULT_DEBUG_FILE, V43_GOAL_DEBUG_FILE, V44_SEARCH_DEBUG_FILE]:
+        try:
+            data = _v41_load_json_file(fn, {})
+            if isinstance(data, dict):
+                for k in list(data.keys()):
+                    if k in keys or any(str(k).endswith(str(x)) for x in keys if x):
+                        data.pop(k, None)
+                _v41_save_json_file(fn, data)
+        except Exception:
+            pass
+
+
+def _v44_clear_day_cache(d):
+    """يمسح كاش اليوم المختار فقط، ويشمل اليوم/قبله/بعده في ESPN scoreboard."""
+    d = _normalize_date_arg(d)
+    dbg = []
+    # نستخدم force=False أولًا للحصول على نفس قائمة المباريات الموجودة حاليًا أو من ESPN/جدول.
+    matches = []
+    try:
+        matches.extend(_v43_results_fixtures_for_date(d, force=True, debug=dbg) or [])
+    except Exception:
+        pass
+    try:
+        matches.extend(_v40_fixtures_for_date(d) or [])
+    except Exception:
+        pass
+    # dedupe
+    uniq, seen = [], set()
+    for m in matches:
+        k = str(m.get('event_id') or m.get('id') or m)
+        if k not in seen:
+            seen.add(k); uniq.append(m)
+    _v44_clear_results_cache_for_matches(uniq)
+    _v44_clear_espn_day_cache(d)
+    dbg.append(f'مسح كاش اليوم: {d} / مباريات {len(uniq)}')
+    return dbg
+
+
+# نحفظ النسخ السابقة لاستخدامها كاحتياط.
+try:
+    _V44_PREV_FETCH_SEARCH_TEXT = _v34_fetch_search_text
+except Exception:
+    _V44_PREV_FETCH_SEARCH_TEXT = None
+try:
+    _V44_PREV_FANTASY_CALLBACK = fantasy_menu_callback
+except Exception:
+    _V44_PREV_FANTASY_CALLBACK = None
+
+
+def _v44_log_search_debug(query, lines):
+    try:
+        data = _v41_load_json_file(V44_SEARCH_DEBUG_FILE, {})
+        key = _v34_web_cache_key(query) if '_v34_web_cache_key' in globals() else str(abs(hash(query)))
+        data[key] = {'query': query, 'lines': list(lines or [])[-12:], 'at': _now_riyadh_text() if '_now_riyadh_text' in globals() else str(_v41_riyadh_now())}
+        _v41_save_json_file(V44_SEARCH_DEBUG_FILE, data)
+    except Exception:
+        pass
+
+
+def _v44_google_custom_search(query, timeout=6, debug=None):
+    debug = debug if debug is not None else []
+    key = (os.getenv('GOOGLE_SEARCH_KEY') or '').strip()
+    cx = (os.getenv('GOOGLE_SEARCH_CX') or '').strip()
+    if not key or not cx:
+        debug.append('Google Custom Search: غير مفعل')
+        return ''
+    try:
+        r = requests.get('https://www.googleapis.com/customsearch/v1', params={'key': key, 'cx': cx, 'q': query, 'num': 5, 'hl': 'ar'}, timeout=timeout)
+        if int(getattr(r, 'status_code', 0) or 0) >= 400:
+            debug.append(f'Google Custom Search: HTTP {getattr(r,"status_code","")}')
+            return ''
+        data = r.json() or {}
+        items = data.get('items') or []
+        debug.append(f'Google Custom Search: {len(items)} نتيجة')
+        parts = []
+        for it in items[:5]:
+            parts.extend([it.get('title') or '', it.get('snippet') or '', it.get('link') or ''])
+        return '\n'.join([x for x in parts if x])[:12000]
+    except Exception as e:
+        debug.append(f'Google Custom Search: خطأ {str(e)[:70]}')
+        return ''
+
+
+def _v44_serper_search(query, timeout=6, debug=None):
+    debug = debug if debug is not None else []
+    key = (os.getenv('SERPER_API_KEY') or '').strip()
+    if not key:
+        debug.append('Serper Google: غير مفعل')
+        return ''
+    try:
+        r = requests.post('https://google.serper.dev/search', headers={'X-API-KEY': key, 'Content-Type': 'application/json'}, json={'q': query, 'hl': 'ar', 'gl': 'sa', 'num': 8}, timeout=timeout)
+        if int(getattr(r, 'status_code', 0) or 0) >= 400:
+            debug.append(f'Serper Google: HTTP {getattr(r,"status_code","")}')
+            return ''
+        data = r.json() or {}
+        items = data.get('organic') or []
+        debug.append(f'Serper Google: {len(items)} نتيجة')
+        parts = []
+        for it in items[:6]:
+            parts.extend([it.get('title') or '', it.get('snippet') or '', it.get('link') or ''])
+        return '\n'.join([x for x in parts if x])[:12000]
+    except Exception as e:
+        debug.append(f'Serper Google: خطأ {str(e)[:70]}')
+        return ''
+
+
+def _v44_brave_search(query, timeout=6, debug=None):
+    debug = debug if debug is not None else []
+    key = (os.getenv('BRAVE_SEARCH_API_KEY') or '').strip()
+    if not key:
+        debug.append('Brave Search: غير مفعل')
+        return ''
+    try:
+        r = requests.get('https://api.search.brave.com/res/v1/web/search', headers={'X-Subscription-Token': key, 'Accept': 'application/json'}, params={'q': query, 'count': 8, 'search_lang': 'ar'}, timeout=timeout)
+        if int(getattr(r, 'status_code', 0) or 0) >= 400:
+            debug.append(f'Brave Search: HTTP {getattr(r,"status_code","")}')
+            return ''
+        data = r.json() or {}
+        items = ((data.get('web') or {}).get('results') or [])
+        debug.append(f'Brave Search: {len(items)} نتيجة')
+        parts = []
+        for it in items[:6]:
+            parts.extend([it.get('title') or '', it.get('description') or '', it.get('url') or ''])
+        return '\n'.join([x for x in parts if x])[:12000]
+    except Exception as e:
+        debug.append(f'Brave Search: خطأ {str(e)[:70]}')
+        return ''
+
+
+def _v44_external_search_text(query, timeout=6, force=False, debug=None):
+    """يحاول Google الرسمي ثم بدائل البحث ثم DuckDuckGo القديم."""
+    debug = debug if debug is not None else []
+    if not requests:
+        debug.append('بحث خارجي: requests غير متوفر')
+        return ''
+    # كاش البحث المشترك
+    cache = _v34_load_web_cache() if '_v34_load_web_cache' in globals() else {}
+    key = 'v44:' + (_v34_web_cache_key(query) if '_v34_web_cache_key' in globals() else re.sub(r'\W+', '_', str(query))[:120])
+    now = _fd_now_ts() if '_fd_now_ts' in globals() else __import__('time').time()
+    item = cache.get(key) if isinstance(cache, dict) else None
+    if not force and isinstance(item, dict) and now - float(item.get('ts', 0) or 0) < 6 * 60 * 60:
+        debug.append('بحث خارجي: من الكاش')
+        return item.get('text') or ''
+    methods = [_v44_google_custom_search, _v44_serper_search, _v44_brave_search]
+    for fn in methods:
+        txt = fn(query, timeout=timeout, debug=debug)
+        if txt:
+            cache[key] = {'ts': now, 'text': txt[:12000], 'query': query, 'source': fn.__name__}
+            try:
+                _v34_save_web_cache(cache)
+            except Exception:
+                pass
+            _v44_log_search_debug(query, debug)
+            return txt
+    # آخر احتياط: الدالة القديمة التي تستخدم DuckDuckGo HTML.
+    if callable(_V44_PREV_FETCH_SEARCH_TEXT):
+        try:
+            txt = _V44_PREV_FETCH_SEARCH_TEXT(query, timeout=min(timeout, 5), force=force)
+            debug.append('DuckDuckGo HTML: ' + ('وجد نص' if txt else 'لم يجد'))
+            if txt:
+                _v44_log_search_debug(query, debug)
+                return txt
+        except Exception as e:
+            debug.append(f'DuckDuckGo HTML: خطأ {str(e)[:70]}')
+    _v44_log_search_debug(query, debug)
+    return ''
+
+
+def _v34_fetch_search_text(query, timeout=4, force=False):
+    # Override: بحث متعدد المصادر بدل DuckDuckGo فقط.
+    return _v44_external_search_text(query, timeout=max(timeout, 6), force=force, debug=[])
+
+
+def _v34_complete_scorers_if_possible(obj, m, d, force=False):
+    if not isinstance(obj, dict):
+        return obj
+    total = _v34_expected_goals(obj) if '_v34_expected_goals' in globals() else _v41_total_goals(obj)
+    if total <= 0:
+        obj['scorers'] = []
+        return obj
+    current = _v34_scorers_from_obj(obj) if '_v34_scorers_from_obj' in globals() else (obj.get('scorers') or [])
+    if len(current) >= total:
+        obj['scorers'] = current[:total]
+        return obj
+    score_text = f"{obj.get('score1')}-{obj.get('score2')}"
+    debug = [f'بحث أهداف خارجي: البداية {len(current)} من {total}']
+    found = []
+    for q in _v34_scorer_queries(m, d, score_text=score_text):
+        debug.append(f'استعلام: {q[:90]}')
+        txt = _v44_external_search_text(q, timeout=7, force=force, debug=debug)
+        if not txt:
+            continue
+        try:
+            sc = _v34_parse_scorers_from_text(txt)
+        except Exception:
+            sc = []
+        debug.append(f'استخراج الهدافين من النص: {len(sc)}')
+        for x in sc:
+            if x not in current and x not in found:
+                found.append(x)
+        if len(current) + len(found) >= total:
+            break
+    if found:
+        obj['scorers'] = (current + found)[:total]
+        obj['actual_source'] = f"{obj.get('actual_source') or obj.get('source') or 'مصدر خارجي'} + بحث الهدافين"
+        obj['goals_source'] = f"{obj.get('goals_source') or 'ESPN'} + بحث خارجي"
+    else:
+        obj['scorers'] = current
+    try:
+        _v43_cache_goal_debug(m, debug)
+    except Exception:
+        pass
+    return obj
+
+
+def _v34_web_result_for_fixture(m, d, force=False):
+    d = _normalize_date_arg(d or m.get('date'))
+    score = None
+    all_text = []
+    debug = []
+    for q in _v34_result_queries(m, d, include_scorers=True):
+        debug.append(f'بحث نتيجة: {q[:90]}')
+        txt = _v44_external_search_text(q, timeout=7, force=force, debug=debug)
+        if txt:
+            all_text.append(txt)
+            score = _v34_parse_score_from_text(txt, m.get('team1'), m.get('team2'))
+            debug.append('تحليل النتيجة: ' + (f'{score[0]}-{score[1]}' if score else 'لم يستخرج'))
+            if score:
+                break
+    if not score:
+        try:
+            _v43_cache_goal_debug(m, debug)
+        except Exception:
+            pass
+        return None
+    joined = ' '.join(all_text)[:18000]
+    obj = {
+        'team1': m.get('team1'), 'team2': m.get('team2'),
+        'score1': str(score[0]), 'score2': str(score[1]),
+        'status': 'FT — انتهت المباراة',
+        'source': 'بحث خارجي', 'actual_source': 'بحث خارجي متعدد',
+        'scorers': _v34_parse_scorers_from_text(joined),
+    }
+    obj = _v34_complete_scorers_if_possible(obj, m, d, force=force)
+    return obj
+
+
+# Override: ESPN fixtures for selected result date are built from the 4pm-to-4pm window, not from a single calendar day.
+def _v43_results_fixtures_for_date(d, force=False, debug=None):
+    debug = debug if debug is not None else []
+    d = _normalize_date_arg(d)
+    events = []
+    try:
+        events = _v44_espn_events_around_date(d, force=force, debug=debug)
+    except Exception as e:
+        debug.append(f'ESPN window error: {str(e)[:80]}')
+    fixtures = []
+    for ev in events or []:
+        m = _v43_fixture_from_espn_event(ev, d)
+        if m:
+            fixtures.append(m)
+    if fixtures:
+        debug.append(f'ESPN نافذة اليوم: بنى {len(fixtures)} زر')
+        return fixtures
+    # إذا ESPN لم يرجع شيئًا نهائيًا، نستخدم الجدول الداخلي الصحيح كاحتياط للعرض فقط.
+    try:
+        fixtures = list(_v40_fixtures_for_date(d))
+        debug.append(f'جدول داخلي احتياط بعد فشل ESPN: {len(fixtures)} مباراة')
+        return fixtures
+    except Exception:
+        return []
+
+
+def _v41_espn_find_match(m, d=None, force=False, debug=None):
+    debug = debug if debug is not None else []
+    d = _normalize_date_arg(d or (m or {}).get('date'))
+    # إذا المباراة مبنية أصلًا من ESPN استخدم event_id مباشرة.
+    if isinstance(m, dict) and (m.get('event_raw') or str(m.get('id','')).startswith('espn_') or m.get('event_id')):
+        obj = _v43_event_score_obj(m, m.get('event_raw'), debug=debug)
+        if isinstance(obj, dict):
+            debug.append(f"ESPN event مباشر: {obj.get('event_id')} score={obj.get('score1')}-{obj.get('score2')}")
+            return obj
+    events = _v44_espn_events_around_date(d, force=force, debug=debug)
+    for ev in events:
+        try:
+            obj = _v41_event_matches_fixture(ev, m)
+            if isinstance(obj, dict) and (obj.get('event_id') or _patch6_numeric_score(obj)):
+                debug.append(f"ESPN window match: وجد event={obj.get('event_id')} {obj.get('score1','')}-{obj.get('score2','')}")
+                return obj
+        except Exception as e:
+            debug.append(f'ESPN window match خطأ: {str(e)[:55]}')
+    debug.append('ESPN window match: لم يطابق المباراة')
+    return None
+
+
+def _v43_espn_find_match(m, d=None, force=False, debug=None):
+    # نضمن أن مسارات PATCH13 تستخدم نفس منطق PATCH14.
+    return _v41_espn_find_match(m, d=d, force=force, debug=debug)
+
+
+def _v41_update_day_results(d, force=True):
+    d = _normalize_date_arg(d)
+    debug_all = []
+    if force:
+        debug_all.extend(_v44_clear_day_cache(d))
+    matches = _v43_results_fixtures_for_date(d, force=force, debug=debug_all)
+    updated = 0
+    for m in matches:
+        try:
+            obj = _v41_fetch_result_for_fixture(m, d, force=True if force else False, allow_seed=True)
+            if isinstance(obj, dict) and _patch6_numeric_score(obj):
+                updated += 1
+        except Exception as e:
+            debug_all.append(f"{m.get('team1')}×{m.get('team2')}: {str(e)[:60]}")
+    debug_all.append(f'تحديث اليوم انتهى: {updated}/{len(matches)}')
+    return updated, debug_all
+
+
+def _v33_results_matches_keyboard(d):
+    d = _normalize_date_arg(d)
+    rows = [
+        [InlineKeyboardButton("🧹 مسح كاش نتائج هذا اليوم", callback_data=f"res|clearday|{d}")],
+        [InlineKeyboardButton("🔄 تحديث نتائج هذا اليوم من ESPN", callback_data=f"res|refreshday|{d}")],
+    ]
+    debug = []
+    matches = _v43_results_fixtures_for_date(d, force=False, debug=debug)
+    for m in matches:
+        try:
+            if '_has_unknown' in globals() and _has_unknown(m):
+                continue
+        except Exception:
+            pass
+        rows.append([InlineKeyboardButton(_v43_match_label(m)[:62], callback_data=f"res|match|{d}|{m.get('id')}")])
+    if len(rows) == 2:
+        rows.append([InlineKeyboardButton("لا توجد مباريات لهذا التاريخ", callback_data="noop")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع للتواريخ", callback_data="res|dates")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v29_live_today_keyboard(date_str=None):
+    rows = []
+    active = _normalize_date_arg(date_str) if date_str else _v41_active_live_date()
+    if active:
+        rows.append([InlineKeyboardButton("🧹 مسح كاش مباشر اليوم", callback_data=f"livefx|clearday|{active}")])
+        rows.append([InlineKeyboardButton("🔄 تحديث مباشر الآن من ESPN", callback_data=f"livefx|refreshday|{active}")])
+    for m in _v40_live_rows(active):
+        rows.append([InlineKeyboardButton(_v40_live_button_label(m)[:62], callback_data=f"livefx|match|{m.get('id')}")])
+    if not rows or (len(rows) == 2 and active):
+        rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def previous_results_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    data = q.data or ''
+    if data == 'noop':
+        return
+    parts = data.split('|')
+    if data == 'res|dates':
+        await q.message.edit_text("اختر تاريخ النتائج:", reply_markup=_v28_previous_results_keyboard())
+        return
+    if len(parts) >= 3 and parts[0] == 'res' and parts[1] == 'day':
+        d = _normalize_date_arg(parts[2])
+        title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+        await q.message.edit_text(f"⚽ نتائج {title}\nنافذة اليوم من 4 العصر إلى 4 العصر. اختر مباراة أو حدّث اليوم:", reply_markup=_v33_results_matches_keyboard(d))
+        return
+    if len(parts) >= 3 and parts[0] == 'res' and parts[1] == 'clearday':
+        d = _normalize_date_arg(parts[2])
+        dbg = _v44_clear_day_cache(d)
+        title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+        txt = f"🧹 تم مسح كاش نتائج {title}.\nاضغط تحديث نتائج هذا اليوم من ESPN عشان يحاول يسحب النتيجة والأهداف من جديد."
+        try:
+            if '_is_admin' in globals() and _is_admin(q.from_user.id):
+                txt += "\n\n🔎 التشخيص:\n" + "\n".join(f"- {x}" for x in dbg[-8:])
+        except Exception:
+            pass
+        await q.message.edit_text(txt, reply_markup=_v33_results_matches_keyboard(d))
+        return
+    if len(parts) >= 3 and parts[0] == 'res' and parts[1] == 'refreshday':
+        d = _normalize_date_arg(parts[2])
+        try:
+            await q.message.edit_text(f"⏳ تحديث إجباري: أمسح كاش {d} ثم أسحب ESPN + الأهداف + البحث الخارجي...", reply_markup=None)
+        except Exception:
+            pass
+        try:
+            updated, dbg = await asyncio.wait_for(asyncio.to_thread(_v41_update_day_results, d, True), timeout=45)
+        except Exception as e:
+            updated, dbg = 0, [f"انتهى الوقت/خطأ: {str(e)[:80]}"]
+        title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+        txt = f"⚽ نتائج {title}\nتم تحديث {updated} مباراة.\nاختر مباراة للتفاصيل أو أعد التحديث:"
+        try:
+            if '_is_admin' in globals() and _is_admin(q.from_user.id) and dbg:
+                txt += "\n\n🔎 آخر محاولات:\n" + "\n".join(f"- {x}" for x in dbg[-10:])
+        except Exception:
+            pass
+        await q.message.edit_text(txt, reply_markup=_v33_results_matches_keyboard(d))
+        return
+    if len(parts) >= 4 and parts[0] == 'res' and parts[1] == 'match':
+        d = _normalize_date_arg(parts[2])
+        mid = parts[3]
+        m = _v43_find_fixture_by_mid(d, mid, force=False)
+        if not m:
+            await q.message.edit_text("لم أجد المباراة في ESPN ولا جدول البطولة.", reply_markup=_v33_results_matches_keyboard(d))
+            return
+        cached = _v43_get_cached_match_result(m)
+        if not isinstance(cached, dict) or not _patch6_numeric_score(cached) or not _v43_goals_complete(cached):
+            try:
+                await q.message.edit_text(f"⏳ أبحث عن نتيجة وأهداف {m.get('team1')} × {m.get('team2')}...", reply_markup=None)
+            except Exception:
+                pass
+            try:
+                cached = await asyncio.wait_for(asyncio.to_thread(_v41_fetch_result_for_fixture, m, d, True, True), timeout=35)
+            except Exception as e:
+                cached = None
+                try:
+                    _v43_cache_goal_debug(m, [f'callback timeout/error: {str(e)[:80]}'])
+                except Exception:
+                    pass
+        if isinstance(cached, dict) and _patch6_numeric_score(cached):
+            txt = _v41_result_detail_text(m, cached)
+            txt += _v43_admin_debug_text(q.from_user.id, m)
+        else:
+            txt = f"⚠️ لم أجد نتيجة {m.get('team1')} × {m.get('team2')} حاليًا.\nباقية ❌ حتى يتم تحديثها."
+            txt += _v43_admin_debug_text(q.from_user.id, m)
+        await q.message.edit_text(txt, reply_markup=_v33_results_matches_keyboard(d))
+        return
+    if len(parts) >= 2 and parts[0] == 'res':
+        d = _normalize_date_arg(parts[1])
+        title = _v26_fixture_title(d) if '_v26_fixture_title' in globals() else d
+        await q.message.edit_text(f"⚽ نتائج {title}\nاختر مباراة للتفاصيل أو اضغط تحديث اليوم:", reply_markup=_v33_results_matches_keyboard(d))
+
+
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    data = q.data or ''
+    if data == 'noop':
+        return
+    parts = data.split('|')
+    if len(parts) >= 3 and parts[1] == 'clearday':
+        d = _normalize_date_arg(parts[2])
+        dbg = _v44_clear_day_cache(d)
+        txt = _v29_live_today_text(d)
+        try:
+            if '_is_admin' in globals() and _is_admin(q.from_user.id):
+                txt += "\n\n🧹 تم مسح كاش مباشر اليوم.\n🔎 " + " / ".join(dbg[-3:])
+        except Exception:
+            pass
+        await q.message.edit_text(txt, reply_markup=_v29_live_today_keyboard(d))
+        return
+    if len(parts) >= 3 and parts[1] == 'refreshday':
+        d = _normalize_date_arg(parts[2])
+        try:
+            await q.message.edit_text(f"⏳ تحديث إجباري للمباشر {d}: ESPN + الأهداف + البحث الخارجي...", reply_markup=None)
+        except Exception:
+            pass
+        try:
+            updated, dbg = await asyncio.wait_for(asyncio.to_thread(_v41_update_day_results, d, True), timeout=45)
+        except Exception as e:
+            updated, dbg = 0, [f"انتهى الوقت/خطأ: {str(e)[:80]}"]
+        txt = _v29_live_today_text(d)
+        try:
+            if '_is_admin' in globals() and _is_admin(q.from_user.id):
+                txt += f"\n\n🔄 تم تحديث {updated} مباراة.\n🔎 " + " / ".join(dbg[-5:])
+        except Exception:
+            pass
+        await q.message.edit_text(txt, reply_markup=_v29_live_today_keyboard(d))
+        return
+    if len(parts) < 3 or parts[1] != 'match':
+        return
+    mid = parts[2]
+    active = _normalize_date_arg(_v41_active_live_date())
+    m = _v43_find_fixture_by_mid(active, mid, force=False)
+    if not m:
+        await q.message.reply_text("لم أجد المباراة في مباشر الآن.")
+        return
+    try:
+        await q.message.edit_text(f"⏳ جاري تحديث {m.get('team1')} × {m.get('team2')} من ESPN...", reply_markup=None)
+        wait_msg = q.message
+    except Exception:
+        wait_msg = await q.message.reply_text(f"⏳ جاري تحديث {m.get('team1')} × {m.get('team2')} من ESPN...")
+    try:
+        obj = await asyncio.wait_for(asyncio.to_thread(_v40_fetch_live_for_fixture, m, True), timeout=35)
+    except Exception:
+        obj = None
+    if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
+        await wait_msg.edit_text(f"⚽ {m.get('team1')} × {m.get('team2')}\nالحالة: قيد التحديث\nالمصدر: ESPN/بحث خارجي", reply_markup=_v29_live_today_keyboard(active))
+        return
+    label = obj.get('actual_source') or obj.get('source') or 'ESPN'
+    try:
+        path = render_live_match_card(obj, label)
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+        await send_photo_path(q.message, path, build_live_caption(obj, label))
+    except Exception:
+        await wait_msg.edit_text(build_live_caption(obj, label), reply_markup=_v29_live_today_keyboard(active))
+
+
+# Fantasy card button: يربط على أمر /بطاقة الحالي، مع كابشن مختصر بدون أفضل لاعب/كابتن/حارس.
+def _fantasy_public_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏆 الترتيب العام", callback_data="fantasy|ranking")],
+        [InlineKeyboardButton("🔥 نقاط اليوم", callback_data="fantasy|today_points")],
+        [InlineKeyboardButton("🪪 بطاقة فانتزي", callback_data="fantasy|card")],
+        [InlineKeyboardButton("👥 اختيارات المشاركين", callback_data="fantasy|participants")],
+        [InlineKeyboardButton("⭐ أساطير الفانتزي", callback_data="fantasy|legends")],
+        [InlineKeyboardButton("📋 نموذج المشاركة", callback_data="fantasy|template")],
+        [InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")],
+    ])
+
+
+def _v44_fantasy_card_participants_keyboard():
+    rows, row = [], []
+    names = list(PARTICIPANTS)
+    for idx, name in enumerate(names):
+        row.append(InlineKeyboardButton(name, callback_data=f"fantasy|cardpick|{idx}"))
+        if len(row) == 2:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("رجوع لفانتزي المصيف", callback_data="fantasy|menu")])
+    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v44_fantasy_card_caption(name, start_day=1, end_day=None):
+    try:
+        days = get_existing_days(start_day, 39)
+        end_day = end_day or (max(days) if days else 39)
+        stats = collect_stats(start_day, end_day)
+        rank = stats.get('ranking', []).index(name) + 1 if name in stats.get('ranking', []) else '-'
+        total = int((stats.get('totals') or {}).get(name, 0) or 0)
+        wins = int((stats.get('daily_wins') or {}).get(name, 0) or 0)
+        day_scores = (stats.get('scores_by_day') or {}).get(name, {}) or {}
+        if day_scores:
+            best_day = max(day_scores, key=lambda d: day_scores[d])
+            best_score = int(day_scores.get(best_day, 0) or 0)
+            best_line = f"اليوم {ordinal_day(best_day)} — {best_score} نقطة"
+        else:
+            best_line = "-"
+        win_word = "مرة واحدة" if wins == 1 else ("ولا مرة" if wins == 0 else f"{wins} مرات")
+        return (
+            "🪪 بطاقة فانتزي المصيف 2026\n\n"
+            f"👤 المشارك: {name}\n"
+            f"🏆 المركز العام: {rank}\n"
+            f"🔥 مجموع النقاط: {total} نقطة\n"
+            f"⭐ أساطير اليوم: {win_word}\n"
+            f"📈 أفضل يوم: {best_line}\n\n"
+            "المصيف يضعكم بالحدث 🏆"
+        )
+    except Exception:
+        return f"🪪 بطاقة فانتزي المصيف 2026\n\n👤 المشارك: {name}\n\nالمصيف يضعكم بالحدث 🏆"
+
+
+async def participant_card_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text or ""
+    query = re.sub(r"^/بطاقة\s*", "", text).strip()
+    name = find_participant_name(query)
+    if not name:
+        await update.message.reply_text("اكتب اسم المشارك بعد الأمر، مثال:\n/بطاقة فارس سالم")
+        return
+    try:
+        path = create_participant_card_image(name)
+        await send_photo_path(update, path, _v44_fantasy_card_caption(name))
+    except Exception as e:
+        await update.message.reply_text(f"تعذر إنشاء البطاقة ❌\n{e}")
+
+
+async def fantasy_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    parts = (q.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else "menu"
+    if action == "card":
+        await q.edit_message_text("🪪 اختر المشارك لعرض بطاقة الفانتزي:", reply_markup=_v44_fantasy_card_participants_keyboard())
+        return
+    if action == "cardpick" and len(parts) >= 3:
+        try:
+            idx = int(parts[2])
+        except Exception:
+            idx = -1
+        names = list(PARTICIPANTS)
+        if idx < 0 or idx >= len(names):
+            await q.message.reply_text("تعذر العثور على المشارك.", reply_markup=_fantasy_public_keyboard())
+            return
+        name = names[idx]
+        try:
+            path = create_participant_card_image(name)
+            await send_photo_path(q.message, path, _v44_fantasy_card_caption(name))
+            await q.message.reply_text("اختر مشارك آخر أو ارجع للقائمة:", reply_markup=_v44_fantasy_card_participants_keyboard())
+        except Exception as e:
+            await q.message.reply_text(f"تعذر إنشاء البطاقة ❌\n{e}", reply_markup=_fantasy_public_keyboard())
+        return
+    if callable(_V44_PREV_FANTASY_CALLBACK):
+        return await _V44_PREV_FANTASY_CALLBACK(update, context)
+    await q.edit_message_text("قائمة فانتزي المصيف:", reply_markup=_fantasy_public_keyboard())
+
+# ==================== END PATCH14 ====================
+
 # ==================== END PATCH13 ====================
 
 if __name__ == "__main__":
