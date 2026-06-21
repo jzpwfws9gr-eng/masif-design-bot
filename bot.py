@@ -35274,7 +35274,7 @@ def _v32_format_group_table(code, snap=None):
     rem = int(g.get("remaining") or 0)
     if rem:
         lines.append(f"المباريات المتبقية في المجموعة: {rem}")
-PLACEHOLDER
+    return "\n".join(lines).strip()
 
 
 def _v32_groups_keyboard(prefix="race"):
