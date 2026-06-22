@@ -43400,5 +43400,692 @@ def _v33_how_thirds_text(team):
 
 # ==================== END V38 PRECISE QUALIFICATION ENGINE PATCH ====================
 
+
+# ==================== V38 FINAL FAHAD HOTFIX ====================
+# اعتماد فهد النهائي:
+# - لا نضيف زر جديد لأفضل الثوالث؛ نغير اسم الزر الحالي إلى: 🥉 أفضل الثوالث الآن.
+# - زر التحديث لا يعتمد على كاش قديم: يسحب النتائج الحية من جديد.
+# - إجمالي الأهداف في لوحة البطولة = أهداف المباريات المنتهية + المباريات المباشرة ذات النتيجة الرقمية.
+# - هدافين البطولة من ESPN فقط، مع إجبار التحديث عند فتح زر الهدافين.
+# - شرح خصم أفضل ثالث يشرح أن الخصم يتغير حسب مجموعات أفضل الثوالث المتأهلة، ومعه زر كيف يتأهل منتخبك.
+# - إذا المنتخب متأهل رسميًا: تظهر رسالة مباشرة بالمركز والخصم القادم بدون أزرار احتمالات.
+# - إذا المنتخب مستبعد رسميًا: تظهر رسالة واضحة بسبب الاستبعاد بدون أزرار احتمالات.
+
+V38_FINAL_PATCH_NAME = "V38_FINAL_FAHD_HOTFIX"
+V38_ESPN_TOP_SCORERS_CACHE = {"ts": 0, "items": []}
+V38_ESPN_TOP_SCORERS_TTL = 180
+
+
+def _v38_final_now_ts():
+    try:
+        return _v32_now_ts()
+    except Exception:
+        return datetime.utcnow().timestamp()
+
+
+def _v38_final_clear_top_scorers_cache():
+    try:
+        V38_ESPN_TOP_SCORERS_CACHE["ts"] = 0
+        V38_ESPN_TOP_SCORERS_CACHE["items"] = []
+    except Exception:
+        pass
+
+
+def _v38_final_espn_top_scorers_urls():
+    urls = []
+    try:
+        urls.extend(_v29_scoring_stats_urls())
+    except Exception:
+        pass
+    urls.extend([
+        "https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&season=2026&limit=50&sort=goals:desc",
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/leaders?category=goals&limit=25",
+        "https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/seasons/2026/types/1/leaders?lang=en&region=us",
+        "https://www.espn.com/soccer/stats/_/league/FIFA.WORLD/season/2026",
+    ])
+    out = []
+    for u in urls:
+        if u and u not in out:
+            out.append(u)
+    return out
+
+
+def _v38_final_parse_espn_top_scorers(data):
+    """يرجع نفس صيغة التصميم: dict(name, team, played, goals)."""
+    # أولًا: استخدم قارئ ESPN القديم إن توفر، لأنه مجرب مع statistics/byathlete.
+    try:
+        items = _v29_extract_top_scorers_from_json(data)
+        if items:
+            return items[:25]
+    except Exception:
+        pass
+
+    items = []
+    seen = set()
+    walker = _v28_walk_json(data) if '_v28_walk_json' in globals() else []
+    for node in walker:
+        if not isinstance(node, dict):
+            continue
+        athlete = node.get('athlete') if isinstance(node.get('athlete'), dict) else node.get('player') if isinstance(node.get('player'), dict) else None
+        name = ''
+        if isinstance(athlete, dict):
+            name = athlete.get('displayName') or athlete.get('fullName') or athlete.get('name') or athlete.get('shortName') or ''
+        name = name or node.get('displayName') or node.get('fullName') or node.get('name') or ''
+        if not name or len(str(name)) > 70:
+            continue
+
+        team_obj = node.get('team') if isinstance(node.get('team'), dict) else (athlete or {}).get('team') if isinstance((athlete or {}).get('team'), dict) else {}
+        team = ''
+        if isinstance(team_obj, dict):
+            team = team_obj.get('displayName') or team_obj.get('shortDisplayName') or team_obj.get('abbreviation') or team_obj.get('name') or ''
+        team = canonical_team_name(team) or normalize_name(team or '-')
+
+        goals = None
+        played = None
+        # مصادر متعددة داخل ESPN: value/displayValue أو statistics/stats.
+        for key in ('value', 'total', 'goals', 'displayValue'):
+            if key in node:
+                try:
+                    goals = int(float(str(node.get(key)).replace(',', '').strip()))
+                    break
+                except Exception:
+                    pass
+        if goals is None:
+            try:
+                goals = _v29_pick_stat_value(node, ("goals", "goal", "G"))
+            except Exception:
+                goals = None
+        try:
+            played = _v29_pick_stat_value(node, ("appearances", "gamesPlayed", "games", "P"))
+        except Exception:
+            played = None
+        for stats_key in ('statistics', 'stats', 'leaders'):
+            stats = node.get(stats_key) or []
+            if isinstance(stats, list):
+                for st in stats:
+                    if not isinstance(st, dict):
+                        continue
+                    nm = str(st.get('name') or st.get('displayName') or st.get('abbreviation') or '').lower()
+                    val = st.get('value') if st.get('value') is not None else st.get('displayValue')
+                    if goals is None and ('goal' in nm or nm == 'g'):
+                        try:
+                            goals = int(float(str(val).replace(',', '').strip()))
+                        except Exception:
+                            pass
+                    if played is None and (nm in ('p', 'gp') or 'appearance' in nm or 'games' in nm):
+                        try:
+                            played = int(float(str(val).replace(',', '').strip()))
+                        except Exception:
+                            pass
+        try:
+            goals = int(goals or 0)
+        except Exception:
+            goals = 0
+        if goals <= 0:
+            continue
+        key = (normalize_name(name).lower(), str(team).lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({
+            'name': normalize_name(name),
+            'team': team or '-',
+            'played': played if played is not None else '',
+            'goals': goals,
+        })
+    items.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
+    return items[:25]
+
+
+def fetch_espn_top_scorers(force_refresh=False):
+    """هدافين البطولة من ESPN فقط. عند force_refresh لا يستخدم الكاش نهائيًا."""
+    now = _v38_final_now_ts()
+    try:
+        if not force_refresh and V38_ESPN_TOP_SCORERS_CACHE.get('items') and now - float(V38_ESPN_TOP_SCORERS_CACHE.get('ts') or 0) < V38_ESPN_TOP_SCORERS_TTL:
+            return list(V38_ESPN_TOP_SCORERS_CACHE.get('items') or [])
+    except Exception:
+        pass
+    if not requests:
+        return list(V38_ESPN_TOP_SCORERS_CACHE.get('items') or [])
+    last_items = []
+    for url in _v38_final_espn_top_scorers_urls():
+        try:
+            r = _requests_get(url, timeout=18)
+            if int(getattr(r, 'status_code', 200) or 200) >= 400:
+                continue
+            ctype = str((getattr(r, 'headers', {}) or {}).get('content-type', '')).lower()
+            if 'json' in ctype or 'api.espn.com' in url or 'web.api.espn.com' in url:
+                try:
+                    data = r.json()
+                    items = _v38_final_parse_espn_top_scorers(data)
+                    if items:
+                        last_items = items
+                        break
+                except Exception:
+                    pass
+            try:
+                html = r.text
+                items = _v29_extract_top_scorers_from_html(html)
+                if items:
+                    last_items = items
+                    break
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                print(f"ESPN top scorers source failed: {url} | {e}")
+            except Exception:
+                pass
+            continue
+    if last_items:
+        V38_ESPN_TOP_SCORERS_CACHE['ts'] = now
+        V38_ESPN_TOP_SCORERS_CACHE['items'] = list(last_items)
+        return list(last_items)
+    return list(V38_ESPN_TOP_SCORERS_CACHE.get('items') or [])
+
+
+async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    wait = await update.message.reply_text("⏳ أسحب هدافين البطولة من ESPN...")
+    try:
+        _v38_final_clear_top_scorers_cache()
+        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=35)
+        if not items:
+            await wait.edit_text("⚠️ تعذر سحب هدافين البطولة من ESPN حاليًا.")
+            return
+        path = render_top_scorers_v29(items)
+        await send_photo_path(update, path, "هدافين البطولة ✅\nالمصدر: ESPN")
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await wait.edit_text(f"تعذر جلب هدافين البطولة ❌\n{str(e)[:300]}")
+
+
+# تحديث النتيجة الحية: force=True يتجاوز كاش المباراة القديم.
+_V38_FINAL_PREV_RESULT_FOR_FIXTURE = globals().get('_v32_result_for_fixture')
+def _v32_result_for_fixture(m, force=False):
+    if not isinstance(m, dict):
+        return None
+    if not force:
+        try:
+            cached = _v43_get_cached_match_result(m)
+            if isinstance(cached, dict) and _patch6_numeric_score(cached):
+                return cached
+        except Exception:
+            pass
+    try:
+        dkey = _date_key(_normalize_date_arg(m.get('date')))
+        if dkey > _v32_today_key() and not force:
+            return None
+    except Exception:
+        pass
+    try:
+        return _v41_fetch_result_for_fixture(m, m.get('date'), force=force, allow_seed=True)
+    except Exception:
+        if not force and _V38_FINAL_PREV_RESULT_FOR_FIXTURE:
+            try:
+                return _V38_FINAL_PREV_RESULT_FOR_FIXTURE(m, force=False)
+            except Exception:
+                return None
+        return None
+
+
+def _v38_final_is_live_status(st):
+    s = str(st or '').strip().lower()
+    if not s:
+        return False
+    scheduled_words = ('scheduled', 'pre', 'not started', 'لم تبدأ', 'لم تبدا', 'مجدول', 'postponed', 'canceled', 'cancelled')
+    if any(x in s for x in scheduled_words):
+        return False
+    live_words = ('live', 'in_play', 'in-play', 'in progress', '1h', '2h', 'ht', 'halftime', 'et', 'مباشر', 'الشوط', 'استراحة')
+    return any(x in s for x in live_words)
+
+
+def _v38_final_count_goals_status(st):
+    try:
+        if _v32_is_finished_status(st):
+            return True
+    except Exception:
+        pass
+    return _v38_final_is_live_status(st)
+
+
+def _v38_final_live_countable_results(force=False):
+    out = []
+    for m in _v32_all_group_fixtures():
+        try:
+            obj = _v32_result_for_fixture(m, force=force)
+            s1 = _v32_score_num((obj or {}).get('score1'))
+            s2 = _v32_score_num((obj or {}).get('score2'))
+            if s1 is None or s2 is None:
+                continue
+            st = (obj or {}).get('status') or ''
+            countable = _v38_final_count_goals_status(st)
+            if not countable:
+                # احتياط: نتيجة رقمية ليوم سابق أو اليوم تُحسب للأهداف، لكن لا تغيّر finished_count.
+                try:
+                    dkey = _date_key(_normalize_date_arg(m.get('date')))
+                    if dkey <= _v32_today_key():
+                        countable = True
+                except Exception:
+                    countable = False
+            if not countable:
+                continue
+            out.append({
+                'group': _v32_fixture_group_code(m),
+                'date': m.get('date'),
+                'team1': canonical_team_name(m.get('team1')) or m.get('team1'),
+                'team2': canonical_team_name(m.get('team2')) or m.get('team2'),
+                'score1': s1,
+                'score2': s2,
+                'status': st,
+            })
+        except Exception:
+            continue
+    return out
+
+
+def _v38_final_apply_live_goal_stats(snap, force=False):
+    if not isinstance(snap, dict):
+        return snap
+    results = _v38_final_live_countable_results(force=force)
+    if not results:
+        return snap
+    # إزالة أي تكرار حسب طرفي المباراة.
+    uniq = []
+    seen = set()
+    for r in results:
+        key = tuple(sorted([str(r.get('team1')), str(r.get('team2'))]))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(r)
+    goals = sum(int(r.get('score1') or 0) + int(r.get('score2') or 0) for r in uniq)
+    snap['goals'] = goals
+    attacks = Counter(); defenses = defaultdict(int); played = Counter(); biggest = None
+    for r in uniq:
+        t1, t2 = r.get('team1'), r.get('team2')
+        s1, s2 = int(r.get('score1') or 0), int(r.get('score2') or 0)
+        attacks[t1] += s1; attacks[t2] += s2
+        defenses[t1] += s2; defenses[t2] += s1
+        played[t1] += 1; played[t2] += 1
+        diff = abs(s1 - s2)
+        if biggest is None or diff > biggest.get('diff', -1) or (diff == biggest.get('diff', -1) and s1 + s2 > biggest.get('total', -1)):
+            biggest = {'team1': t1, 'team2': t2, 'score1': s1, 'score2': s2, 'diff': diff, 'total': s1 + s2}
+    if attacks:
+        snap['best_attack'] = attacks.most_common(1)[0]
+    if defenses:
+        snap['best_defense'] = sorted([(t, ga) for t, ga in defenses.items() if played[t] > 0], key=lambda x: (x[1], x[0]))[0]
+    if biggest:
+        snap['biggest'] = biggest
+    return snap
+
+
+_V38_FINAL_PREV_BUILD_SNAPSHOT = globals().get('_v32_build_snapshot')
+def _v32_build_snapshot(force=False):
+    if force:
+        try:
+            # نجبر لوحة البطولة على بناء Snapshot جديد.
+            if os.path.exists(V32_TOURNAMENT_CACHE_FILE):
+                os.remove(V32_TOURNAMENT_CACHE_FILE)
+        except Exception:
+            pass
+    snap = _V38_FINAL_PREV_BUILD_SNAPSHOT(force) if _V38_FINAL_PREV_BUILD_SNAPSHOT else {}
+    try:
+        snap = _v38_final_apply_live_goal_stats(snap, force=force)
+        if force:
+            _v32_save_json(V32_TOURNAMENT_CACHE_FILE, {'ts': _v32_now_ts(), 'data': snap})
+    except Exception:
+        pass
+    return snap
+
+
+# نص لوحة البطولة مضمون: completed / total وليس العكس.
+def _v32_tournament_board_text(force=False):
+    snap = _v32_snapshot(force)
+    biggest = snap.get('biggest') or {}
+    big = '-' if not biggest else f"{biggest.get('team1')} {biggest.get('score1')}-{biggest.get('score2')} {biggest.get('team2')}"
+    ba = snap.get('best_attack') or ('-', 0)
+    bd = snap.get('best_defense') or ('-', 0)
+    last_q = (snap.get('qualified') or ['-'])[-1]
+    last_e = (snap.get('eliminated') or ['-'])[-1]
+    try:
+        decisive_count = len(_v32_decisive_rows(False))
+    except Exception:
+        decisive_count = 0
+    finished = int(snap.get('finished_count', 0) or 0)
+    total_t = int(snap.get('total_tournament_matches', 104) or 104)
+    total_g = int(snap.get('total_group_matches', 72) or 72)
+    lines = [
+        "🏆 لوحة البطولة",
+        f"آخر تحديث: {snap.get('updated_at','-')}",
+        "",
+        f"مباريات البطولة المكتملة: {finished} / {total_t}",
+        f"مباريات دور المجموعات: {finished} / {total_g}",
+        f"إجمالي الأهداف: {snap.get('goals', 0)}",
+        f"أكبر نتيجة: {big}",
+        f"أقوى هجوم: {ba[0]} — {ba[1]} أهداف",
+        f"أقوى دفاع: {bd[0]} — استقبل {bd[1]}",
+        f"آخر متأهل رسميًا: {last_q}",
+        f"آخر مستبعد رسميًا: {last_e}",
+        f"مباريات الحسم القادمة: {decisive_count}",
+    ]
+    return "\n".join(lines)
+
+
+# أزرار: لا نضيف زر جديد، فقط نغير الاسم إلى "أفضل الثوالث الآن".
+try:
+    V32_FINAL_MENU_LABELS.add("🥉 أفضل الثوالث الآن")
+except Exception:
+    pass
+
+
+def _public_main_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ["📺 مباشر الآن"],
+            ["🏆 لوحة البطولة", "📊 ترتيب المجموعات"],
+            ["✅ كيف تتأهل؟", "🧮 حاسبة التأهل"],
+            ["🥉 أفضل الثوالث الآن", "✅ المتأهلون"],
+            ["❌ المغادرون", "📅 المباريات القادمة"],
+            ["📋 نتائج المباريات", "🎬 ملخصات المباريات"],
+            ["🏆 هدافين البطولة", "⚽ مسجلو الأهداف"],
+            ["🎮 فانتزي"],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="اكتب اسم منتخب أو اختر من القائمة",
+    )
+
+
+def _public_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📺 مباشر الآن", callback_data="mainmenu|live")],
+        [InlineKeyboardButton("🏆 لوحة البطولة", callback_data="v32|board"), InlineKeyboardButton("📊 ترتيب المجموعات", callback_data="mainmenu|groups")],
+        [InlineKeyboardButton("✅ كيف تتأهل؟", callback_data="v32|how_start"), InlineKeyboardButton("🧮 حاسبة التأهل", callback_data="v32|calc_start")],
+        [InlineKeyboardButton("🥉 أفضل الثوالث الآن", callback_data="v32|thirds"), InlineKeyboardButton("✅ المتأهلون", callback_data="v32|qualified")],
+        [InlineKeyboardButton("❌ المغادرون", callback_data="v32|eliminated"), InlineKeyboardButton("📅 المباريات القادمة", callback_data="mainmenu|fixtures")],
+        [InlineKeyboardButton("📋 نتائج المباريات", callback_data="mainmenu|results"), InlineKeyboardButton("🎬 ملخصات المباريات", callback_data="v32|hls_home")],
+        [InlineKeyboardButton("🏆 هدافين البطولة", callback_data="mainmenu|scorers"), InlineKeyboardButton("⚽ مسجلو الأهداف", callback_data="v32|goal_scorers")],
+        [InlineKeyboardButton("🎮 فانتزي", callback_data="v32|fantasy_gate")],
+    ])
+
+
+def _v32_board_keyboard():
+    rows = [
+        [InlineKeyboardButton("🏁 سباق التأهل", callback_data="v32|race")],
+        [InlineKeyboardButton("🥉 أفضل الثوالث الآن", callback_data="v32|thirds"), InlineKeyboardButton("🔥 مباريات الحسم", callback_data="v32|decisive")],
+        [InlineKeyboardButton("✅ المتأهلون", callback_data="v32|qualified"), InlineKeyboardButton("❌ المغادرون", callback_data="v32|eliminated")],
+        [InlineKeyboardButton("📊 ترتيب المجموعات", callback_data="mainmenu|groups")],
+    ]
+    try:
+        if _v33_round32_has_official_match():
+            rows.append([InlineKeyboardButton("🏟️ مواجهات دور الـ32", callback_data="v32|r32")])
+    except Exception:
+        pass
+    rows.append([InlineKeyboardButton("🔄 تحديث الآن", callback_data="v32|board_force"), InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v34_stats_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 ترتيب المجموعات", callback_data="mainmenu|groups"), InlineKeyboardButton("🏆 هدافين البطولة", callback_data="mainmenu|scorers")],
+        [InlineKeyboardButton("🥉 أفضل الثوالث الآن", callback_data="v32|thirds"), InlineKeyboardButton("✅❌ التأهل والمغادرة", callback_data="v32|status_home")],
+        [InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")],
+    ])
+
+
+def _v32_groups_keyboard(prefix="race"):
+    rows = []
+    row = []
+    for code, _teams in WORLD_CUP_GROUPS:
+        row.append(InlineKeyboardButton(_v32_group_name(code), callback_data=f"v32|{prefix}_group|{code}"))
+        if len(row) == 3:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    if prefix == "race":
+        rows.append([InlineKeyboardButton("✅ المتأهلون رسميًا", callback_data="v32|qualified"), InlineKeyboardButton("❌ المستبعدون رسميًا", callback_data="v32|eliminated")])
+        rows.append([InlineKeyboardButton("🥉 أفضل الثوالث الآن", callback_data="v32|thirds"), InlineKeyboardButton("🔥 مباريات الحسم", callback_data="v32|decisive")])
+        rows.append([InlineKeyboardButton("✅ كيف يتأهل منتخبك؟", callback_data="v32|how_start")])
+        rows.append([InlineKeyboardButton("📄 كل المجموعات PDF", callback_data="v32|race_pdf")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="v32|board")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v38_thirds_keyboard(include_refresh=True):
+    rows = []
+    if include_refresh:
+        rows.append([InlineKeyboardButton("🔄 تحديث", callback_data="v32|thirds_force"), InlineKeyboardButton("❓ كيف يتحدد خصم أفضل ثالث؟", callback_data="v32|thirds_help")])
+    else:
+        rows.append([InlineKeyboardButton("❓ كيف يتحدد خصم أفضل ثالث؟", callback_data="v32|thirds_help")])
+    rows.append([InlineKeyboardButton("⬅️ لوحة البطولة", callback_data="v32|board")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v38_thirds_help_text():
+    return (
+        "❓ كيف يتحدد خصم أفضل ثالث؟\n\n"
+        "إذا تأهل المنتخب وهو ثالث مجموعته، فالخصم لا يكون ثابتًا مباشرة.\n\n"
+        "السبب أن أفضل الثوالث يتأهل منهم 8 منتخبات من أصل 12 مجموعة.\n\n"
+        "بعد ما تتحدد المجموعات التي تأهل منها أصحاب المركز الثالث، يتم توزيعهم على مباريات دور الـ32 حسب جدول البطولة.\n\n"
+        "يعني:\n"
+        "ثالث المجموعة ح مثلًا قد يقابل خصمًا معيّنًا إذا تأهلت ثوالث مجموعات معيّنة.\n\n"
+        "لكن إذا تغيرت المجموعات المتأهلة كأفضل ثوالث، قد يتغير الخصم.\n\n"
+        "🚨 الخصم في دور الـ32 يعتمد على المجموعات التي تأهل منها أفضل الثوالث.\n\n"
+        "📌 لمعرفة احتمالات منتخبك، اضغط الزر بالأسفل:"
+    )
+
+
+def _v33_how_start_text():
+    return "⏳ جاري تجهيز حسابات التأهل…\n\nاكتب اسم المنتخب:"
+
+
+def _v38_slot_phrase_to_team(phrase, snap=None):
+    snap = snap or _v33_snapshot(False)
+    phrase = str(phrase or '').strip()
+    rank_map = {'أول': 0, 'متصدر': 0, 'ثاني': 1, 'وصيف': 1}
+    for word, idx in rank_map.items():
+        m = re.search(word + r"\s+المجموعة\s+([أابجدهـوزحطيكل])", phrase)
+        if m:
+            ar = m.group(1)
+            if ar == 'ه': ar = 'هـ'
+            rev = {v: k for k, v in V33_AR_GROUP_LETTERS.items()}
+            code = rev.get(ar)
+            rows = ((snap.get('groups') or {}).get(code, {}) or {}).get('rows') or []
+            if len(rows) > idx:
+                return rows[idx].get('team') or f"{word} المجموعة {ar}"
+            return f"{word} المجموعة {ar}"
+    if 'ثالث' in phrase:
+        # نحاول معرفة ثالث أي مجموعة يذهب إلى هذه الخانة حسب الوضع الحالي.
+        m = re.search(r"متصدر\s+المجموعة\s+([أابجدهـوزحطيكل])", phrase)
+        return "ثالث مؤهل من أفضل الثوالث"
+    return phrase or '-'
+
+
+def _v38_third_for_winner_slot(slot, snap=None):
+    snap = snap or _v33_snapshot(False)
+    try:
+        groups = [r.get('group') for r in (snap.get('thirds') or [])[:8] if r.get('group')]
+        mp = _v33_assign_thirds_to_slots(groups)
+        for third_group, winner_slot in (mp or {}).items():
+            if winner_slot == slot:
+                row = _v33_third_row_for_group(third_group, snap) or {}
+                return row.get('team') or f"ثالث {_v33_group_label(third_group)}"
+    except Exception:
+        pass
+    return "ثالث مؤهل من أفضل الثوالث"
+
+
+def _v38_round32_match_for_team(team, pos, snap=None):
+    snap = snap or _v33_snapshot(False)
+    code = _v33_team_group(team)
+    ar = _v33_group_ar(code)
+    if not code or not pos:
+        return None
+    # أفضل ثالث: نعتمد خريطة أفضل الثوالث الحالية.
+    if int(pos or 99) == 3:
+        slot, leader = _v33_third_matchup_line(code, snap)
+        if not slot:
+            return None
+        leader = leader or f"متصدر {_v33_group_label(slot)}"
+        return {'opponent': leader, 'slot_text': f"متصدر {_v33_group_label(slot)}", 'date': '-', 'time': '-', 'note': f"ثالث {_v33_group_label(code)} × متصدر {_v33_group_label(slot)}"}
+    target = ("أول" if int(pos) == 1 else "ثاني") + f" المجموعة {ar}"
+    for m in globals().get('TOURNAMENT_FIXTURES', []) or []:
+        if str(m.get('stage') or '') != 'دور الـ32':
+            continue
+        note = str(m.get('note') or '')
+        if target not in note:
+            continue
+        parts = [p.strip() for p in note.split('×')]
+        if len(parts) != 2:
+            continue
+        other = parts[1] if target in parts[0] else parts[0]
+        # لو الطرف الآخر ثالث مؤهل، نحتاج تحديده من خانة متصدر المجموعة الخاصة بفريقنا إذا كان الفريق متصدرًا.
+        opponent = _v38_slot_phrase_to_team(other, snap)
+        if 'ثالث مؤهل' in opponent and int(pos) == 1:
+            opponent = _v38_third_for_winner_slot(code, snap)
+        return {'opponent': opponent, 'slot_text': other, 'date': m.get('date') or '-', 'time': m.get('time') or '-', 'note': note}
+    return None
+
+
+def _v38_official_status_how_text(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    code, pos, row, rows = _v33_group_row(team, snap)
+    status_txt = (snap.get('status') or {}).get(team, '⚔️ ما زال ينافس')
+    is_out = ('مستبعد' in str(status_txt) or 'غادر' in str(status_txt)) and ('رسمي' in str(status_txt) or 'غادر' in str(status_txt))
+    is_qualified = ('متأهل' in str(status_txt)) and ('رسمي' in str(status_txt))
+    if not (is_out or is_qualified):
+        return None
+    lines = []
+    if is_qualified:
+        rank_txt = "أفضل ثالث" if int(pos or 99) == 3 or 'الثوالث' in str(status_txt) else ("أول المجموعة" if int(pos or 99) == 1 else "ثاني المجموعة" if int(pos or 99) == 2 else f"المركز {pos}")
+        lines.append(f"✅ منتخب {team} متأهل رسميًا")
+        lines.append("")
+        lines.append(f"📊 المجموعة: {_v33_group_label(code)}")
+        if row:
+            lines.append(f"🏆 الترتيب: المركز {pos} — {row.get('Pts')} نقاط — فارق {int(row.get('GD') or 0):+d}")
+        lines.append(f"تأهل {team} إلى دور الـ32 كـ {rank_txt}.")
+        r32 = _v38_round32_match_for_team(team, pos, snap)
+        lines.append("")
+        lines.append("🏟️ الخصم القادم:")
+        if r32:
+            lines.append(f"{team} × {r32.get('opponent') or '-'}")
+            lines.append(f"الخانة: {r32.get('note') or r32.get('slot_text') or '-'}")
+            if r32.get('date') != '-' or r32.get('time') != '-':
+                lines.append(f"📅 الموعد: {r32.get('date','-')} — {r32.get('time','-')}")
+        else:
+            lines.append("لم يتحدد الخصم كاملًا حتى الآن، وسيظهر تلقائيًا بعد اكتمال الخانات.")
+        lines.append("")
+        lines.append("لا يحتاج المنتخب أي حسابات إضافية.")
+    else:
+        lines.append(f"❌ منتخب {team} مستبعد رسميًا")
+        lines.append("")
+        lines.append(f"📊 المجموعة: {_v33_group_label(code)}")
+        if row:
+            lines.append(f"📍 المركز: {pos} — النقاط: {row.get('Pts')} — لعب: {row.get('P')}/3 — الفارق {int(row.get('GD') or 0):+d}")
+        lines.append("")
+        lines.append("انتهت فرص المنتخب في التأهل إلى دور الـ32.")
+        lines.append("")
+        lines.append("السبب:")
+        lines.append("حتى مع أفضل النتائج الممكنة، لا يستطيع الوصول إلى المركزين الأول أو الثاني، ولا يستطيع الدخول ضمن أفضل الثوالث.")
+    return "\n".join(lines).strip()
+
+
+_V38_FINAL_PREV_HOW_TEXT = globals().get('_v33_how_qualify_text')
+def _v33_how_qualify_text(team, force=False):
+    team = _v33_find_team(team)
+    if not team:
+        return "ما عرفت المنتخب. اكتب اسم منتخب مثل: السعودية أو مصر أو العراق."
+    snap = _v33_snapshot(force)
+    official = _v38_official_status_how_text(team, snap)
+    if official:
+        return official
+    return _V38_FINAL_PREV_HOW_TEXT(team, force) if _V38_FINAL_PREV_HOW_TEXT else f"✅ كيف يتأهل {team}؟\nلا توجد بيانات كافية."
+
+
+def _v33_how_qualify_keyboard(team):
+    team = _v33_find_team(team) or team
+    snap = _v33_snapshot(False)
+    code, pos, row, rows = _v33_group_row(team, snap)
+    status_txt = (snap.get('status') or {}).get(team, '')
+    key = _v33_team_button_key(team)
+    is_out = ('مستبعد' in str(status_txt) or 'غادر' in str(status_txt)) and ('رسمي' in str(status_txt) or 'غادر' in str(status_txt))
+    is_qualified = ('متأهل' in str(status_txt)) and ('رسمي' in str(status_txt))
+    if is_out or is_qualified:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 تفاصيل المجموعة", callback_data=f"v32|race_group|{code}"), InlineKeyboardButton("⬅️ لوحة البطولة", callback_data="v32|board")],
+            [InlineKeyboardButton("🏠 الرئيسية", callback_data="mainmenu|home")],
+        ])
+    rows_btn = []
+    try:
+        if _v37_target_third_points(team, snap)[0] is not None:
+            rows_btn.append([InlineKeyboardButton("🥉 احتمالات أفضل ثالث", callback_data=f"v32|how_thirds|{key}"), InlineKeyboardButton("🏟️ الخصوم المحتملين", callback_data=f"v32|opp_all|{key}")])
+        else:
+            rows_btn.append([InlineKeyboardButton("🏟️ الخصوم المحتملين", callback_data=f"v32|opp_all|{key}")])
+    except Exception:
+        rows_btn.append([InlineKeyboardButton("🥉 احتمالات أفضل ثالث", callback_data=f"v32|how_thirds|{key}"), InlineKeyboardButton("🏟️ الخصوم المحتملين", callback_data=f"v32|opp_all|{key}")])
+    rows_btn.append([InlineKeyboardButton("📊 تفاصيل المجموعة", callback_data=f"v32|race_group|{code}"), InlineKeyboardButton("🧮 جرّب سيناريو", callback_data="v32|calc_start")])
+    rows_btn.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows_btn)
+
+
+# callback نهائي لخيارات V38 الخاصة بدون كسر باقي الخيارات.
+_V38_FINAL_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    if action == 'board':
+        await q.edit_message_text(_v32_tournament_board_text(False), reply_markup=_v32_board_keyboard()); return
+    if action == 'board_force':
+        await q.edit_message_text("⏳ جاري تحديث بيانات البطولة...")
+        _v38_final_clear_top_scorers_cache()
+        txt = await asyncio.wait_for(asyncio.to_thread(_v32_tournament_board_text, True), timeout=60)
+        await q.edit_message_text(txt, reply_markup=_v32_board_keyboard()); return
+    if action == 'thirds':
+        await q.edit_message_text(_v32_best_thirds_text(False), reply_markup=_v38_thirds_keyboard(True)); return
+    if action == 'thirds_force':
+        await q.edit_message_text("⏳ تحديث أفضل الثوالث الآن...")
+        txt = await asyncio.wait_for(asyncio.to_thread(_v32_best_thirds_text, True), timeout=60)
+        await q.edit_message_text(txt, reply_markup=_v38_thirds_keyboard(False)); return
+    if action == 'thirds_help':
+        await q.edit_message_text(_v38_thirds_help_text(), reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔎 كيف يتأهل منتخبك؟", callback_data="v32|how_start")],
+            [InlineKeyboardButton("⬅️ أفضل الثوالث الآن", callback_data="v32|thirds"), InlineKeyboardButton("🏆 لوحة البطولة", callback_data="v32|board")],
+        ])); return
+    if action == 'how_start':
+        _v33_set_waiting_state(context, 'how')
+        await q.edit_message_text(_v33_how_start_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="v32|thirds_help")], [InlineKeyboardButton("🏠 الرئيسية", callback_data="mainmenu|home")]])); return
+    if _V38_FINAL_PREV_V32_CALLBACK:
+        return await _V38_FINAL_PREV_V32_CALLBACK(update, context)
+
+
+_V38_FINAL_PREV_PUBLIC_REPLY_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    txt = normalize_name(update.message.text or '').strip()
+    if txt in ("🥉 أفضل الثوالث", "🥉 أفضل الثوالث الآن"):
+        await update.message.reply_text(_v32_best_thirds_text(False), reply_markup=_v38_thirds_keyboard(True)); return
+    if _V38_FINAL_PREV_PUBLIC_REPLY_ROUTER:
+        return await _V38_FINAL_PREV_PUBLIC_REPLY_ROUTER(update, context)
+
+# ==================== END V38 FINAL FAHAD HOTFIX ====================
+
 if __name__ == "__main__":
     main()
