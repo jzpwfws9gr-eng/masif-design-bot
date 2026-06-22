@@ -1,0 +1,15 @@
+{
+  "source": "FIFA World Cup 26 Regulations - Article 12.6 + Annexe C",
+  "note": "External map file for Round-of-32 third-place routes. The bot contains fallback slot logic; full 495 combinations can be added under combinations without changing code.",
+  "slots": {
+    "E": ["A", "B", "C", "D", "F"],
+    "I": ["C", "D", "F", "G", "H"],
+    "A": ["C", "E", "F", "H", "I"],
+    "L": ["E", "H", "I", "J", "K"],
+    "D": ["B", "E", "F", "I", "J"],
+    "G": ["A", "E", "H", "I", "J"],
+    "B": ["E", "F", "G", "I", "J"],
+    "K": ["D", "E", "I", "J", "L"]
+  },
+  "combinations": {}
+}
