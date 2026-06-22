@@ -37441,6 +37441,9 @@ async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # - التحديث يدوي من زر للمشرف فقط ويحفظ النتائج والدقائق إن وجدت.
 
 YOUTUBE_GOAL_SCORERS_FILE = "youtube_goal_scorers.json"
+YOUTUBE_GOAL_FETCH_DELAY_SECONDS = 20
+YOUTUBE_GOAL_FETCH_RETRIES = 3
+
 
 try:
     V32_FINAL_MENU_LABELS.update({"📊 ترتيب المجموعات", "🏆 هدافين البطولة", "⚽ مسجلو الأهداف"})
@@ -37509,17 +37512,38 @@ def _v32_clean_youtube_description(desc):
     return desc.strip()
 
 
-def _v32_fetch_youtube_description(url):
-    """يسحب وصف يوتيوب من صفحة الفيديو. يرجع الوصف أو يرفع خطأ مختصر."""
+def _v32_youtube_safe_error(err):
+    """تنظيف أخطاء يوتيوب حتى لا تظهر روابط Google Sorry داخل الملف."""
+    msg = str(err or '').strip()
+    low = msg.lower()
+    if '429' in low or 'too many requests' in low:
+        return 'حد يوتيوب المؤقت 429 - ننتظر ثم نعيد المحاولة لاحقًا'
+    if 'google.com/sorry' in low or '/sorry/' in low or 'unusual traffic' in low:
+        return 'يوتيوب طلب تهدئة/تحقق بسبب كثرة الطلبات'
+    msg = re.sub(r'https?://\S+', '', msg, flags=re.I)
+    msg = re.sub(r'\s+', ' ', msg).strip(' -:')
+    return msg[:120] or 'تعذر قراءة وصف اليوتيوب مؤقتًا'
+
+
+def _v32_fetch_youtube_description_once(url):
+    """محاولة واحدة لقراءة وصف يوتيوب."""
     if not requests:
         raise RuntimeError('requests غير متوفر')
     headers = {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1',
-        'Accept-Language': 'ar,en;q=0.9',
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+        'Accept-Language': 'ar-SA,ar;q=0.9,en;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
     }
-    r = requests.get(url, headers=headers, timeout=18)
+    r = requests.get(url, headers=headers, timeout=25, allow_redirects=True)
+    final_url = getattr(r, 'url', '') or ''
+    if r.status_code == 429 or 'google.com/sorry' in final_url or '/sorry/' in final_url:
+        raise RuntimeError('حد يوتيوب المؤقت 429')
     r.raise_for_status()
     html_txt = r.text or ''
+    if 'google.com/sorry' in html_txt.lower() or 'unusual traffic' in html_txt.lower():
+        raise RuntimeError('يوتيوب طلب تهدئة/تحقق بسبب كثرة الطلبات')
 
     # أفضل مكان غالبًا: shortDescription داخل ytInitialPlayerResponse
     for pat in [r'"shortDescription"\s*:\s*"((?:\\.|[^"\\])*)"', r'"description"\s*:\s*\{"simpleText"\s*:\s*"((?:\\.|[^"\\])*)"']:
@@ -37537,6 +37561,18 @@ def _v32_fetch_youtube_description(url):
             if desc:
                 return desc
 
+    # fallback: yt-dlp إذا كان موجودًا في بيئة التشغيل
+    try:
+        import yt_dlp  # type: ignore
+        ydl_opts = {'quiet': True, 'skip_download': True, 'nocheckcertificate': True}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        desc = _v32_clean_youtube_description((info or {}).get('description') or '')
+        if desc:
+            return desc
+    except Exception:
+        pass
+
     # fallback: meta description
     meta_patterns = [
         r'<meta\s+name="description"\s+content="([^"]*)"',
@@ -37552,6 +37588,23 @@ def _v32_fetch_youtube_description(url):
                 return desc
     raise RuntimeError('لم أستطع قراءة وصف اليوتيوب')
 
+
+def _v32_fetch_youtube_description(url):
+    """يسحب وصف يوتيوب مع إعادة محاولة وانتظار 20 ثانية عند الفشل/429."""
+    last_err = None
+    for attempt in range(1, int(YOUTUBE_GOAL_FETCH_RETRIES or 3) + 1):
+        try:
+            return _v32_fetch_youtube_description_once(url)
+        except Exception as e:
+            last_err = e
+            # عند 429 أو فشل مؤقت، انتظر قبل المحاولة التالية.
+            if attempt < int(YOUTUBE_GOAL_FETCH_RETRIES or 3):
+                try:
+                    _time.sleep(int(YOUTUBE_GOAL_FETCH_DELAY_SECONDS or 20))
+                except Exception:
+                    pass
+                continue
+            raise RuntimeError(_v32_youtube_safe_error(last_err))
 
 def _v32_goal_line_team_hint(line, team1='', team2=''):
     text = normalize_name(line or '') if 'normalize_name' in globals() else str(line or '')
@@ -37671,6 +37724,7 @@ def _v32_goal_scorers_update_from_highlights(force=False):
     highlights = _load_highlights() if '_load_highlights' in globals() else {}
     checked = added_goals = updated_matches = skipped = failed = 0
     alerts = []
+    last_fetch_started = False
 
     for key, item in (highlights or {}).items():
         if not isinstance(item, dict):
@@ -37684,42 +37738,69 @@ def _v32_goal_scorers_update_from_highlights(force=False):
             skipped += 1
             continue
         old = (data.get('matches') or {}).get(key) or {}
+        # إذا عندنا أهداف محفوظة لنفس الرابط لا نعيد قراءته إلا إذا طلبنا force.
         if not force and old.get('url') == url and old.get('goals'):
             skipped += 1
             continue
+
+        # تهدئة إجبارية بين كل ملخص وملخص عشان ما يعطينا يوتيوب 429.
+        if last_fetch_started:
+            try:
+                _time.sleep(int(YOUTUBE_GOAL_FETCH_DELAY_SECONDS or 20))
+            except Exception:
+                pass
+        last_fetch_started = True
         checked += 1
+
         try:
             desc = _v32_fetch_youtube_description(url)
             goals = _v32_parse_youtube_goal_scorers(desc, team1, team2)
             if not goals:
                 failed += 1
-                alerts.append(f"{team1} × {team2}: لم يتم العثور على مسجلي أهداف واضحين في وصف اليوتيوب")
+                msg = f"{team1} × {team2}: لم يتم العثور على مسجلي أهداف واضحين في وصف اليوتيوب"
+                alerts.append(msg)
                 data['matches'][key] = {
-                    'team1': team1, 'team2': team2, 'url': url, 'updated_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else '',
-                    'goals': [], 'note': 'no_goals_found'
+                    'team1': team1, 'team2': team2, 'url': url,
+                    'updated_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else '',
+                    'goals': [], 'note': 'no_goals_found', 'last_error': 'no_goals_found'
                 }
                 continue
+
             # أضف خصم كل هدف للاستفادة لاحقًا.
             enriched = []
             for g in goals:
                 gg = dict(g)
                 tm = gg.get('team') or ''
-                if tm and team1 and _v31_team_same(tm, team1) if '_v31_team_same' in globals() else False:
+                try:
+                    same1 = bool(tm and team1 and '_v31_team_same' in globals() and _v31_team_same(tm, team1))
+                    same2 = bool(tm and team2 and '_v31_team_same' in globals() and _v31_team_same(tm, team2))
+                except Exception:
+                    same1 = same2 = False
+                if same1:
                     gg['against'] = team2
-                elif tm and team2 and _v31_team_same(tm, team2) if '_v31_team_same' in globals() else False:
+                elif same2:
                     gg['against'] = team1
                 else:
                     gg['against'] = f"{team1} × {team2}".strip()
                 enriched.append(gg)
             data['matches'][key] = {
-                'team1': team1, 'team2': team2, 'url': url, 'updated_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else '',
+                'team1': team1, 'team2': team2, 'url': url,
+                'updated_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else '',
                 'goals': enriched,
             }
             added_goals += len(enriched)
             updated_matches += 1
         except Exception as e:
             failed += 1
-            alerts.append(f"{team1} × {team2}: تعذر قراءة وصف اليوتيوب - {str(e)[:90]}")
+            clean_err = _v32_youtube_safe_error(e) if '_v32_youtube_safe_error' in globals() else str(e)[:90]
+            alerts.append(f"{team1} × {team2}: {clean_err}")
+            # لا نكتب رابط Google Sorry ولا الخطأ الطويل داخل البيانات/الملف.
+            data['matches'][key] = {
+                'team1': team1, 'team2': team2, 'url': url,
+                'updated_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else '',
+                'goals': [], 'note': 'read_failed', 'last_error': clean_err
+            }
+
     data['updated_at'] = _now_riyadh_text() if '_now_riyadh_text' in globals() else datetime.utcnow().strftime('%Y-%m-%d %H:%M')
     data['alerts'] = alerts[:80]
     _v32_save_goal_scorers_data(data)
@@ -37732,7 +37813,6 @@ def _v32_goal_scorers_update_from_highlights(force=False):
         'alerts': alerts[:10],
         'data': data,
     }
-
 
 def _v32_goal_scorers_standings(data=None):
     data = data or _v32_load_goal_scorers_data()
@@ -37891,7 +37971,7 @@ def _v32_create_goal_scorers_pdf():
         img, draw, y = _v32_goal_pdf_new_page("⚠️ ملخصات تحتاج مراجعة", subtitle)
         for i, a in enumerate(alerts[:60], start=1):
             img, draw, y = _v32_goal_need_page(pages, img, draw, y, need=70, title="⚠️ ملخصات تحتاج مراجعة", subtitle=subtitle)
-            y = _v32_goal_draw_line(draw, f"{i}. {a}", y, small_font, "#92400E")
+            y = _v32_goal_draw_line(draw, f"{i}. {_v32_youtube_safe_error(a) if '_v32_youtube_safe_error' in globals() else a}", y, small_font, "#92400E")
         pages.append(img)
 
     label = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
@@ -37967,9 +38047,9 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not _v32_is_admin_update_or_query(update):
             await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
             return
-        wait = await q.message.reply_text("⏳ جاري تحديث مسجلي الأهداف من ملخصات اليوتيوب...")
+        wait = await q.message.reply_text("⏳ جاري تحديث مسجلي الأهداف من ملخصات اليوتيوب...\nراح أنتظر 20 ثانية بين كل ملخص عشان ما يحظرنا يوتيوب.")
         try:
-            res = await asyncio.wait_for(asyncio.to_thread(_v32_goal_scorers_update_from_highlights, False), timeout=180)
+            res = await asyncio.wait_for(asyncio.to_thread(_v32_goal_scorers_update_from_highlights, False), timeout=2400)
             lines = [
                 "✅ تم تحديث مسجلي الأهداف",
                 f"تم فحص: {res.get('checked', 0)} ملخص جديد أو معدل",
