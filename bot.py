@@ -41203,5 +41203,420 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V34 MENU ARCHIVE/STATS + SCENARIO/HOW-QUALIFY FIXES ====================
 
+# ==================== V35 HOW-QUALIFY FORMAT + SCENARIO PARSER FINAL PATCH ====================
+# اعتماد فهد:
+# - حاسبة التأهل تفهم الواو الملصقة: وفوز/وتعادل/وهزيمة.
+# - رد "كيف يتأهل" يكون عملي: الخلاصة، الطريق المباشر بالأرقام، كيف يصبح ثالثًا، ماذا يحتاج بعدها.
+# - الثوالث المؤثرة تُعرض بتنسيق أفخم: اسم المجموعة + منتخباتها + ثالثها + مباراته + لماذا تهمه.
+
+
+def _v35_group_teams_pretty(code):
+    teams = _v33_group_teams(code)
+    return " • ".join(teams) if teams else "غير متوفر"
+
+
+def _v35_group_card_header(code, prefix="⚠️"):
+    return f"{prefix} {_v33_group_label(code)}\n({_v35_group_teams_pretty(code)})"
+
+
+def _v35_team_title(team):
+    feminine = {"السعودية", "مصر", "تونس", "الجزائر", "الأرجنتين", "البوسنة والهرسك", "سويسرا", "هايتي", "كرواتيا", "كولومبيا", "النرويج"}
+    if team in feminine:
+        return f"✅ كيف تتأهل {team}؟"
+    return f"✅ كيف يتأهل {team}؟"
+
+
+def _v35_match_pair_key(m):
+    try:
+        t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+        t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+        return frozenset([t1, t2])
+    except Exception:
+        return frozenset()
+
+
+def _v35_make_match_result(m, mode, team=None):
+    t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+    t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+    if mode in ('win', 'loss', 'draw') and team:
+        if mode == 'draw':
+            s1, s2 = 0, 0
+        elif mode == 'win':
+            s1, s2 = (1, 0) if team == t1 else (0, 1)
+        else:
+            s1, s2 = (0, 1) if team == t1 else (1, 0)
+    elif mode == 't1_win':
+        s1, s2 = 1, 0
+    elif mode == 't2_win':
+        s1, s2 = 0, 1
+    else:
+        s1, s2 = 0, 0
+    return {'team1': t1, 'team2': t2, 'score1': s1, 'score2': s2, 'date': m.get('date'), 'time': m.get('time', ''), 'scenario': True}
+
+
+def _v35_result_sentence(r):
+    t1, t2 = r.get('team1'), r.get('team2')
+    s1, s2 = int(r.get('score1') or 0), int(r.get('score2') or 0)
+    if s1 > s2:
+        return f"فوز {t1} على {t2}"
+    if s2 > s1:
+        return f"فوز {t2} على {t1}"
+    return f"تعادل {t1} و{t2}"
+
+
+def _v35_position_in_rows(team, rows):
+    for i, r in enumerate(rows or [], start=1):
+        if r.get('team') == team:
+            return i, r
+    return None, None
+
+
+def _v35_rows_with_sim_results(code, sim_results, snap=None):
+    snap = snap or _v33_snapshot(False)
+    g = ((snap.get('groups') or {}).get(code, {}) or {})
+    pairs = {_v35_match_pair_key(x) for x in sim_results}
+    base_results = []
+    for r in (g.get('results') or []):
+        if _v35_match_pair_key(r) not in pairs:
+            base_results.append(r)
+    try:
+        return _v32_stats_rows_from_results(_v33_group_teams(code), base_results + list(sim_results or []))
+    except Exception:
+        return g.get('rows') or []
+
+
+def _v35_group_other_remaining_matches(code, team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    team_rem = _v33_remaining_for_team(team, snap)
+    team_pair = _v35_match_pair_key(team_rem[0]) if team_rem else None
+    out = []
+    for m in _v33_group_remaining(code, snap):
+        if team_pair and _v35_match_pair_key(m) == team_pair:
+            continue
+        out.append(m)
+    return out
+
+
+def _v35_evaluate_team_outcome(team, outcome, snap=None):
+    """يرجع نتائج كل احتمالات المباراة الأخرى داخل المجموعة بعد نتيجة منتخب محددة."""
+    snap = snap or _v33_snapshot(False)
+    code = _v33_team_group(team)
+    rem = _v33_remaining_for_team(team, snap)
+    if not code or not rem:
+        return {'available': False, 'cases': []}
+    target_match = rem[0]
+    target_result = _v35_make_match_result(target_match, outcome, team=team)
+    other_matches = _v35_group_other_remaining_matches(code, team, snap)
+    modes = ['t1_win', 'draw', 't2_win']
+    try:
+        from itertools import product
+        combos = list(product(modes, repeat=len(other_matches))) if other_matches else [()]
+    except Exception:
+        combos = [()]
+    cases = []
+    for combo in combos[:81]:
+        other_results = [_v35_make_match_result(m, mode) for m, mode in zip(other_matches, combo)]
+        sim_results = [target_result] + other_results
+        rows = _v35_rows_with_sim_results(code, sim_results, snap)
+        pos, row = _v35_position_in_rows(team, rows)
+        other_txt = "، ".join(_v35_result_sentence(r) for r in other_results) if other_results else "لا توجد مباراة أخرى مؤثرة"
+        cases.append({'pos': pos or 99, 'row': row or {}, 'rows': rows, 'other': other_txt, 'target_result': target_result, 'other_results': other_results})
+    pts_after = None
+    if cases:
+        try:
+            pts_after = int((cases[0].get('row') or {}).get('Pts') or 0)
+        except Exception:
+            pts_after = None
+    return {'available': True, 'cases': cases, 'pts_after': pts_after, 'target_match': target_match, 'target_result': target_result}
+
+
+def _v35_outcome_status_line(team, outcome, snap=None):
+    ev = _v35_evaluate_team_outcome(team, outcome, snap)
+    if not ev.get('available'):
+        return None, ev
+    cases = ev.get('cases') or []
+    pts = ev.get('pts_after')
+    positions = [int(c.get('pos') or 99) for c in cases]
+    m = ev.get('target_match') or {}
+    opp = (m.get('team2') if (canonical_team_name(m.get('team1')) or m.get('team1')) == team else m.get('team1')) or "المنافس"
+    ar_out = {'win': 'الفوز', 'draw': 'التعادل', 'loss': 'الخسارة'}.get(outcome, outcome)
+    if positions and max(positions) <= 2:
+        status = "تأهل مباشر رسمي"
+    elif positions and any(p <= 2 for p in positions) and any(p == 3 for p in positions):
+        status = "قد يتأهل مباشرًا أو يصبح ثالثًا حسب نتيجة المباراة الأخرى"
+    elif positions and any(p <= 2 for p in positions):
+        status = "يبقي التأهل المباشر ممكنًا بشرط نتائج أخرى"
+    elif positions and any(p == 3 for p in positions):
+        status = "يدخله مسار أفضل الثوالث"
+    else:
+        status = "يخرجه أو يصعّب وضعه جدًا"
+    pts_txt = f"{pts} نقاط" if pts is not None else "رصيد جديد"
+    return f"- {ar_out} على/أمام {opp} ➜ {pts_txt} ➜ {status}", ev
+
+
+def _v35_third_path_examples(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    examples = []
+    for outcome in ['win', 'draw', 'loss']:
+        ev = _v35_evaluate_team_outcome(team, outcome, snap)
+        if not ev.get('available'):
+            continue
+        for c in ev.get('cases') or []:
+            if int(c.get('pos') or 99) == 3:
+                tr = c.get('target_result') or {}
+                examples.append((outcome, _v35_result_sentence(tr), c.get('other') or '', int((c.get('row') or {}).get('Pts') or 0)))
+                break
+    return examples
+
+
+def _v35_current_third_direct_match(gcode, third_team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    rem = _v33_remaining_for_team(third_team, snap) if third_team else []
+    if rem:
+        return rem[0]
+    for m in _v33_group_remaining(gcode, snap):
+        t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+        t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+        if third_team in (t1, t2):
+            return m
+    gr = _v33_group_remaining(gcode, snap)
+    return gr[0] if gr else None
+
+
+def _v35_related_thirds_lines(team, snap=None, target_pts=None, limit=7):
+    snap = snap or _v33_snapshot(False)
+    code = _v33_team_group(team)
+    lines = []
+    shown = 0
+    for tr in _v33_current_thirds(snap):
+        gcode = tr.get('group')
+        if not gcode or gcode == code:
+            continue
+        status, reason = _v33_third_group_status(gcode, snap)
+        if status == 'impossible':
+            continue
+        third_team = tr.get('team') or '-'
+        pts = int(tr.get('Pts') or 0)
+        gd = int(tr.get('GD') or 0)
+        tag = "⚠️ صعب" if status == 'weak' else "✅ داخل الحساب"
+        match = _v35_current_third_direct_match(gcode, third_team, snap)
+        match_txt = _v33_format_remaining_match(match) if match else "لا توجد مباراة متبقية مباشرة"
+        max_pts = pts + (3 if match else 0)
+        base_target = target_pts if target_pts is not None else int((_v33_group_row(team, snap)[2] or {}).get('Pts') or 0)
+        lines.append(_v35_group_card_header(gcode, "⚠️" if status == 'weak' else "🥉"))
+        lines.append(f"ثالثها الحالي: {third_team} — {pts} نقاط — الفارق {gd:+d} — {tag}")
+        lines.append(f"المباراة المؤثرة: {match_txt}")
+        lines.append(f"النتيجة التي تساعد {team}: تعثر {third_team} أو بقاؤه خلف {team} بالنقاط/الفارق.")
+        if max_pts > base_target:
+            lines.append(f"النتيجة التي تضر {team}: فوز {third_team} قد يرفعه إلى {max_pts} نقاط ويتقدم في ترتيب أفضل الثوالث.")
+        else:
+            lines.append(f"النتيجة التي تضر {team}: تحسن فارق {third_team} إذا بقي قريبًا بالنقاط.")
+        lines.append(f"ليه تهم {team}؟ لأنها قد تعطي ثالثًا ينافسه على أحد مقاعد أفضل الثوالث، وتعثرها يقوّي موقف {team}.")
+        lines.append("")
+        shown += 1
+        if shown >= limit:
+            break
+    if not lines:
+        lines.append("لا توجد ثوالث مؤثرة واضحة الآن أو البيانات غير مكتملة.")
+    return lines
+
+
+def _v33_how_qualify_text(team, force=False):
+    team = _v33_find_team(team)
+    if not team:
+        return "ما عرفت المنتخب. اكتب اسم منتخب مثل: السعودية أو مصر أو العراق."
+    snap = _v33_snapshot(force)
+    code, pos, row, rows = _v33_group_row(team, snap)
+    status_txt = (snap.get('status') or {}).get(team, '⚔️ ما زال ينافس')
+    rem = _v33_remaining_for_team(team, snap)
+    title = _v35_team_title(team)
+    lines = [title, ""]
+
+    # 1) الخلاصة أولًا
+    if 'متأهل رسمي' in status_txt:
+        lines += ["✅ الخلاصة", "حسم التأهل رسميًا ولا يحتاج نتائج أخرى.", ""]
+    elif 'مستبعد رسمي' in status_txt:
+        lines += ["❌ الخلاصة", "انتهت فرصه حسابيًا.", ""]
+    else:
+        win_line, win_ev = _v35_outcome_status_line(team, 'win', snap)
+        draw_line, draw_ev = _v35_outcome_status_line(team, 'draw', snap)
+        loss_line, loss_ev = _v35_outcome_status_line(team, 'loss', snap)
+        lines.append("✅ الخلاصة")
+        if win_line:
+            # أولوية: إذا الفوز يضمن التأهل نبدأ بها.
+            if win_ev.get('cases') and max(int(c.get('pos') or 99) for c in win_ev.get('cases')) <= 2:
+                lines.append("الفوز في المباراة القادمة يؤهله رسميًا لدور الـ32.")
+            else:
+                lines.append("الفوز في المباراة القادمة يرفع فرصه بقوة، وقد يحتاج نتيجة المباراة الأخرى داخل المجموعة.")
+        if draw_line and draw_ev.get('cases') and max(int(c.get('pos') or 99) for c in draw_ev.get('cases')) <= 2:
+            lines.append("التعادل يكفيه للتأهل المباشر حسب الحسبة الحالية.")
+        lines.append("")
+
+    # 2) الوضع الحالي
+    lines.append("📊 وضعه الحالي")
+    lines.append(f"المجموعة: {_v33_group_label(code)}")
+    if code:
+        lines.append(f"({_v35_group_teams_pretty(code)})")
+    lines.append(f"الحالة: {status_txt}")
+    if row:
+        lines.append(f"المركز الحالي: {pos} — النقاط: {row.get('Pts')} — لعب: {row.get('P')}/3 — الفارق {int(row.get('GD') or 0):+d}")
+    if rem:
+        lines.append(f"المباراة المتبقية: {_v33_format_remaining_match(rem[0])}")
+    lines.append("")
+
+    if 'متأهل رسمي' in status_txt or 'مستبعد رسمي' in status_txt:
+        return "\n".join(lines).strip()
+
+    # 3) الطريق المباشر بالأرقام
+    lines.append("✅ الطريق المباشر بالأرقام")
+    any_out = False
+    outcome_evals = {}
+    for outcome in ['win', 'draw', 'loss']:
+        line, ev = _v35_outcome_status_line(team, outcome, snap)
+        outcome_evals[outcome] = ev
+        if line:
+            lines.append(line)
+            any_out = True
+    if not any_out:
+        lines.append("لا توجد مباراة متبقية واضحة لهذا المنتخب في البيانات الحالية.")
+    lines.append("")
+
+    # 4) كيف يصبح ثالثًا؟
+    third_examples = _v35_third_path_examples(team, snap)
+    lines.append("🥉 كيف يصبح ثالثًا؟")
+    if third_examples:
+        lines.append(f"قد يصبح {team} ثالث مجموعته في هذه الحالات:")
+        for _outcome, target_txt, other_txt, pts_after in third_examples[:4]:
+            lines.append(f"- {target_txt}" + (f" + {other_txt}" if other_txt and other_txt != "لا توجد مباراة أخرى مؤثرة" else "") + f" ➜ يصبح ثالثًا بـ{pts_after} نقاط")
+    else:
+        lines.append("حسب المباريات المتبقية الآن، طريقه الأقرب يكون عبر التأهل المباشر أو الخروج، ولا يظهر مسار ثالث واضح من البيانات الحالية.")
+    lines.append("")
+
+    # 5) إذا صار ثالث وش يحتاج؟
+    target_third_pts = None
+    if third_examples:
+        target_third_pts = max(x[3] for x in third_examples if len(x) >= 4)
+    elif row:
+        try:
+            target_third_pts = int(row.get('Pts') or 0)
+        except Exception:
+            target_third_pts = None
+    lines.append("بعد ما يصبح ثالثًا، ماذا يحتاج؟")
+    lines.append("يتأهل أفضل 8 ثوالث من أصل 12، لذلك يحتاج أن يكون أفضل من 4 ثوالث على الأقل.")
+    lines.append("البوت يحذف أي مجموعة صار ثالثها مستحيل يتأهل، ويبقي المجموعات الصعبة بعلامة تحذير فقط.")
+    lines.append("")
+
+    # 6) الثوالث المؤثرة بتنسيق أفخم
+    lines.append(f"🥉 الثوالث اللي تهم {team}")
+    lines.extend(_v35_related_thirds_lines(team, snap, target_pts=target_third_pts, limit=7))
+    lines.append("الأزرار بالأسفل تعطيك طريق أفضل الثوالث والخصوم المحتملين إذا أنهى المنتخب ثالثًا.")
+    return "\n".join(lines).strip()
+
+
+def _v33_how_thirds_text(team):
+    team = _v33_find_team(team)
+    if not team:
+        return "ما عرفت المنتخب."
+    snap = _v33_snapshot(False)
+    code = _v33_team_group(team)
+    lines = [f"🥉 طريق أفضل الثوالث — {team}", ""]
+    lines.append(f"إذا أصبح {team} ثالث {_v33_group_label(code)}، تتم مقارنته مع ثوالث باقي المجموعات.")
+    lines.append("يتأهل أفضل 8 ثوالث من أصل 12، وأي مجموعة ثالثها مستحيل تُحذف من الاحتمالات.")
+    lines.append("")
+    lines.append(f"{_v33_group_label(code)}")
+    lines.append(f"({_v35_group_teams_pretty(code)})")
+    lines.append("")
+    lines.append(f"🥉 الثوالث اللي تهم {team}")
+    lines.extend(_v35_related_thirds_lines(team, snap, target_pts=None, limit=10))
+    return "\n".join(lines).strip()
+
+
+# تحسين تفاصيل الخصم بإظهار المنتخبات تحت المجموعة وبصياغة أبسط.
+def _v33_opponent_detail_text(team, slot, snap=None):
+    snap = snap or _v33_snapshot(False)
+    team = _v33_find_team(team) or team
+    code = _v33_team_group(team)
+    leader = _v33_group_leader(slot, snap) or f"متصدر المجموعة {_v33_group_ar(slot)}"
+    current_slot, current_leader = _v33_third_matchup_line(code, snap)
+    lines = [f"🏟️ احتمال مواجهة {leader}", ""]
+    lines.append(f"{team} يبقى ثالث {_v33_group_label(code)}.")
+    lines.append(f"({_v35_group_teams_pretty(code)})")
+    lines.append("")
+    if current_slot:
+        lines.append("الحالة الحالية:")
+        lines.append(f"ثالث {_v33_group_label(code)} يقابل متصدر {_v33_group_label(current_slot)}")
+        lines.append(f"حسب الجدول الحالي: {current_leader or '-'}")
+        lines.append("")
+    lines.append("هذا الاحتمال يظهر إذا تغيّرت تركيبة أفضل الثوالث، فوضع جدول FIFA ثالث هذه المجموعة في خانة:")
+    lines.append(f"متصدر {_v33_group_label(slot)}")
+    lines.append(f"({_v35_group_teams_pretty(slot)})")
+    lines.append("")
+    lines.append(f"حسب الجدول الحالي: {leader}")
+    lines.append(f"النتيجة: {team} × {leader}")
+    lines.append("")
+    lines.append("الخلاصة: المنتخب لا يغيّر مجموعته؛ الذي يتغيّر هو مسار ثالث المجموعة في دور الـ32 بسبب دخول وخروج ثوالث المجموعات من أفضل 8.")
+    return "\n".join(lines).strip()
+
+
+def _v33_all_opponents_text(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    team = _v33_find_team(team) or team
+    code = _v33_team_group(team)
+    slots, excluded, weak = _v33_possible_slots_for_third_group(code, snap)
+    lines = [f"📊 الاحتمالات المؤثرة على خصم {team}", ""]
+    lines.append(f"إذا تأهل {team} كثالث {_v33_group_label(code)}، فالخصم يكون من الخانات التالية بعد حذف المستحيل:")
+    lines.append(f"({_v35_group_teams_pretty(code)})")
+    lines.append("")
+    if excluded:
+        lines.append("🚫 مجموعات حُذفت من الحساب:")
+        for c, reason in excluded[:8]:
+            tr = _v33_third_row_for_group(c, snap) or {}
+            lines.append(_v35_group_card_header(c, "❌"))
+            lines.append(f"ثالثها الحالي: {tr.get('team','-')}")
+            lines.append(f"السبب: {reason}")
+            lines.append("")
+    for slot in slots:
+        leader = _v33_group_leader(slot, snap) or f"متصدر المجموعة {_v33_group_ar(slot)}"
+        lines.append(_v35_group_card_header(slot, "🏟️"))
+        lines.append(f"الخصم المحتمل: متصدر {_v33_group_label(slot)}")
+        lines.append(f"حسب الجدول الحالي: {leader}")
+        lines.append("")
+    if weak:
+        lines.append("⚠️ ملاحظة: بعض المجموعات وضعها صعب لكنها لم تُحذف لأنها ما زالت ممكنة حسابيًا.")
+    return "\n".join(lines).strip()
+
+
+# بارسر سيناريوات أوضح: يقبل الواو الملصقة مثل وفوز/وتعادل/وهزيمة.
+def _v33_detect_scenario_items(text):
+    s = _v34_normalize_scenario_text(text or '') if '_v34_normalize_scenario_text' in globals() else normalize_name(text or '')
+    s = re.sub(r'\s+و(?=(?:فوز|يفوز|تفوز|فازت|ينتصر|انتصار|خسارة|هزيمة|انهزام|يخسر|تخسر|خسر|انهزم|ينهزم|تعادل|يتعادل|تتعادل|تعادلت))', '\n', s)
+    raw_parts = []
+    for chunk in re.split(r'[\n،,\+]+', s):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        # احتياط لو بقيت واو منفصلة
+        raw_parts.extend([p.strip() for p in re.split(r'\s+و\s+', chunk) if p.strip()])
+    items = []
+    for part in raw_parts:
+        outcome = None
+        if re.search(r'(فوز|يفوز|تفوز|فازت|ينتصر|انتصار)', part):
+            outcome = 'win'
+        elif re.search(r'(خسارة|هزيمة|انهزام|يخسر|تخسر|خسر|انهزم|ينهزم)', part):
+            outcome = 'loss'
+        elif re.search(r'(تعادل|يتعادل|تتعادل|تعادلت)', part):
+            outcome = 'draw'
+        if not outcome:
+            continue
+        tm = _v33_find_team(part)
+        if not tm:
+            tmp = re.sub(r'(فوز|يفوز|تفوز|فازت|ينتصر|انتصار|خسارة|هزيمة|انهزام|يخسر|تخسر|خسر|انهزم|ينهزم|تعادل|يتعادل|تتعادل|تعادلت)', ' ', part)
+            tm = _v33_find_team(tmp)
+        if tm:
+            items.append((tm, outcome, _v33_parse_score_pair(part)))
+    return items
+
+# ==================== END V35 HOW-QUALIFY FORMAT + SCENARIO PARSER FINAL PATCH ====================
+
 if __name__ == "__main__":
     main()
