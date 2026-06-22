@@ -37180,5 +37180,256 @@ async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V32_TEST PATCH ====================
 
+
+# ==================== V32 READY FINAL UI/PDF PATCH ====================
+# آخر اعتماد فهد:
+# - القائمة الرئيسية مختصرة.
+# - طريقة الاستخدام في /start فقط.
+# - الفانتزي باسم "فانتزي" ومقفل بالرمز.
+# - PDF سباق التأهل ستايل ملاحظات آيفون.
+
+V32_FINAL_MENU_LABELS = {
+    "📺 مباشر الآن", "🏆 لوحة البطولة", "🏁 سباق التأهل", "✅ المتأهلون", "❌ المغادرون",
+    "🥉 أفضل الثوالث", "⭐ منتخبي المفضل", "📅 المباريات القادمة", "📋 نتائج المباريات",
+    "🎬 ملخصات المباريات", "🎮 فانتزي",
+    # توافق مع أسماء قديمة ظهرت في النسخ التجريبية
+    "🏆 لوحة البطولة الآن", "✅ المتأهلون رسميًا", "❌ المستبعدون رسميًا", "🎮 فانتزي المصيف",
+}
+
+
+def _public_main_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ["📺 مباشر الآن"],
+            ["🏆 لوحة البطولة", "🏁 سباق التأهل"],
+            ["✅ المتأهلون", "❌ المغادرون"],
+            ["🥉 أفضل الثوالث", "⭐ منتخبي المفضل"],
+            ["📅 المباريات القادمة", "📋 نتائج المباريات"],
+            ["🎬 ملخصات المباريات", "🎮 فانتزي"],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="اكتب اسم منتخب أو اختر من القائمة",
+    )
+
+
+def _public_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📺 مباشر الآن", callback_data="mainmenu|live")],
+        [InlineKeyboardButton("🏆 لوحة البطولة", callback_data="v32|board"), InlineKeyboardButton("🏁 سباق التأهل", callback_data="v32|race")],
+        [InlineKeyboardButton("✅ المتأهلون", callback_data="v32|qualified"), InlineKeyboardButton("❌ المغادرون", callback_data="v32|eliminated")],
+        [InlineKeyboardButton("🥉 أفضل الثوالث", callback_data="v32|thirds"), InlineKeyboardButton("⭐ منتخبي المفضل", callback_data="v32|fav_home")],
+        [InlineKeyboardButton("📅 المباريات القادمة", callback_data="mainmenu|fixtures"), InlineKeyboardButton("📋 نتائج المباريات", callback_data="mainmenu|results")],
+        [InlineKeyboardButton("🎬 ملخصات المباريات", callback_data="v32|hls_home"), InlineKeyboardButton("🎮 فانتزي", callback_data="v32|fantasy_gate")],
+    ])
+
+
+def _public_help_text():
+    return (
+        "حياك في بوت مونديال المصيف 2026 🏆\n\n"
+        "اختر من القائمة بالأسفل.\n"
+        "وتقدر تكتب اسم أي منتخب مباشرة مثل: السعودية أو Japan لعرض النتيجة السريعة.\n\n"
+        "🔐 الفانتزي خاص بالمشاركين ويحتاج رمز دخول.\n"
+        "🏁 سباق التأهل هو المصدر الرسمي للمتأهلين والمغادرين."
+    )
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    await update.message.reply_text(_public_help_text(), reply_markup=_public_main_reply_keyboard())
+
+
+def _v32_fantasy_gate_text():
+    return "🔐 الفانتزي خاص بالمشاركين\n\nاكتب رمز الدخول:"
+
+
+async def _v32_open_fantasy_menu_for(update_or_message, context=None):
+    msg = getattr(update_or_message, 'message', None) or getattr(update_or_message, 'effective_message', None) or update_or_message
+    try:
+        await msg.reply_text("🎮 فانتزي", reply_markup=_fantasy_public_keyboard())
+    except Exception:
+        await msg.reply_text("🎮 فانتزي مفتوح للمصرّحين ✅")
+
+
+def _v32_notes_pdf_new_page(title="سباق التأهل", subtitle=""):
+    width, height = 1240, 1754
+    if Image is None or ImageDraw is None:
+        raise RuntimeError("PIL غير متوفر لإنشاء PDF")
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    draw_text(draw, (width-70, 55), title, get_font(44), fill="#111827", anchor="ra", align="right")
+    if subtitle:
+        draw_text(draw, (width-70, 110), subtitle, get_font(24), fill="#6B7280", anchor="ra", align="right")
+    draw.line([(70, 150), (width-70, 150)], fill="#E5E7EB", width=2)
+    return img, draw, 185
+
+
+def _v32_notes_draw_line(draw, text, y, font=None, fill="#111827", max_width=1080, gap=4):
+    width = 1240
+    x = width - 70
+    font = font or get_font(24)
+    lines = wrap_text(draw, str(text or ""), font, max_width)
+    line_h = int(font_size(font, 24) * 1.45)
+    for ln in lines:
+        draw_text(draw, (x, y), ln, font, fill=fill, anchor="ra", align="right")
+        y += line_h
+    return y + gap
+
+
+def _v32_notes_need_page(pages, img, draw, y, need=180, title="سباق التأهل", subtitle=""):
+    if y + need < 1660:
+        return img, draw, y
+    pages.append(img)
+    return _v32_notes_pdf_new_page(title, subtitle)
+
+
+def _v32_create_race_pdf(force=False):
+    """PDF واضح وبسيط ستايل ملاحظات آيفون."""
+    snap = _v32_snapshot(force)
+    ensure_generated_dir()
+    pages = []
+    subtitle = f"آخر تحديث: {snap.get('updated_at','-')} — ESPN + حسبة المصيف الرسمية"
+
+    title_font = get_font(36)
+    normal_font = get_font(24)
+    small_font = get_font(21)
+    section_font = get_font(30)
+
+    img, draw, y = _v32_notes_pdf_new_page("🏁 سباق التأهل — مونديال المصيف 2026", subtitle)
+    q = snap.get('qualified') or []
+    e = snap.get('eliminated') or []
+    y = _v32_notes_draw_line(draw, "📌 ملخص سريع", y, section_font, "#111827")
+    y = _v32_notes_draw_line(draw, f"مباريات البطولة المكتملة: {snap.get('finished_count',0)} / {snap.get('total_tournament_matches',104)}", y, normal_font)
+    y = _v32_notes_draw_line(draw, f"مباريات دور المجموعات: {snap.get('finished_count',0)} / {snap.get('total_group_matches',72)}", y, normal_font)
+    y = _v32_notes_draw_line(draw, f"المتأهلون رسميًا: {len(q)}", y, normal_font, "#047857")
+    if q:
+        y = _v32_notes_draw_line(draw, "، ".join(q[:16]), y, small_font, "#065F46")
+    y = _v32_notes_draw_line(draw, f"المغادرون رسميًا: {len(e)}", y, normal_font, "#B91C1C")
+    if e:
+        y = _v32_notes_draw_line(draw, "، ".join(e[:16]), y, small_font, "#991B1B")
+    y = _v32_notes_draw_line(draw, f"إجمالي الأهداف: {snap.get('goals',0)}", y, normal_font)
+    y = _v32_notes_draw_line(draw, f"مباريات الحسم القادمة: {len(_v32_decisive_rows(False))}", y, normal_font)
+    y = _v32_notes_draw_line(draw, "ملاحظة: المتأهل أو المغادر الرسمي لا يظهر إلا إذا حُسم حسابيًا 100٪.", y, small_font, "#6B7280")
+
+    pages.append(img)
+    img, draw, y = _v32_notes_pdf_new_page("🏁 مجموعات سباق التأهل", subtitle)
+
+    for code, _teams in WORLD_CUP_GROUPS:
+        g = (snap.get("groups") or {}).get(code, {})
+        rows = g.get('rows') or []
+        need_h = 120 + len(rows) * 92
+        img, draw, y = _v32_notes_need_page(pages, img, draw, y, need=need_h, title="🏁 مجموعات سباق التأهل", subtitle=subtitle)
+        y = _v32_notes_draw_line(draw, f"{_v32_group_name(code)}", y, section_font, "#B45309")
+        for idx, r in enumerate(rows, start=1):
+            team = r.get('team') or '-'
+            st = _v32_plain_status((snap.get('status') or {}).get(team, 'ما زال ينافس'))
+            gd = int(r.get('GD') or 0)
+            color = "#047857" if 'متأهل' in st else ("#B91C1C" if ('مستبعد' in st or 'مغادر' in st) else "#111827")
+            y = _v32_notes_draw_line(draw, f"{idx}. {team} — {r.get('Pts',0)} نقاط", y, normal_font, "#111827")
+            y = _v32_notes_draw_line(draw, f"   لعب: {r.get('P',0)}/3 — المتبقي للمنتخب: {_v32_group_team_remaining_matches(r)} — الفارق: {gd:+d} — الأهداف: {r.get('GF',0)}", y, small_font, "#374151")
+            y = _v32_notes_draw_line(draw, f"   الحالة: {st}", y, small_font, color)
+        rem = _v32_group_remaining_count(g)
+        if rem:
+            y = _v32_notes_draw_line(draw, f"المباريات المتبقية في المجموعة: {rem}", y, small_font, "#92400E")
+            for m in _v32_group_remaining_fixtures_for_sim(code, g)[:3]:
+                y = _v32_notes_draw_line(draw, f"- {m.get('team1')} × {m.get('team2')}", y, small_font, "#374151")
+        y += 18
+
+    pages.append(img)
+
+    # أفضل الثوالث
+    img, draw, y = _v32_notes_pdf_new_page("🥉 أفضل الثوالث", subtitle)
+    thirds = snap.get('thirds') or []
+    y = _v32_notes_draw_line(draw, "أفضل 8 ثوالث يتأهلون لدور الـ32", y, section_font, "#111827")
+    y = _v32_notes_draw_line(draw, "✅ داخلين حاليًا", y, section_font, "#047857")
+    for i, r in enumerate(thirds[:8], start=1):
+        y = _v32_notes_draw_line(draw, f"{i}. {r.get('team')} — {_v32_group_name(r.get('group'))}", y, normal_font)
+        y = _v32_notes_draw_line(draw, f"   النقاط: {r.get('Pts')} — الفارق: {int(r.get('GD') or 0):+d} — الأهداف: {r.get('GF')}", y, small_font, "#374151")
+    y += 16
+    y = _v32_notes_draw_line(draw, "❌ خارجين حاليًا", y, section_font, "#B91C1C")
+    for i, r in enumerate(thirds[8:], start=9):
+        y = _v32_notes_draw_line(draw, f"{i}. {r.get('team')} — {_v32_group_name(r.get('group'))}", y, normal_font)
+        y = _v32_notes_draw_line(draw, f"   النقاط: {r.get('Pts')} — الفارق: {int(r.get('GD') or 0):+d} — الأهداف: {r.get('GF')}", y, small_font, "#374151")
+    pages.append(img)
+
+    # مباريات الحسم
+    img, draw, y = _v32_notes_pdf_new_page("🔥 مباريات الحسم", subtitle)
+    rows = _v32_decisive_rows(False)
+    if not rows:
+        y = _v32_notes_draw_line(draw, "لا توجد مباريات حسم واضحة حاليًا.", y, normal_font)
+    for idx, (d,t,code,a,b,note) in enumerate(rows[:18], start=1):
+        img, draw, y = _v32_notes_need_page(pages, img, draw, y, need=125, title="🔥 مباريات الحسم", subtitle=subtitle)
+        y = _v32_notes_draw_line(draw, f"{idx}. {a} × {b}", y, normal_font, "#111827")
+        y = _v32_notes_draw_line(draw, f"   التاريخ: {d} — الوقت: {t or '-'} — {_v32_group_name(code)}", y, small_font, "#374151")
+        y = _v32_notes_draw_line(draw, f"   التأثير: {note}", y, small_font, "#92400E")
+        y += 8
+    pages.append(img)
+
+    label = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    out_path = os.path.join(GENERATED_DIR, f"qualification_race_notes_{label}.pdf")
+    rgb_pages = [p.convert("RGB") for p in pages]
+    rgb_pages[0].save(out_path, "PDF", resolution=120.0, save_all=True, append_images=rgb_pages[1:])
+    return out_path
+
+
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    txt = normalize_name(update.message.text or '').strip()
+    if txt in ("🎬 ملخصات المباريات", "🎞️ ملخصات المباريات"):
+        await update.message.reply_text("🎬 ملخصات المباريات", reply_markup=_v32_hls_home_keyboard()); return
+    if txt in ("🏆 لوحة البطولة", "🏆 لوحة البطولة الآن"):
+        await update.message.reply_text(_v32_tournament_board_text(), reply_markup=_v32_board_keyboard()); return
+    if txt == "🏁 سباق التأهل":
+        await update.message.reply_text("🏁 سباق التأهل", reply_markup=_v32_groups_keyboard()); return
+    if txt in ("✅ المتأهلون", "✅ المتأهلون رسميًا"):
+        await _v32_show_qualified_message(update.message); return
+    if txt in ("❌ المغادرون", "❌ المستبعدون رسميًا"):
+        await _v32_show_eliminated_message(update.message); return
+    if txt == "🥉 أفضل الثوالث":
+        await update.message.reply_text(_v32_best_thirds_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 تحديث", callback_data="v32|thirds_force")]])); return
+    if txt == "⭐ منتخبي المفضل":
+        uid = _v32_user_id(update); team = _v32_load_favorites().get(uid)
+        if team:
+            await update.message.reply_text(_v32_team_summary_text(team), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("تغيير المنتخب", callback_data="v32|fav_home")]]))
+        else:
+            await update.message.reply_text("اختر منتخبك المفضل ⭐", reply_markup=_v32_favorite_team_keyboard())
+        return
+    if txt == "🎮 فانتزي":
+        if _v32_user_is_fantasy_allowed(update):
+            await _v32_open_fantasy_menu_for(update, context)
+        else:
+            await _v32_show_fantasy_gate(update, context)
+        return
+    # توافق مع الاسم القديم فقط
+    if txt == "🎮 فانتزي المصيف":
+        if _v32_user_is_fantasy_allowed(update):
+            await _v32_open_fantasy_menu_for(update, context)
+        else:
+            await _v32_show_fantasy_gate(update, context)
+        return
+    if txt in ("🧑‍💻 لوحة الإدارة", "🧑‍💻 لوحة المشرف"):
+        if not is_admin_user(update):
+            await update.message.reply_text("هذا الخيار للمشرفين فقط 🔒"); return
+        await v32_admin_panel_command(update, context); return
+    return await _V32_OLD_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V32_READY_PREV_TEXT_ROUTER = text_state_router
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(update.message.text or '').strip()
+    # لأن أزرار القائمة الجديدة قد لا تكون داخل Regex القديم المسجل في main، نلتقطها هنا.
+    if txt in V32_FINAL_MENU_LABELS:
+        return await public_reply_menu_router(update, context)
+    return await _V32_READY_PREV_TEXT_ROUTER(update, context)
+
+
+# ==================== END V32 READY FINAL UI/PDF PATCH ====================
+
 if __name__ == "__main__":
     main()
