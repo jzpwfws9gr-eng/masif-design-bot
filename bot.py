@@ -39096,5 +39096,680 @@ def _v32_parse_youtube_goal_scorers(desc, team1='', team2=''):
 
 # ==================== END V32 BEIN PARSER COTE DIVOIRE / LAST PLAYER HOTFIX ====================
 
+
+
+# ==================== V32 ADMIN PROTECTION + RAW DESCRIPTION CACHE + BEIN AR PATCH ====================
+# اعتماد فهد:
+# - أزرار المسح/الكاش/التحديث/إعادة التحليل للمشرف فقط.
+# - حفظ أوصاف يوتيوب الخام في ملف خارجي حتى نعيد التحليل بدون الرجوع ليوتيوب.
+# - ملف أهداف خارجي mirrors goals_data.json.
+# - زر إعادة تحليل الأوصاف المحفوظة للمشرف فقط.
+# - تحسين قراءة وصف beIN العربي مع توحيد الهمزات ودعم الدقائق حتى 3 خانات وبدل الضائع.
+
+YOUTUBE_DESCRIPTIONS_CACHE_FILE = "youtube_descriptions_cache.json"
+YOUTUBE_GOALS_DATA_FILE = "goals_data.json"
+V32_ADMIN_RENDER_CONTEXT = False
+
+
+def _v32_json_now():
+    try:
+        return _now_riyadh_text()
+    except Exception:
+        try:
+            return datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+        except Exception:
+            return ''
+
+
+def _v32_load_descriptions_cache():
+    try:
+        if '_v32_load_json' in globals():
+            data = _v32_load_json(YOUTUBE_DESCRIPTIONS_CACHE_FILE, {"updated_at": "", "items": {}})
+        else:
+            with open(YOUTUBE_DESCRIPTIONS_CACHE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+    except Exception:
+        data = {"updated_at": "", "items": {}}
+    if not isinstance(data, dict):
+        data = {"updated_at": "", "items": {}}
+    data.setdefault('items', {})
+    return data
+
+
+def _v32_save_descriptions_cache(data):
+    data = data if isinstance(data, dict) else {"updated_at": "", "items": {}}
+    data['updated_at'] = _v32_json_now()
+    data.setdefault('items', {})
+    try:
+        if '_v32_save_json' in globals():
+            return _v32_save_json(YOUTUBE_DESCRIPTIONS_CACHE_FILE, data)
+        with open(YOUTUBE_DESCRIPTIONS_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+try:
+    _V32_ADMIN_PATCH_PREV_SAVE_GOALS = _v32_save_goal_scorers_data
+except Exception:
+    _V32_ADMIN_PATCH_PREV_SAVE_GOALS = None
+
+
+def _v32_save_goal_scorers_data(data):
+    """يحفظ ملف مسجلي الأهداف الأساسي + نسخة خارجية goals_data.json."""
+    if _V32_ADMIN_PATCH_PREV_SAVE_GOALS:
+        try:
+            _V32_ADMIN_PATCH_PREV_SAVE_GOALS(data)
+        except Exception:
+            pass
+    else:
+        try:
+            if '_v32_save_json' in globals():
+                _v32_save_json(YOUTUBE_GOAL_SCORERS_FILE, data or {})
+            else:
+                with open(YOUTUBE_GOAL_SCORERS_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(data or {}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+    try:
+        if '_v32_save_json' in globals():
+            _v32_save_json(YOUTUBE_GOALS_DATA_FILE, data or {})
+        else:
+            with open(YOUTUBE_GOALS_DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data or {}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _v32_norm_ar_for_goals(text):
+    s = normalize_name(text or '') if 'normalize_name' in globals() else str(text or '')
+    # توحيد همزات وألف مقصورة وتاء مربوطة بشكل خفيف للتحليل فقط.
+    trans = str.maketrans({'أ':'ا','إ':'ا','آ':'ا','ٱ':'ا','ى':'ي','ؤ':'و','ئ':'ي','ة':'ه'})
+    s = s.translate(trans)
+    # إزالة التشكيل والمدات.
+    s = re.sub(r'[\u064B-\u065F\u0670ـ]', '', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+_V32_EXTRA_BAD_GOAL_WORDS = {
+    'في','من','الى','إلى','علي','على','ضد','امام','أمام','منتخب','المنتخب','الدقيقه','الدقيقة','دقيقه','دقيقة',
+    'الدقيقتين','الدقائق','هدف','اهداف','أهداف','هدفي','هدفين','التسجيل','بواسطه','بواسطة','عن','طريق','غير','محدد',
+    'الشوط','المباراه','المباراة','اللقاء','فيما','بينما','المقابل','وقد','حيث','وسجل','سجل','احرز','أحرز',
+    'افتتح','أفتتح','ادرك','أدرك','تعادل','تقدم','قلص','قلّص','اضاف','أضاف','حسم','اختتم'
+}
+
+try:
+    _V32_PREV_GOAL_CLEAN_CANDIDATE_ADMINPATCH = _v32_goal_clean_player_candidate
+except Exception:
+    _V32_PREV_GOAL_CLEAN_CANDIDATE_ADMINPATCH = None
+
+
+def _v32_goal_clean_player_candidate(name):
+    s = normalize_name(name or '') if 'normalize_name' in globals() else str(name or '')
+    s = re.sub(r'https?://\S+|www\.\S+', ' ', s, flags=re.I)
+    s = re.sub(r'[#@]\S+', ' ', s)
+    s = re.sub(r'[\[\](){}|•،,:;=+*_/\\]+', ' ', s)
+    s = re.sub(r"[0-9]+(?:\+[0-9]+)?\s*['’]?", ' ', s)
+    s = re.sub(r'\b\d+\s*[-:x×]\s*\d+\b', ' ', s)
+    # قص العبارات التي تأتي قبل اسم اللاعب غالبًا.
+    s = re.sub(r'^(?:و|ف|ثم|كما|بينما|فيما|وقد|حيث|في المقابل|بهدف|هدف|أحرزه|احرزه|سجله|سجل|سجّل|أحرز|احرز|افتتح|أفتتح|تعادل|أدرك|ادرك|تقدم|قلص|قلّص|اضاف|أضاف|حسم|اختتم|بواسطة|بواسطه|عن طريق|لاعبه|لاعب)\s+', '', s).strip()
+    s = re.sub(r'\s+(?:في|من|لمنتخب|للمنتخب|هدف|هدفي|أهداف|اهداف|التسجيل|الدقيقة|الدقيقه|دقيقة|دقيقه|والوحيد|الوحيد|الأول|الاول|الثاني|الثالث|الرابع)$', '', s).strip()
+    s = re.sub(r'\s{2,}', ' ', s).strip(" -–—'’.،")
+    # لو بقايا جملة طويلة، خذ آخر 4 كلمات لأنها غالبًا اسم اللاعب في صيغ beIN.
+    words = [w for w in s.split() if w]
+    if len(words) > 5:
+        s = ' '.join(words[-4:])
+    return s
+
+
+try:
+    _V32_PREV_GOAL_IS_BAD_ADMINPATCH = _v32_goal_is_bad_player_name
+except Exception:
+    _V32_PREV_GOAL_IS_BAD_ADMINPATCH = None
+
+
+def _v32_goal_is_bad_player_name(name, team1='', team2=''):
+    s = _v32_goal_clean_player_candidate(name)
+    if not s or len(s) < 2 or len(s) > 42:
+        return True
+    words = [w for w in re.split(r'\s+', s) if w]
+    if not words:
+        return True
+    norm_words = {_v32_norm_ar_for_goals(w) for w in words}
+    norm_full = _v32_norm_ar_for_goals(s)
+    bad_norm = {_v32_norm_ar_for_goals(w) for w in _V32_EXTRA_BAD_GOAL_WORDS}
+    if words[0] in _V32_EXTRA_BAD_GOAL_WORDS or _v32_norm_ar_for_goals(words[0]) in bad_norm:
+        return True
+    if norm_full in bad_norm:
+        return True
+    if norm_full.startswith(('في ', 'من ', 'ضد ', 'امام ', 'غير ', 'منتخب ', 'المنتخب ')):
+        return True
+    if 'canonical_team_name' in globals():
+        try:
+            if canonical_team_name(s):
+                return True
+        except Exception:
+            pass
+    bad_re = re.compile(r'(fifa|worldcup|youtube|subscribe|channel|watch|video|highlight|match|ملخص|البطوله|البطولة|كاس العالم|كأس العالم|مونديال|المجموعه|المجموعة|الجوله|الجولة|منافسات|المباراه|المباراة|الفيديو|المشاهدات|المعجبين)', re.I)
+    if bad_re.search(_v32_norm_ar_for_goals(s)):
+        return True
+    return False
+
+
+try:
+    _V32_PREV_GOAL_SPLIT_SENTENCES_ADMINPATCH = _v32_goal_split_sentences
+except Exception:
+    _V32_PREV_GOAL_SPLIT_SENTENCES_ADMINPATCH = None
+
+
+def _v32_goal_split_sentences(desc):
+    desc = _v32_clean_youtube_description(desc) if '_v32_clean_youtube_description' in globals() else str(desc or '')
+    clean_lines = []
+    for raw in desc.splitlines():
+        line = normalize_name(raw) if 'normalize_name' in globals() else str(raw or '')
+        if not line:
+            continue
+        if re.search(r'https?://|subscribe|اشترك|تابعونا|copyright|©|tickets|instagram|tiktok|facebook|twitter|x\.com|عدد المشاهدات|عدد المعجبين', line, re.I):
+            continue
+        clean_lines.append(line)
+    text = ' '.join(clean_lines)
+    text = re.split(r'#[\w\u0600-\u06FF_]+', text)[0]
+    # لا نعتمد على النقاط فقط؛ نفصل بين صيغ beIN المتتابعة.
+    parts = re.split(r'(?:\.|؛|\n|\r|\s+فيما\s+|\s+بينما\s+|\s+في المقابل\s+|\s+وعادل\s+|\s+وتعادل\s+|\s+وادرك\s+|\s+وأدرك\s+|\s+وسجل\s+|\s+وأحرز\s+|\s+واحرز\s+)', text)
+    out = []
+    trigger = r'(سجل|سجّل|احرز|أحرز|احرزه|أحرزه|افتتح|أفتتح|تعادل|ادرك|أدرك|تقدم|قلص|قلّص|اضاف|أضاف|حسم|اختتم|هدف|الدقيقة|الدقيقه|الدقيقتين|الدقائق|بواسطة|بواسطه|عن طريق)'
+    for p in parts:
+        p = normalize_name(p).strip(' -–—:،') if 'normalize_name' in globals() else str(p or '').strip()
+        if p and re.search(trigger, p):
+            out.append(p[:600])
+    return out
+
+
+def _v32_goal_minutes_in_text(text):
+    """يدعم دقائق من خانة إلى 3 خانات + بدل ضائع مثل 90+4."""
+    text = str(text or '')
+    mins = []
+    minute_pat = r'([1-9]\d{0,2}(?:\+\d{1,2})?)'
+    patterns = [
+        rf"{minute_pat}\s*['’]",
+        rf"(?:الدقيقة|الدقيقه|دقيقة|دقيقه|د|minute|min)\s*[:\-]?\s*{minute_pat}",
+        rf"(?:الدقيقتين|الدقائق)\s*[:\-]?\s*{minute_pat}(?:\s*(?:و|،|,)\s*{minute_pat})*",
+        rf"\(\s*{minute_pat}(?:\s*(?:و|،|,)\s*{minute_pat})*\s*\)",
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, text, re.I):
+            for g in m.groups():
+                if not g:
+                    continue
+                try:
+                    base = int(str(g).split('+', 1)[0])
+                    if 1 <= base <= 130 and g not in mins:
+                        mins.append(g)
+                except Exception:
+                    pass
+    return mins
+
+
+try:
+    _V32_PREV_PARSE_YT_GOALS_ADMINPATCH = _v32_parse_youtube_goal_scorers
+except Exception:
+    _V32_PREV_PARSE_YT_GOALS_ADMINPATCH = None
+
+
+def _v32_goal_team_variants_safe(tm):
+    forms = []
+    if not tm:
+        return forms
+    try:
+        forms += list(_v32_goal_team_variants(tm) or [])
+    except Exception:
+        forms.append(tm)
+    forms.append(tm)
+    try:
+        can = canonical_team_name(tm)
+        if can:
+            forms.append(can)
+    except Exception:
+        pass
+    extra = {
+        'ساحل العاج': ['كوت ديفوار', 'الايفواري', 'الإيفواري', 'العاجي'],
+        'كوت ديفوار': ['ساحل العاج', 'الايفواري', 'الإيفواري', 'العاجي'],
+        'الولايات المتحدة': ['امريكا', 'أمريكا', 'الامريكي', 'الأمريكي'],
+        'الرأس الأخضر': ['كاب فيردي', 'كاب فيردى', 'الراس الاخضر'],
+        'أوروجواي': ['اوروغواي', 'أوروغواي', 'الاوروغوياني', 'الأوروغوياني'],
+    }
+    for f in list(forms):
+        forms += extra.get(normalize_name(f), [])
+    uniq=[]; seen=set()
+    for f in forms:
+        f = normalize_name(f)
+        k = _v32_norm_ar_for_goals(f)
+        if f and k not in seen:
+            uniq.append(f); seen.add(k)
+    return sorted(uniq, key=len, reverse=True)
+
+
+def _v32_goal_add_from_candidate(goals, seen, player, team, minutes, raw, team1, team2):
+    added = 0
+    for minute in _v32_goal_minutes_in_text(minutes) or ([str(minutes).strip()] if minutes else ['']):
+        if _v32_add_goal_record(goals, seen, player, team, minute, raw, team1, team2):
+            added += 1
+    return added
+
+
+def _v32_parse_bein_extra_patterns(desc, team1='', team2='', base_goals=None):
+    goals = list(base_goals or [])
+    seen = set()
+    for g in goals:
+        try:
+            seen.add((simple_key((g or {}).get('player') or ''), simple_key((g or {}).get('team') or ''), str((g or {}).get('minute') or '')))
+        except Exception:
+            pass
+    raw_text = _v32_clean_youtube_description(desc)
+    text = re.sub(r'\s+', ' ', raw_text).strip()
+    norm_text = _v32_norm_ar_for_goals(text)
+    teams = [t for t in [team1, team2] if t]
+
+    # أفتتح/افتتح التسجيل بواسطة فلان في الدقيقة 21
+    pat1 = r'(?:افتتح|أفتتح)\s+(?:منتخب\s+[^،\.]{2,40}\s+)?(?:التسجيل\s+)?(?:بواسطة|بواسطه|عن\s+طريق)\s+([^،\.]{2,55}?)\s+(?:في\s+)?(?:الدقيقة|الدقيقه|دقيقة|دقيقه)\s+([1-9]\d{0,2}(?:\+\d{1,2})?)'
+    for m in re.finditer(pat1, text):
+        team_hint = _v32_goal_team_from_text(m.group(0), team1, team2)
+        _v32_goal_add_from_candidate(goals, seen, m.group(1), team_hint, m.group(2), m.group(0), team1, team2)
+
+    # تعادل منتخب كندا في الدقيقة 78 بهدف أحرزه كايل لارين
+    pat2 = r'(?:تعادل|ادرك|أدرك)[^،\.]{0,120}?(?:الدقيقة|الدقيقه|دقيقة|دقيقه)\s+([1-9]\d{0,2}(?:\+\d{1,2})?)[^،\.]{0,80}?(?:بهدف\s+)?(?:أحرزه|احرزه|سجله|سجّل\s+له|سجل\s+له)\s+([^،\.]{2,55})'
+    for m in re.finditer(pat2, text):
+        team_hint = _v32_goal_team_from_text(m.group(0), team1, team2)
+        _v32_goal_add_from_candidate(goals, seen, m.group(2), team_hint, m.group(1), m.group(0), team1, team2)
+
+    # سجل فلان هدفي المنتخب في الدقيقتين 68 و90+4
+    pat3 = r'(?:سجل|سجّل|أحرز|احرز)\s+([^،\.]{2,55}?)\s+(?:هدفي|هدفين|ثنائيه|ثنائية|اهداف|أهداف)?[^،\.]{0,80}?(?:الدقيقتين|الدقائق)\s+([1-9]\d{0,2}(?:\+\d{1,2})?(?:\s*(?:و|،|,)\s*[1-9]\d{0,2}(?:\+\d{1,2})?)*)'
+    for m in re.finditer(pat3, text):
+        team_hint = _v32_goal_team_from_text(m.group(0), team1, team2)
+        _v32_goal_add_from_candidate(goals, seen, m.group(1), team_hint, m.group(2), m.group(0), team1, team2)
+
+    # سجل فلان في الدقيقة 32 / أحرز فلان هدف ... في الدقيقة 30
+    pat4 = r'(?:سجل|سجّل|أحرز|احرز|قلص|قلّص|اضاف|أضاف|حسم|اختتم)\s+([^،\.]{2,55}?)\s+(?:هدف\s+)?[^،\.]{0,80}?(?:الدقيقة|الدقيقه|دقيقة|دقيقه)\s+([1-9]\d{0,2}(?:\+\d{1,2})?)'
+    for m in re.finditer(pat4, text):
+        team_hint = _v32_goal_team_from_text(m.group(0), team1, team2)
+        _v32_goal_add_from_candidate(goals, seen, m.group(1), team_hint, m.group(2), m.group(0), team1, team2)
+
+    # في المقابل دون فرانك كيسييه هدف منتخب كوت ديفوار الوحيد في الدقيقة 30
+    for tm in teams:
+        for var in _v32_goal_team_variants_safe(tm):
+            v = re.escape(var)
+            pat5 = rf'([^،\.]{{2,80}}?)\s+(?:هدف|هدفي|اهداف|أهداف)\s+(?:منتخب|المنتخب)?\s*{v}[^،\.]{{0,60}}?(?:الدقيقة|الدقيقه|دقيقة|دقيقه)\s+([1-9]\d{{0,2}}(?:\+\d{{1,2}})?)'
+            for m in re.finditer(pat5, text):
+                player = m.group(1)
+                player = re.split(r'(?:في\s+المقابل|بينما|فيما|و|،)', player)[-1]
+                player = _v32_goal_clean_player_candidate(player)
+                _v32_goal_add_from_candidate(goals, seen, player, tm, m.group(2), m.group(0), team1, team2)
+
+    # سجل لمنتخب إيران رامين رضائيان 32 ومحمد محبي 64
+    for tm in teams:
+        for var in _v32_goal_team_variants_safe(tm):
+            v = re.escape(var)
+            pat6 = rf'(?:سجل|سجّل|أحرز|احرز)\s+(?:لمنتخب|للمنتخب|لصالح\s+منتخب)?\s*{v}\s+([^\.\n]{{2,160}})'
+            for m in re.finditer(pat6, text):
+                chunk = m.group(1)
+                # اقطع قبل جملة فريق آخر إن وجدت.
+                chunk = re.split(r'(?:فيما|بينما|في المقابل|وتعادل|وعادل)', chunk)[0]
+                try:
+                    _v32_goal_add_pairs_from_chunk(goals, seen, chunk, tm, m.group(0), team1, team2)
+                except Exception:
+                    pass
+    return goals[:100]
+
+
+def _v32_parse_youtube_goal_scorers(desc, team1='', team2=''):
+    globals()['V32_LAST_GOAL_PARSE_ALERTS'] = []
+    goals = []
+    if _V32_PREV_PARSE_YT_GOALS_ADMINPATCH:
+        try:
+            goals = list(_V32_PREV_PARSE_YT_GOALS_ADMINPATCH(desc, team1, team2) or [])
+        except Exception as e:
+            globals().setdefault('V32_LAST_GOAL_PARSE_ALERTS', []).append(f'تعذر القارئ القديم: {str(e)[:80]}')
+            goals = []
+    goals = _v32_parse_bein_extra_patterns(desc, team1, team2, goals)
+    # فلترة أخيرة وإزالة التكرار وربط المنتخب بالقوائم.
+    clean=[]; seen=set()
+    for g in goals:
+        p = _v32_goal_clean_player_candidate((g or {}).get('player'))
+        if _v32_goal_is_bad_player_name(p, team1, team2):
+            continue
+        tm = (g or {}).get('team') or _v32_goal_squad_team_for_player(p, team1, team2) or ''
+        if tm and team1 and '_v31_team_same' in globals():
+            try:
+                if _v31_team_same(tm, team1):
+                    tm = team1
+                elif team2 and _v31_team_same(tm, team2):
+                    tm = team2
+            except Exception:
+                pass
+        minute = str((g or {}).get('minute') or '').replace("'", '').replace('’','').strip()
+        if minute and not re.fullmatch(r'[1-9]\d{0,2}(?:\+\d{1,2})?', minute):
+            minute = ''
+        key = (simple_key(p), simple_key(tm or ''), minute)
+        if key in seen:
+            continue
+        seen.add(key)
+        gg = dict(g)
+        gg['player'] = p
+        gg['team'] = tm or 'غير محدد'
+        gg['minute'] = minute
+        clean.append(gg)
+    if not clean:
+        # احتفظ بجملة قصيرة للمراجعة بدل رسالة عامة فقط.
+        desc_short = re.sub(r'\s+', ' ', _v32_clean_youtube_description(desc))[:220]
+        if desc_short:
+            globals().setdefault('V32_LAST_GOAL_PARSE_ALERTS', []).append('وصف لم يفهم: ' + desc_short)
+    return clean[:80]
+
+
+def _v32_get_description_for_highlight(key, url, item=None, force=False, reanalyze_only=False):
+    cache = _v32_load_descriptions_cache()
+    rec = (cache.get('items') or {}).get(key) or {}
+    if reanalyze_only:
+        return rec.get('description') or ''
+    if (not force) and rec.get('url') == url and rec.get('description'):
+        return rec.get('description')
+    desc = _v32_fetch_youtube_description(url)
+    cache.setdefault('items', {})[key] = {
+        'url': url,
+        'team1': (item or {}).get('team1') or '',
+        'team2': (item or {}).get('team2') or '',
+        'description': desc,
+        'updated_at': _v32_json_now(),
+    }
+    _v32_save_descriptions_cache(cache)
+    return desc
+
+
+def _v32_goal_scorers_analyze_saved_descriptions():
+    return _v32_goal_scorers_update_from_highlights(force=True, reanalyze_only=True)
+
+
+def _v32_goal_scorers_update_from_highlights(force=False, reanalyze_only=False):
+    data = _v32_load_goal_scorers_data()
+    if not isinstance(data, dict):
+        data = {"updated_at": "", "matches": {}, "alerts": []}
+    data.setdefault('matches', {})
+    data.setdefault('alerts', [])
+    try:
+        _v32_goal_load_squads()
+    except Exception:
+        pass
+    highlights = _load_highlights() if '_load_highlights' in globals() else {}
+    checked = added_goals = updated_matches = skipped = failed = 0
+    alerts = []
+    last_fetch_started = False
+
+    for key, item in (highlights or {}).items():
+        if not isinstance(item, dict):
+            continue
+        url = item.get('url') or item.get('summary_url') or item.get('summary_url_manual') or ''
+        team1 = item.get('team1') or ''
+        team2 = item.get('team2') or ''
+        if not url or not _v32_is_youtube_url(url):
+            if url:
+                skipped += 1
+            continue
+        old = (data.get('matches') or {}).get(key) or {}
+        # لا نتجاوز مباراة قديمة إلا إذا عندنا الوصف الخام محفوظ؛
+        # لأن النسخ السابقة ربما حفظت أهدافًا مغلوطة بدون حفظ الوصف.
+        try:
+            _desc_cache = _v32_load_descriptions_cache()
+            _desc_rec = ((_desc_cache.get('items') or {}).get(key) or {})
+            _has_cached_desc = bool(_desc_rec.get('url') == url and _desc_rec.get('description'))
+        except Exception:
+            _has_cached_desc = False
+        if (not force) and old.get('url') == url and old.get('goals') and _has_cached_desc:
+            skipped += 1
+            continue
+
+        if (not reanalyze_only) and last_fetch_started:
+            try:
+                _time.sleep(int(YOUTUBE_GOAL_FETCH_DELAY_SECONDS or 20))
+            except Exception:
+                pass
+        last_fetch_started = True
+        checked += 1
+
+        try:
+            desc = _v32_get_description_for_highlight(key, url, item=item, force=force and not reanalyze_only, reanalyze_only=reanalyze_only)
+            if not desc:
+                failed += 1
+                alerts.append(f"{team1} × {team2}: لا يوجد وصف محفوظ لإعادة التحليل" if reanalyze_only else f"{team1} × {team2}: وصف يوتيوب فارغ")
+                continue
+            goals = _v32_parse_youtube_goal_scorers(desc, team1, team2)
+            parse_alerts = list(globals().get('V32_LAST_GOAL_PARSE_ALERTS') or [])
+            if not goals:
+                failed += 1
+                msg = f"{team1} × {team2}: لم يتم العثور على مسجلي أهداف واضحين في وصف اليوتيوب"
+                alerts.append(msg)
+                if parse_alerts:
+                    alerts.extend([f"{team1} × {team2}: {x}" for x in parse_alerts[:3]])
+                data['matches'][key] = {
+                    'team1': team1, 'team2': team2, 'url': url,
+                    'description_cached': bool(desc),
+                    'updated_at': _v32_json_now(),
+                    'goals': [], 'note': 'no_goals_found', 'last_error': 'no_goals_found'
+                }
+                continue
+
+            enriched = []
+            for g in goals:
+                gg = dict(g)
+                tm = gg.get('team') or _v32_goal_squad_team_for_player(gg.get('player'), team1, team2) or ''
+                try:
+                    same1 = bool(tm and team1 and '_v31_team_same' in globals() and _v31_team_same(tm, team1))
+                    same2 = bool(tm and team2 and '_v31_team_same' in globals() and _v31_team_same(tm, team2))
+                except Exception:
+                    same1 = same2 = False
+                if same1:
+                    gg['team'] = team1; gg['against'] = team2
+                elif same2:
+                    gg['team'] = team2; gg['against'] = team1
+                else:
+                    gg['team'] = tm or 'غير محدد'; gg['against'] = f"{team1} × {team2}".strip()
+                    alerts.append(f"{team1} × {team2}: اللاعب يحتاج مراجعة للمنتخب - {gg.get('player')}")
+                enriched.append(gg)
+
+            expected_goals = _v32_expected_match_goals_from_fixture(team1, team2)
+            if expected_goals and len(enriched) < expected_goals:
+                alerts.append(f"{team1} × {team2}: قد تكون الأهداف ناقصة - المستخرج {len(enriched)} من {expected_goals}")
+            data['matches'][key] = {
+                'team1': team1, 'team2': team2, 'url': url,
+                'description_cached': True,
+                'updated_at': _v32_json_now(),
+                'goals': enriched,
+                'expected_goals': expected_goals,
+            }
+            added_goals += len(enriched)
+            updated_matches += 1
+        except Exception as e:
+            failed += 1
+            clean_err = _v32_youtube_safe_error(e) if '_v32_youtube_safe_error' in globals() else str(e)[:90]
+            alerts.append(f"{team1} × {team2}: {clean_err}")
+            data['matches'][key] = {
+                'team1': team1, 'team2': team2, 'url': url,
+                'updated_at': _v32_json_now(),
+                'goals': [], 'note': 'read_failed', 'last_error': clean_err
+            }
+
+    data['updated_at'] = _v32_json_now()
+    data['alerts'] = alerts[:160]
+    _v32_save_goal_scorers_data(data)
+    return {
+        'checked': checked,
+        'updated_matches': updated_matches,
+        'added_goals': added_goals,
+        'skipped': skipped,
+        'failed': failed,
+        'alerts': alerts[:12],
+        'data': data,
+        'reanalyze_only': reanalyze_only,
+    }
+
+
+def _v32_goal_scorers_home_keyboard(is_admin=False):
+    rows = [[InlineKeyboardButton("📄 ملف مسجلي الأهداف", callback_data="v32|goal_scorers_file")]]
+    if is_admin:
+        rows.append([InlineKeyboardButton("🔄 تحديث من الملخصات", callback_data="v32|goal_scorers_update")])
+        rows.append([InlineKeyboardButton("🔁 إعادة تحليل الأوصاف المحفوظة", callback_data="v32|goal_scorers_reanalyze")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v32_filter_inline_markup_for_public(markup):
+    """يحذف أزرار المسح/الكاش/التحديث من لوحات المستخدمين العاديين."""
+    if markup is None:
+        return markup
+    try:
+        rows = []
+        for row in getattr(markup, 'inline_keyboard', []) or []:
+            new_row = []
+            for b in row:
+                txt = getattr(b, 'text', '') or ''
+                cb = getattr(b, 'callback_data', '') or ''
+                dangerous = (
+                    'مسح كاش' in txt or 'مسح' in txt or 'تحديث' in txt or 'إعادة تحليل' in txt or 'اعادة تحليل' in txt or
+                    cb.startswith('res|clearday') or cb.startswith('res|refreshday') or cb.startswith('livefx|clearday') or cb.startswith('livefx|refreshday') or
+                    cb in ('v32|goal_scorers_update', 'v32|goal_scorers_reanalyze')
+                )
+                if not dangerous:
+                    new_row.append(b)
+            if new_row:
+                rows.append(new_row)
+        return InlineKeyboardMarkup(rows)
+    except Exception:
+        return markup
+
+
+# أخفِ أزرار الكاش/التحديث من نتائج المباريات ومباشر الآن للمستخدم العادي، مع إبقائها للمشرف.
+try:
+    _V32_ADMIN_PATCH_PREV_RESULTS_KEYBOARD = _v33_results_matches_keyboard
+    def _v33_results_matches_keyboard(d):
+        mk = _V32_ADMIN_PATCH_PREV_RESULTS_KEYBOARD(d)
+        if globals().get('V32_ADMIN_RENDER_CONTEXT'):
+            return mk
+        return _v32_filter_inline_markup_for_public(mk)
+except Exception:
+    pass
+
+try:
+    _V32_ADMIN_PATCH_PREV_LIVE_KEYBOARD = _v29_live_today_keyboard
+    def _v29_live_today_keyboard(date_str=None):
+        mk = _V32_ADMIN_PATCH_PREV_LIVE_KEYBOARD(date_str)
+        if globals().get('V32_ADMIN_RENDER_CONTEXT'):
+            return mk
+        return _v32_filter_inline_markup_for_public(mk)
+except Exception:
+    pass
+
+
+def _v32_is_dangerous_callback(data):
+    data = str(data or '')
+    return (
+        data.startswith('res|clearday') or data.startswith('res|refreshday') or
+        data.startswith('livefx|clearday') or data.startswith('livefx|refreshday') or
+        data in ('v32|goal_scorers_update', 'v32|goal_scorers_reanalyze') or
+        '|clear' in data or '|delete' in data or '|reset' in data
+    )
+
+
+try:
+    _V32_ADMIN_PATCH_PREV_RESULTS_CALLBACK = previous_results_callback
+    async def previous_results_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        data = (q.data or '') if q else ''
+        is_adm = _v32_is_admin_update_or_query(update)
+        if _v32_is_dangerous_callback(data) and not is_adm:
+            try:
+                await q.answer('هذا الخيار للمشرف فقط 🔒', show_alert=True)
+            except Exception:
+                pass
+            return
+        old = globals().get('V32_ADMIN_RENDER_CONTEXT', False)
+        globals()['V32_ADMIN_RENDER_CONTEXT'] = bool(is_adm)
+        try:
+            return await _V32_ADMIN_PATCH_PREV_RESULTS_CALLBACK(update, context)
+        finally:
+            globals()['V32_ADMIN_RENDER_CONTEXT'] = old
+except Exception:
+    pass
+
+try:
+    _V32_ADMIN_PATCH_PREV_LIVE_CALLBACK = live_today_callback
+    async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        data = (q.data or '') if q else ''
+        is_adm = _v32_is_admin_update_or_query(update)
+        if _v32_is_dangerous_callback(data) and not is_adm:
+            try:
+                await q.answer('هذا الخيار للمشرف فقط 🔒', show_alert=True)
+            except Exception:
+                pass
+            return
+        old = globals().get('V32_ADMIN_RENDER_CONTEXT', False)
+        globals()['V32_ADMIN_RENDER_CONTEXT'] = bool(is_adm)
+        try:
+            return await _V32_ADMIN_PATCH_PREV_LIVE_CALLBACK(update, context)
+        finally:
+            globals()['V32_ADMIN_RENDER_CONTEXT'] = old
+except Exception:
+    pass
+
+
+# إعادة لف v32_callback لإضافة زر إعادة التحليل وحماية أي callback إداري قديم.
+try:
+    _V32_ADMIN_PATCH_PREV_V32_CALLBACK = v32_callback
+    async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        if not q:
+            return
+        data = q.data or ''
+        if _v32_is_dangerous_callback(data) and not _v32_is_admin_update_or_query(update):
+            try:
+                await q.answer('هذا الخيار للمشرف فقط 🔒', show_alert=True)
+            except Exception:
+                pass
+            return
+        if data == 'v32|goal_scorers_reanalyze':
+            await q.answer()
+            if _v32_goal_scorers_update_is_running():
+                await q.message.reply_text('⏳ يوجد تحديث/تحليل شغال بالخلفية بالفعل. انتظر التقرير النهائي.', reply_markup=_v32_goal_scorers_home_keyboard(is_admin=True))
+                return
+            async def _reanalyze_bg(bot, chat_id):
+                global V32_GOAL_SCORERS_UPDATE_TASK, V32_GOAL_SCORERS_UPDATE_LAST_REPORT, V32_GOAL_SCORERS_UPDATE_STARTED_AT
+                try:
+                    res = await asyncio.to_thread(_v32_goal_scorers_analyze_saved_descriptions)
+                    V32_GOAL_SCORERS_UPDATE_LAST_REPORT = res
+                    await bot.send_message(chat_id=chat_id, text='\n'.join(_v32_goal_scorers_update_report_lines(res)), reply_markup=_v32_goal_scorers_home_keyboard(is_admin=True))
+                except Exception as e:
+                    safe = _v32_youtube_safe_error(e) if '_v32_youtube_safe_error' in globals() else str(e)[:180]
+                    await bot.send_message(chat_id=chat_id, text=f'تعذر إعادة التحليل ❌\n{safe}')
+                finally:
+                    V32_GOAL_SCORERS_UPDATE_TASK = None
+                    V32_GOAL_SCORERS_UPDATE_STARTED_AT = ''
+            try:
+                V32_GOAL_SCORERS_UPDATE_STARTED_AT = _v32_json_now()
+                V32_GOAL_SCORERS_UPDATE_TASK = context.application.create_task(_reanalyze_bg(context.bot, q.message.chat_id))
+            except Exception:
+                V32_GOAL_SCORERS_UPDATE_TASK = asyncio.create_task(_reanalyze_bg(context.bot, q.message.chat_id))
+            await q.message.reply_text('🔁 جاري إعادة تحليل الأوصاف المحفوظة بالخلفية...\nما راح أدخل يوتيوب ولا أنتظر 20 ثانية، فقط أحلل الكاش المحفوظ.', reply_markup=_v32_goal_scorers_home_keyboard(is_admin=True))
+            return
+        old = globals().get('V32_ADMIN_RENDER_CONTEXT', False)
+        globals()['V32_ADMIN_RENDER_CONTEXT'] = bool(_v32_is_admin_update_or_query(update))
+        try:
+            return await _V32_ADMIN_PATCH_PREV_V32_CALLBACK(update, context)
+        finally:
+            globals()['V32_ADMIN_RENDER_CONTEXT'] = old
+except Exception:
+    pass
+
+# ==================== END V32 ADMIN PROTECTION + RAW DESCRIPTION CACHE + BEIN AR PATCH ====================
+
 if __name__ == "__main__":
     main()
