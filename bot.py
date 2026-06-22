@@ -44089,3 +44089,67 @@ async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT
 
 if __name__ == "__main__":
     main()
+
+# ==================== V38 FINAL FAHAD MENU FIX ====================
+# فهد: لا تظهر أزرار التأهل/الحاسبة/أفضل الثوالث في القائمة الرئيسية.
+# مكان أفضل الثوالث الآن يكون داخل لوحة البطولة فقط.
+
+# نُبقي التسميات في الراوتر للتوافق مع أي كيبورد قديم ظاهر عند المستخدم،
+# لكن لا نعرضها في القائمة الرئيسية الجديدة.
+try:
+    V32_FINAL_MENU_LABELS.update({
+        "📺 مباشر الآن", "🏆 لوحة البطولة", "📅 مباريات اليوم", "📅 المباريات القادمة",
+        "📊 ترتيب المجموعات", "🏆 هدافين البطولة", "⚽ مسجلو الأهداف",
+        "📋 نتائج المباريات", "🎬 ملخصات المباريات", "🎮 فانتزي", "ℹ️ طريقة الاستخدام",
+        "✅ كيف تتأهل؟", "🧮 حاسبة التأهل", "🥉 أفضل الثوالث", "🥉 أفضل الثوالث الآن",
+    })
+except Exception:
+    pass
+
+
+def _public_main_reply_keyboard():
+    """القائمة العامة المختصرة المعتمدة للمستخدمين."""
+    return ReplyKeyboardMarkup(
+        [
+            ["📺 مباشر الآن", "🏆 لوحة البطولة"],
+            ["📅 مباريات اليوم", "📊 ترتيب المجموعات"],
+            ["📅 المباريات القادمة", "📋 نتائج المباريات"],
+            ["🏆 هدافين البطولة", "⚽ مسجلو الأهداف"],
+            ["🎬 ملخصات المباريات", "🎮 فانتزي"],
+            ["ℹ️ طريقة الاستخدام"],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="اكتب اسم منتخب أو اختر من القائمة",
+    )
+
+
+def _public_main_keyboard():
+    """أزرار رسالة /start المختصرة؛ أدوات التأهل داخل لوحة البطولة فقط."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📺 مباشر الآن", callback_data="mainmenu|live"), InlineKeyboardButton("🏆 لوحة البطولة", callback_data="v32|board")],
+        [InlineKeyboardButton("📅 مباريات اليوم", callback_data="mainmenu|today"), InlineKeyboardButton("📊 ترتيب المجموعات", callback_data="mainmenu|groups")],
+        [InlineKeyboardButton("📅 المباريات القادمة", callback_data="mainmenu|fixtures"), InlineKeyboardButton("📋 نتائج المباريات", callback_data="mainmenu|results")],
+        [InlineKeyboardButton("🏆 هدافين البطولة", callback_data="mainmenu|scorers"), InlineKeyboardButton("⚽ مسجلو الأهداف", callback_data="v32|goal_scorers")],
+        [InlineKeyboardButton("🎬 ملخصات المباريات", callback_data="v32|hls_home"), InlineKeyboardButton("🎮 فانتزي", callback_data="v32|fantasy_gate")],
+        [InlineKeyboardButton("ℹ️ طريقة الاستخدام", callback_data="mainmenu|help")],
+    ])
+
+
+# لوحة البطولة هي المكان الوحيد الظاهر لأزرار التأهل/أفضل الثوالث الآن.
+def _v32_board_keyboard():
+    rows = [
+        [InlineKeyboardButton("✅ كيف يتأهل منتخبك؟", callback_data="v32|how_start"), InlineKeyboardButton("🧮 حاسبة التأهل", callback_data="v32|calc_start")],
+        [InlineKeyboardButton("🥉 أفضل الثوالث الآن", callback_data="v32|thirds"), InlineKeyboardButton("🔥 مباريات الحسم", callback_data="v32|decisive")],
+        [InlineKeyboardButton("✅ المتأهلون", callback_data="v32|qualified"), InlineKeyboardButton("❌ المغادرون", callback_data="v32|eliminated")],
+        [InlineKeyboardButton("📊 ترتيب المجموعات", callback_data="mainmenu|groups")],
+    ]
+    try:
+        if _v33_round32_has_official_match():
+            rows.append([InlineKeyboardButton("🏟️ مواجهات دور الـ32", callback_data="v32|r32")])
+    except Exception:
+        pass
+    rows.append([InlineKeyboardButton("🔄 تحديث الآن", callback_data="v32|board_force"), InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+# ==================== END V38 FINAL FAHAD MENU FIX ====================
