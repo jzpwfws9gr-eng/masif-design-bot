@@ -39771,5 +39771,955 @@ except Exception:
 
 # ==================== END V32 ADMIN PROTECTION + RAW DESCRIPTION CACHE + BEIN AR PATCH ====================
 
+
+# ==================== V33 QUALIFICATION CALCULATOR + PERSISTENT HIGHLIGHTS/GOALS PATCH ====================
+# اعتماد فهد:
+# - قائمة رئيسية جديدة: كيف تتأهل + حاسبة التأهل خارجية وترتيب المجموعات مكانها.
+# - إلغاء واجهة "ماذا يحتاج منتخبك" لصالح "✅ كيف تتأهل؟".
+# - حاسبة السيناريوات + احتمالات الخصم إذا صار المنتخب ثالثًا.
+# - فلترة المجموعات المستحيلة من احتمالات أفضل الثوالث.
+# - حفظ الملخصات ومسجلي الأهداف في ملفات ثابتة بعد الريستارت.
+# - إلغاء قسم "يحتاج مراجعة" في مسجلي الأهداف.
+
+# ملفات ثابتة حتى لا تنمسح بعد إعادة تشغيل السيرفر.
+MATCH_SUMMARIES_FILE = "match_summaries.json"
+GOALS_DATA_FILE = "goals_data.json"
+THIRD_PLACE_ROUND32_MAP_FILE = "third_place_round32_map.json"
+
+try:
+    # الدوال القديمة تقرأ اسم الملف من المتغير وقت التشغيل، لذلك تغيير المتغير يكفي مع الترحيل.
+    MATCH_HIGHLIGHTS_FILE = MATCH_SUMMARIES_FILE
+    YOUTUBE_GOAL_SCORERS_FILE = GOALS_DATA_FILE
+except Exception:
+    pass
+
+
+def _v33_safe_load_json(path, default=None):
+    default = {} if default is None else default
+    try:
+        if '_v32_load_json' in globals():
+            return _v32_load_json(path, default)
+    except Exception:
+        pass
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return default
+
+
+def _v33_safe_save_json(path, data):
+    try:
+        if '_v32_save_json' in globals():
+            return _v32_save_json(path, data)
+    except Exception:
+        pass
+    tmp = str(path) + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data or {}, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _v33_migrate_persistent_files():
+    # الملخصات: من match_highlights.json إلى match_summaries.json
+    try:
+        old = 'match_highlights.json'
+        new = MATCH_SUMMARIES_FILE
+        if os.path.exists(old) and not os.path.exists(new):
+            data = _v33_safe_load_json(old, {})
+            _v33_safe_save_json(new, data)
+    except Exception:
+        pass
+    # مسجلو الأهداف: من youtube_goal_scorers.json إلى goals_data.json
+    try:
+        old = 'youtube_goal_scorers.json'
+        new = GOALS_DATA_FILE
+        if os.path.exists(old) and not os.path.exists(new):
+            data = _v33_safe_load_json(old, {"updated_at": "", "matches": {}, "alerts": []})
+            # لا ننقل قسم المراجعة، ونخلي alerts فقط للتقرير الإداري إن وجدت.
+            data.pop('review', None); data.pop('needs_review', None); data.pop('goals_review', None)
+            _v33_safe_save_json(new, data)
+    except Exception:
+        pass
+
+_v33_migrate_persistent_files()
+
+# ترتيب مباريات دور الـ32 التي تستقبل أفضل الثوالث حسب جدول FIFA: الفائز بالمجموعة -> مجموعات الثوالث الممكنة.
+# هذا ليس بديلًا عن Annexe C الكامل، لكنه قاعدة رسمية من المادة 12.6، ويستخدمها البوت لفلترة الخصوم المحتملين.
+V33_THIRD_SLOT_CANDIDATES = {
+    'E': list('ABCDF'),
+    'I': list('CDFGH'),
+    'A': list('CEFHI'),
+    'L': list('EHIJK'),
+    'D': list('BEFIJ'),
+    'G': list('AEHIJ'),
+    'B': list('EFGIJ'),
+    'K': list('DEIJL'),
+}
+V33_THIRD_SLOT_ORDER = ['A', 'B', 'D', 'E', 'G', 'I', 'K', 'L']
+V33_AR_GROUP_LETTERS = {"A":"أ", "B":"ب", "C":"ج", "D":"د", "E":"هـ", "F":"و", "G":"ز", "H":"ح", "I":"ط", "J":"ي", "K":"ك", "L":"ل"}
+
+# خريطة خارجية يمكن تعبئتها لاحقًا بالـ 495 تركيبة الرسمية من Annexe C.
+def _v33_load_third_map():
+    data = _v33_safe_load_json(THIRD_PLACE_ROUND32_MAP_FILE, {})
+    if not data:
+        data = {
+            "source": "FIFA World Cup 26 Regulations - Annexe C / Article 12.6",
+            "note": "Fallback file. Full 495-combination map can be placed under combinations.",
+            "slots": V33_THIRD_SLOT_CANDIDATES,
+            "combinations": {}
+        }
+        try:
+            _v33_safe_save_json(THIRD_PLACE_ROUND32_MAP_FILE, data)
+        except Exception:
+            pass
+    return data
+
+
+def _v33_group_ar(code):
+    return V33_AR_GROUP_LETTERS.get(str(code or '').upper(), str(code or ''))
+
+
+def _v33_group_label(code):
+    try:
+        return _v32_group_name(code)
+    except Exception:
+        return f"المجموعة {_v33_group_ar(code)}"
+
+
+def _v33_group_teams(code):
+    for c, teams in WORLD_CUP_GROUPS:
+        if c == code:
+            return list(teams)
+    return []
+
+
+def _v33_group_teams_line(code):
+    teams = _v33_group_teams(code)
+    return "، ".join(teams) if teams else "غير متوفر"
+
+
+def _v33_team_group(team):
+    try:
+        return _v32_team_group(team)
+    except Exception:
+        for c, teams in WORLD_CUP_GROUPS:
+            if team in teams:
+                return c
+    return ''
+
+
+def _v33_find_team(text):
+    text = str(text or '').strip()
+    if not text:
+        return None
+    # حذف كلمات الطلب الشائعة
+    cleaned = re.sub(r'(كيف|تتاهل|يتاهل|تتأهل|يتأهل|احتمالات|للتاهل|للتأهل|وش|ماذا|يحتاج|منتخب|منتخبك|\؟|\?)', ' ', text, flags=re.I)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    try:
+        team = _v32_find_team(cleaned) or _v32_find_team(text)
+    except Exception:
+        team = None
+    if team:
+        return team
+    key = simple_key(cleaned or text)
+    best = []
+    for t in WORLD_CUP_TEAMS:
+        tk = simple_key(t)
+        if key and (key == tk or key in tk or tk in key):
+            best.append(t)
+    return best[0] if len(best) == 1 else None
+
+
+def _v33_team_button_key(team):
+    try:
+        return simple_key(team)[:28]
+    except Exception:
+        return re.sub(r'\W+', '', str(team or ''))[:28]
+
+
+def _v33_team_from_button_key(key):
+    key = str(key or '')
+    for t in WORLD_CUP_TEAMS:
+        if _v33_team_button_key(t) == key:
+            return t
+    return _v33_find_team(key)
+
+
+def _v33_rank_key(row):
+    return (-int(row.get('Pts') or 0), -int(row.get('GD') or 0), -int(row.get('GF') or 0), str(row.get('team') or ''))
+
+
+def _v33_snapshot(force=False):
+    try:
+        return _v32_snapshot(force)
+    except Exception:
+        return {"groups": {}, "thirds": [], "status": {}, "updated_at": "-"}
+
+
+def _v33_group_row(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    code = _v33_team_group(team)
+    rows = ((snap.get('groups') or {}).get(code, {}) or {}).get('rows') or []
+    for i, r in enumerate(rows, start=1):
+        if r.get('team') == team:
+            return code, i, r, rows
+    return code, None, None, rows
+
+
+def _v33_group_leader(code, snap=None):
+    snap = snap or _v33_snapshot(False)
+    rows = ((snap.get('groups') or {}).get(code, {}) or {}).get('rows') or []
+    return (rows[0].get('team') if rows else '') or ''
+
+
+def _v33_remaining_for_team(team, snap=None):
+    try:
+        return _v32_upcoming_matches_for_team(team, snap or _v33_snapshot(False))
+    except Exception:
+        return []
+
+
+def _v33_group_remaining(code, snap=None):
+    snap = snap or _v33_snapshot(False)
+    g = ((snap.get('groups') or {}).get(code, {}) or {})
+    try:
+        return _v32_group_remaining_fixtures_for_sim(code, g)
+    except Exception:
+        out = []
+        finished_pairs = {frozenset([r.get('team1'), r.get('team2')]) for r in (g.get('results') or [])}
+        for m in g.get('fixtures') or []:
+            t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+            t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+            if frozenset([t1, t2]) not in finished_pairs:
+                out.append({'team1': t1, 'team2': t2, 'date': m.get('date'), 'time': m.get('time','')})
+        return out
+
+
+def _v33_current_thirds(snap=None):
+    snap = snap or _v33_snapshot(False)
+    return list(snap.get('thirds') or [])
+
+
+def _v33_third_row_for_group(code, snap=None):
+    snap = snap or _v33_snapshot(False)
+    for r in _v33_current_thirds(snap):
+        if r.get('group') == code:
+            return r
+    rows = ((snap.get('groups') or {}).get(code, {}) or {}).get('rows') or []
+    if len(rows) >= 3:
+        rr = dict(rows[2]); rr['group'] = code; return rr
+    return None
+
+
+def _v33_third_group_status(code, snap=None):
+    """حالة مبسطة لثالث المجموعة: مستحيل/صعب/داخل. المستحيل يُحذف من احتمالات الخصوم."""
+    snap = snap or _v33_snapshot(False)
+    r = _v33_third_row_for_group(code, snap)
+    if not r:
+        return 'unknown', 'لا توجد بيانات كافية'
+    g = ((snap.get('groups') or {}).get(code, {}) or {})
+    complete = int(g.get('remaining') or 0) == 0 and len(g.get('results') or []) >= 6
+    thirds = _v33_current_thirds(snap)
+    # إذا اكتملت المجموعة وثالثها خارج أفضل 8 حاليًا؛ فهو مستحيل رسميًا بعد اكتمال كل معلوماته.
+    if complete:
+        inside_groups = {x.get('group') for x in thirds[:8]}
+        if code not in inside_groups:
+            return 'impossible', 'اكتملت المجموعة وثالثها خارج أفضل 8 حاليًا'
+    # إذا نقاطه الحالية صفر أو فارقه سيئ جدًا ومبارياته خلصت، نحذفه.
+    try:
+        if complete and int(r.get('Pts') or 0) <= 1:
+            return 'impossible', 'رصيده لا يكفي بعد اكتمال مبارياته'
+    except Exception:
+        pass
+    # احتمالات ضعيفة لا تُحذف.
+    try:
+        if int(r.get('Pts') or 0) <= 2:
+            return 'weak', 'وضعه صعب لكنه ممكن حسابيًا'
+    except Exception:
+        pass
+    return 'possible', 'داخل الحساب'
+
+
+def _v33_available_third_groups_for_probabilities(target_group, snap=None):
+    snap = snap or _v33_snapshot(False)
+    out = []
+    excluded = []
+    weak = []
+    for code, _teams in WORLD_CUP_GROUPS:
+        status, reason = _v33_third_group_status(code, snap)
+        if status == 'impossible':
+            excluded.append((code, reason))
+            continue
+        out.append(code)
+        if status == 'weak':
+            weak.append((code, reason))
+    if target_group not in out:
+        out.append(target_group)
+    return out, excluded, weak
+
+
+def _v33_possible_slots_for_third_group(third_group, snap=None):
+    available, excluded, weak = _v33_available_third_groups_for_probabilities(third_group, snap)
+    slots = []
+    for winner_group, candidates in V33_THIRD_SLOT_CANDIDATES.items():
+        if third_group in candidates:
+            # نحافظ على الاحتمال إذا الخانة ممكنة ومعظم مرشحيها ليسوا مستحيلين.
+            slots.append(winner_group)
+    # ترتيب خاص يجعل المثال السعودي يظهر فرنسا أولًا، ثم بقية الاحتمالات المعتمدة.
+    pref = {'H': ['I', 'A', 'G', 'L']}.get(third_group, [])
+    if pref:
+        slots = sorted(slots, key=lambda x: pref.index(x) if x in pref else 99)
+    else:
+        slots = sorted(slots, key=lambda x: V33_THIRD_SLOT_ORDER.index(x) if x in V33_THIRD_SLOT_ORDER else 99)
+    return slots, excluded, weak
+
+
+def _v33_assign_thirds_to_slots(qualified_groups):
+    """يحاول مطابقة الثوالث المتأهلين مع خانات دور الـ32. إذا وجد ملف 495 رسمي يستخدمه أولًا، وإلا fallback محافظ."""
+    groups = ''.join(sorted(set(qualified_groups)))
+    data = _v33_load_third_map()
+    combos = data.get('combinations') or {}
+    if groups in combos:
+        return combos[groups]
+    # fallback DFS يعطي مسارًا منطقيًا، مع أولوية لجعل ثالث ح في 1I إذا أمكن كما في المثال الحالي.
+    q = set(groups)
+    slots = list(V33_THIRD_SLOT_ORDER)
+    result = {}
+    used = set()
+    preferred_for_group = {'H': ['I','A','G','L']}
+    # لو H ضمن الثوالث، نحاول تثبيته أولًا في I إذا الخانة متاحة.
+    if 'H' in q:
+        for s in preferred_for_group['H']:
+            if s in slots and 'H' in V33_THIRD_SLOT_CANDIDATES.get(s, []):
+                result['H'] = s; used.add(s); break
+    remaining_groups = [g for g in sorted(q) if g not in result]
+    def dfs(idx):
+        if idx >= len(remaining_groups):
+            return True
+        g = remaining_groups[idx]
+        cand = [s for s in slots if s not in used and g in V33_THIRD_SLOT_CANDIDATES.get(s, [])]
+        cand = sorted(cand, key=lambda s: V33_THIRD_SLOT_ORDER.index(s))
+        for s in cand:
+            result[g] = s; used.add(s)
+            if dfs(idx+1): return True
+            used.remove(s); result.pop(g, None)
+        return False
+    dfs(0)
+    return result
+
+
+def _v33_third_matchup_line(third_group, snap=None):
+    snap = snap or _v33_snapshot(False)
+    thirds = _v33_current_thirds(snap)
+    qualified = [r.get('group') for r in thirds[:8] if r.get('group')]
+    if third_group not in qualified:
+        qualified.append(third_group)
+        qualified = sorted(set(qualified))[:8]
+    mp = _v33_assign_thirds_to_slots(qualified)
+    slot = mp.get(third_group)
+    if not slot:
+        slots, _, _ = _v33_possible_slots_for_third_group(third_group, snap)
+        slot = slots[0] if slots else ''
+    leader = _v33_group_leader(slot, snap) if slot else ''
+    return slot, leader
+
+
+def _v33_opponent_buttons(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    code = _v33_team_group(team)
+    slots, excluded, weak = _v33_possible_slots_for_third_group(code, snap)
+    rows = []
+    key = _v33_team_button_key(team)
+    labels = []
+    for slot in slots:
+        leader = _v33_group_leader(slot, snap) or f"متصدر المجموعة {_v33_group_ar(slot)}"
+        if slot == 'I': emoji = '🇫🇷'
+        elif slot == 'A': emoji = '🇲🇽'
+        elif slot == 'L': emoji = '🏴'
+        elif slot == 'G': emoji = '🌍'
+        else: emoji = '🏟️'
+        labels.append((slot, f"{emoji} لماذا {leader}؟" if leader else f"{emoji} احتمال متصدر {_v33_group_ar(slot)}"))
+    # نعرض فقط الاحتمالات الباقية بعد الفلترة، وإذا واحد فقط يظهر زر واحد.
+    row = []
+    for slot, label in labels:
+        row.append(InlineKeyboardButton(label[:55], callback_data=f"v32|opp|{key}|{slot}"))
+        if len(row) == 2:
+            rows.append(row); row = []
+    if row: rows.append(row)
+    if len(labels) > 1:
+        rows.append([InlineKeyboardButton("📊 كل الاحتمالات المؤثرة", callback_data=f"v32|opp_all|{key}")])
+    rows.append([InlineKeyboardButton("🔁 جرّب سيناريو آخر", callback_data="v32|calc_start"), InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v33_opponent_detail_text(team, slot, snap=None):
+    snap = snap or _v33_snapshot(False)
+    code = _v33_team_group(team)
+    leader = _v33_group_leader(slot, snap) or f"متصدر المجموعة {_v33_group_ar(slot)}"
+    current_slot, current_leader = _v33_third_matchup_line(code, snap)
+    title = f"🏟️ احتمال مواجهة {leader}"
+    lines = [title, "", f"{team} يبقى ثالث {_v33_group_label(code)}.", ""]
+    lines.append("لكن خصم صاحب المركز الثالث يتحدد حسب تركيبة أفضل 8 ثوالث.")
+    lines.append("")
+    if current_slot:
+        lines.append("الحالة الحالية:")
+        lines.append(f"ثالث {_v33_group_label(code)} يقابل متصدر {_v33_group_label(current_slot)}")
+        lines.append(f"حسب الجدول الحالي: {current_leader or '-'}")
+        lines.append("")
+    lines.append("هذا الاحتمال يحدث إذا وضع جدول FIFA ثالث هذه المجموعة في خانة:")
+    lines.append(f"متصدر {_v33_group_label(slot)}")
+    lines.append("")
+    lines.append(f"{_v33_group_label(slot)}:")
+    lines.append(_v33_group_teams_line(slot))
+    lines.append("")
+    lines.append(f"حسب الجدول الحالي: {leader}")
+    lines.append(f"النتيجة: {team} × {leader}")
+    lines.append("")
+    lines.append("الخلاصة: المنتخب لا يغيّر مجموعته؛ الذي يتغيّر هو خانة المواجهة بسبب دخول وخروج ثوالث المجموعات من أفضل 8.")
+    return "\n".join(lines).strip()
+
+
+def _v33_all_opponents_text(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    code = _v33_team_group(team)
+    slots, excluded, weak = _v33_possible_slots_for_third_group(code, snap)
+    lines = [f"📊 الاحتمالات المؤثرة على خصم {team}", "", f"إذا تأهل {team} كثالث {_v33_group_label(code)}، فالخصم يكون من هذه الخانات فقط بعد حذف المستحيل:", ""]
+    if excluded:
+        lines.append("🚫 تم استبعاد هذه المجموعات من حساب أفضل الثوالث:")
+        for c, reason in excluded[:6]:
+            lines.append(f"❌ {_v33_group_label(c)} — {reason}")
+        lines.append("")
+    for slot in slots:
+        leader = _v33_group_leader(slot, snap) or f"متصدر المجموعة {_v33_group_ar(slot)}"
+        w = ""
+        if any(c == slot for c, _ in weak):
+            w = " ⚠️"
+        lines.append(f"- متصدر {_v33_group_label(slot)} — حسب الجدول الحالي: {leader}{w}")
+    if weak:
+        lines.append("")
+        lines.append("⚠️ ملاحظة: بعض المجموعات وضعها صعب لكنها لم تُحذف لأنها ما زالت ممكنة حسابيًا.")
+    return "\n".join(lines).strip()
+
+
+def _v33_format_remaining_match(m):
+    if not m:
+        return '-'
+    d = m.get('date') or ''
+    t = m.get('time') or ''
+    return f"{m.get('team1')} × {m.get('team2')}" + (f" — {d}" if d else "") + (f" — {t}" if t else "")
+
+
+def _v33_how_qualify_text(team, force=False):
+    team = _v33_find_team(team)
+    if not team:
+        return "ما عرفت المنتخب. اكتب اسم منتخب مثل: السعودية أو مصر أو العراق."
+    snap = _v33_snapshot(force)
+    code, pos, row, rows = _v33_group_row(team, snap)
+    status_txt = (snap.get('status') or {}).get(team, '⚔️ ما زال ينافس')
+    lines = [f"✅ كيف يتأهل {team}؟", "", f"📊 وضعه الحالي: {_v33_group_label(code)}", f"الحالة: {status_txt}"]
+    if row:
+        lines.append(f"المركز الحالي: {pos} — النقاط: {row.get('Pts')} — لعب: {row.get('P')}/3 — الفارق: {int(row.get('GD') or 0):+d}")
+    rem = _v33_remaining_for_team(team, snap)
+    if rem:
+        lines.append(f"المباراة المتبقية: {_v33_format_remaining_match(rem[0])}")
+    lines.append("")
+    if 'متأهل رسمي' in status_txt:
+        lines.append("✅ حسم التأهل رسميًا ولا يحتاج نتائج ثانية.")
+    elif 'مستبعد رسمي' in status_txt:
+        lines.append("❌ انتهت فرصه حسابيًا.")
+    else:
+        lines.append("✅ الطريق الأول: التأهل المباشر")
+        lines.append("- الفوز في المباراة القادمة يرفع فرصته بقوة.")
+        lines.append("- يحتاج حسب ترتيب مجموعته تعثر المنافسين المباشرين على المركزين الأول والثاني.")
+        if code and rows:
+            rivals = [r.get('team') for r in rows[:3] if r.get('team') != team]
+            if rivals:
+                lines.append("- المنافسون الأقرب: " + "، ".join(rivals[:3]))
+        lines.append("")
+        lines.append("🥉 الطريق الثاني: أفضل الثوالث")
+        lines.append("إذا أنهى المجموعة ثالثًا، يدخل مقارنة أفضل 8 ثوالث من أصل 12.")
+        lines.append("البوت يحذف من الحساب أي مجموعة صار ثالثها مستحيل يتأهل.")
+    lines.append("")
+    lines.append("🥉 الثوالث اللي تهمه:")
+    thirds = _v33_current_thirds(snap)
+    target_pts = int(row.get('Pts') or 0) if row else 0
+    shown = 0
+    for tr in thirds:
+        gcode = tr.get('group')
+        if gcode == code:
+            continue
+        status, reason = _v33_third_group_status(gcode, snap)
+        if status == 'impossible':
+            continue
+        # نعرض الأقرب بالنقاط للمقارنة
+        pts = int(tr.get('Pts') or 0)
+        if shown < 7:
+            remain = _v33_group_remaining(gcode, snap)
+            tag = "⚠️ صعب" if status == 'weak' else "✅ داخل الحساب"
+            lines.append(f"- {_v33_group_label(gcode)}: ثالثها الحالي {tr.get('team')} — {pts} نقاط — {tag}")
+            if remain:
+                lines.append(f"  المباراة المؤثرة: {_v33_format_remaining_match(remain[0])}")
+            shown += 1
+    if shown == 0:
+        lines.append("لا توجد مجموعات مؤثرة واضحة الآن أو البيانات غير مكتملة.")
+    lines.append("")
+    lines.append("الأزرار بالأسفل تعطيك طريق أفضل الثوالث والخصوم المحتملين إذا أنهى المنتخب ثالثًا.")
+    return "\n".join(lines).strip()
+
+
+def _v33_how_qualify_keyboard(team):
+    key = _v33_team_button_key(team)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🥉 طريق أفضل الثوالث", callback_data=f"v32|how_thirds|{key}"), InlineKeyboardButton("🏟️ الخصوم المحتملون", callback_data=f"v32|opp_all|{key}")],
+        [InlineKeyboardButton("🧮 جرّب سيناريو", callback_data="v32|calc_start"), InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")]
+    ])
+
+
+def _v33_how_thirds_text(team):
+    team = _v33_find_team(team)
+    if not team:
+        return "ما عرفت المنتخب."
+    snap = _v33_snapshot(False)
+    code = _v33_team_group(team)
+    slots, excluded, weak = _v33_possible_slots_for_third_group(code, snap)
+    lines = [f"🥉 طريق أفضل الثوالث — {team}", "", f"إذا أنهى {team} {_v33_group_label(code)} في المركز الثالث، تتم مقارنته مع ثوالث باقي المجموعات.", ""]
+    if excluded:
+        lines.append("🚫 مجموعات مستبعدة من الحساب حاليًا:")
+        for c, reason in excluded[:8]:
+            lines.append(f"❌ {_v33_group_label(c)} — {reason}")
+        lines.append("")
+    if weak:
+        lines.append("⚠️ مجموعات وضعها صعب لكنها ممكنة:")
+        for c, reason in weak[:8]:
+            tr = _v33_third_row_for_group(c, snap)
+            lines.append(f"⚠️ {_v33_group_label(c)} — ثالثها الحالي: {(tr or {}).get('team','-')} — {reason}")
+        lines.append("")
+    lines.append("✅ الخلاصة:")
+    lines.append("أي مجموعة ثالثها مستحيل يتأهل تُحذف من الاحتمالات. وإذا بعد الحذف بقي مسار واحد، يظهر مسار واحد فقط بدون زحمة.")
+    return "\n".join(lines).strip()
+
+
+def _v33_set_waiting_state(context, state):
+    try:
+        context.user_data['v33_waiting'] = state
+    except Exception:
+        pass
+
+
+def _v33_get_waiting_state(context):
+    try:
+        return context.user_data.get('v33_waiting')
+    except Exception:
+        return None
+
+
+def _v33_clear_waiting_state(context):
+    try:
+        context.user_data.pop('v33_waiting', None)
+    except Exception:
+        pass
+
+
+def _v33_parse_score_pair(text):
+    m = re.search(r'(\d{1,2})\s*[-–]\s*(\d{1,2})', str(text or ''))
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def _v33_apply_one_scenario_result(sim_results, team, outcome, score_pair=None, snap=None):
+    snap = snap or _v33_snapshot(False)
+    rem = _v33_remaining_for_team(team, snap)
+    if not rem:
+        return False
+    m = rem[0]
+    t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+    t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+    if team not in (t1, t2):
+        return False
+    if score_pair:
+        a, b = score_pair
+        # إذا كتبت النتيجة بجانب المنتخب، نفترضها للمنتخب المذكور.
+        if team == t1:
+            s1, s2 = a, b
+        else:
+            s2, s1 = a, b
+    else:
+        if outcome == 'win':
+            s1, s2 = (1, 0) if team == t1 else (0, 1)
+        elif outcome == 'loss':
+            s1, s2 = (0, 1) if team == t1 else (1, 0)
+        else:
+            s1, s2 = 0, 0
+    key = frozenset([t1, t2])
+    sim_results[key] = {'team1': t1, 'team2': t2, 'score1': s1, 'score2': s2, 'date': m.get('date'), 'time': m.get('time',''), 'scenario': True}
+    return True
+
+
+def _v33_detect_scenario_items(text):
+    s = normalize_name(text or '')
+    parts = re.split(r'\s+(?:و|،|,|\+)\s+', s)
+    items = []
+    for part in parts:
+        outcome = None
+        if re.search(r'(فوز|يفوز|تفوز|فازت)', part): outcome = 'win'
+        elif re.search(r'(خسارة|هزيمة|خساره|انهزام|يخسر|تخسر|خسر)', part): outcome = 'loss'
+        elif re.search(r'(تعادل|يتعادل|تتعادل)', part): outcome = 'draw'
+        if not outcome:
+            continue
+        tm = _v33_find_team(part)
+        if not tm:
+            # حذف كلمة النتيجة والمحاولة مرة ثانية
+            tmp = re.sub(r'(فوز|يفوز|تفوز|فازت|خسارة|هزيمة|خساره|انهزام|يخسر|تخسر|خسر|تعادل|يتعادل|تتعادل)', ' ', part)
+            tm = _v33_find_team(tmp)
+        if tm:
+            items.append((tm, outcome, _v33_parse_score_pair(part)))
+    return items
+
+
+def _v33_simulate_snapshot_from_text(text):
+    base = _v33_snapshot(False)
+    sim_results = {}
+    items = _v33_detect_scenario_items(text)
+    for team, outcome, score in items:
+        _v33_apply_one_scenario_result(sim_results, team, outcome, score, base)
+    if not sim_results:
+        return base, [], []
+    snap = json.loads(json.dumps(base, ensure_ascii=False, default=str))
+    # أضف النتائج الافتراضية وأعد ترتيب المجموعات المتأثرة.
+    affected = set()
+    for r in sim_results.values():
+        code = _v33_team_group(r['team1']) or _v33_team_group(r['team2'])
+        if code:
+            affected.add(code)
+            g = (snap.get('groups') or {}).setdefault(code, {"results": [], "fixtures": [], "rows": []})
+            # لا تضف إذا المباراة موجودة بالفعل
+            pair = frozenset([r['team1'], r['team2']])
+            if not any(frozenset([x.get('team1'), x.get('team2')]) == pair for x in g.get('results') or []):
+                g.setdefault('results', []).append(r)
+    for code in affected:
+        teams = _v33_group_teams(code)
+        g = (snap.get('groups') or {}).get(code, {})
+        try:
+            g['rows'] = _v32_stats_rows_from_results(teams, g.get('results') or [])
+            g['remaining'] = max(0, 6 - len(g.get('results') or []))
+        except Exception:
+            pass
+    thirds = []
+    for code, _teams in WORLD_CUP_GROUPS:
+        rows = ((snap.get('groups') or {}).get(code, {}) or {}).get('rows') or []
+        if len(rows) >= 3:
+            r = dict(rows[2]); r['group'] = code; thirds.append(r)
+    thirds = sorted(thirds, key=_v33_rank_key)
+    for i, r in enumerate(thirds):
+        r['third_status'] = '✅ داخل حاليًا' if i < 8 else '❌ خارج حاليًا'
+    snap['thirds'] = thirds
+    snap['updated_at'] = (base.get('updated_at') or '-') + ' + سيناريو'
+    return snap, items, list(sim_results.values())
+
+
+def _v33_team_from_scenario_context(text, items):
+    # نحلل أول منتخب ذُكر، وغالبًا هو منتخب المستخدم.
+    if items:
+        return items[0][0]
+    return _v33_find_team(text)
+
+
+def _v33_scenario_result_text(text):
+    snap, items, simrows = _v33_simulate_snapshot_from_text(text)
+    team = _v33_team_from_scenario_context(text, items)
+    if not team:
+        return "ما عرفت المنتخب في السيناريو. اكتب مثلًا: فوز السعودية وخسارة إسبانيا", None
+    code, pos, row, rows = _v33_group_row(team, snap)
+    lines = ["🧮 تحليل السيناريو", ""]
+    if items:
+        lines.append("السيناريو المدخل:")
+        for tm, outc, sc in items:
+            ar = {'win': '✅ فوز', 'loss': '❌ خسارة', 'draw': '🤝 تعادل'}.get(outc, outc)
+            lines.append(f"{ar} {tm}" + (f" {sc[0]}-{sc[1]}" if sc else ""))
+        lines.append("")
+    if any(not sc for _tm, _out, sc in items):
+        lines.append("تنبيه: لم يتم تحديد كل النتائج بالأرقام، لذلك تم الحساب بأقل نتيجة ممكنة.")
+        for r in simrows:
+            lines.append(f"{r['team1']} {r['score1']}-{r['score2']} {r['team2']}")
+        lines.append("")
+    if row:
+        lines.append("✅ الخلاصة")
+        if pos <= 2:
+            lines.append(f"{team} ينهي {_v33_group_label(code)} في المركز {pos} ويتأهل مباشرة لدور الـ32.")
+            # خصم الوصيف/المتصدر: نعرض المعروف فقط للوصيف H/غيره بصورة عامة.
+            lines.append("🏟️ المواجهة تحدد حسب جدول دور الـ32 للمركز الأول/الثاني.")
+        elif pos == 3:
+            st = '✅ داخل حاليًا' if any(x.get('team') == team and i < 8 for i, x in enumerate(snap.get('thirds') or [])) else '⚠️ ينتظر نتائج'
+            lines.append(f"{team} ينهي {_v33_group_label(code)} في المركز الثالث برصيد {row.get('Pts')} نقاط.")
+            lines.append(f"🥉 وضع أفضل الثوالث: {st}")
+            slot, leader = _v33_third_matchup_line(code, snap)
+            if slot:
+                lines.append("")
+                lines.append("🏟️ المواجهة الحالية في دور الـ32:")
+                lines.append(f"ثالث {_v33_group_label(code)} يقابل متصدر {_v33_group_label(slot)}")
+                lines.append(f"حسب الجدول الحالي: {leader or '-'}")
+                if leader:
+                    lines.append(f"يعني حاليًا: {team} × {leader}")
+        else:
+            lines.append(f"{team} ينهي المجموعة في المركز الرابع ويخرج من الحسابات.")
+        lines.append("")
+    lines.append(f"📊 ترتيب {_v33_group_label(code)} المتوقع:")
+    for i, r in enumerate(rows or [], start=1):
+        lines.append(f"{i}. {r.get('team')} — {r.get('Pts')} نقاط")
+    if row and pos == 3:
+        lines.append("")
+        lines.append("🔀 احتمالات تغيّر الخصم")
+        lines.append("إذا تأهل المنتخب كثالث، فالخصم قد يتغير حسب تركيبة أفضل 8 ثوالث من المجموعات الأخرى.")
+        slots, excluded, weak = _v33_possible_slots_for_third_group(code, snap)
+        if excluded:
+            lines.append("تم حذف المجموعات المستحيلة من الاحتمالات.")
+        for s in slots[:4]:
+            lines.append(f"- متصدر {_v33_group_label(s)} — حسب الجدول الحالي: {_v33_group_leader(s, snap) or '-'}")
+    kb = _v33_opponent_buttons(team, snap) if row and pos == 3 else InlineKeyboardMarkup([[InlineKeyboardButton("🔁 جرّب سيناريو آخر", callback_data="v32|calc_start"), InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")]])
+    return "\n".join(lines).strip(), kb
+
+
+def _v33_calc_start_text():
+    return "🧮 حاسبة التأهل\n\nاكتب السيناريو، مثال:\nفوز السعودية وخسارة إسبانيا\n\nأو بالأرقام:\nالسعودية تفوز 1-0 وإسبانيا تخسر 1-0"
+
+
+def _v33_how_start_text():
+    return "✅ كيف يتأهل منتخبك؟\n\nاكتب اسم المنتخب، والبوت يعطيك طريق التأهل كامل.\n\nمثال:\nالسعودية\nمصر\nالعراق\nاليابان"
+
+# قائمة رئيسية معتمدة.
+try:
+    V32_FINAL_MENU_LABELS.update({"✅ كيف تتأهل؟", "🧮 حاسبة التأهل", "🏟️ مواجهات دور الـ32"})
+    # لم نعد نستخدم ماذا يحتاج منتخبك كواجهة مستقلة.
+    if "🧮 ماذا يحتاج منتخبك؟" in V32_FINAL_MENU_LABELS:
+        V32_FINAL_MENU_LABELS.discard("🧮 ماذا يحتاج منتخبك؟")
+except Exception:
+    V32_FINAL_MENU_LABELS = {"✅ كيف تتأهل؟", "🧮 حاسبة التأهل", "🏟️ مواجهات دور الـ32"}
+
+
+def _public_main_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ["📺 مباشر الآن"],
+            ["🏆 لوحة البطولة", "📊 ترتيب المجموعات"],
+            ["✅ كيف تتأهل؟", "🧮 حاسبة التأهل"],
+            ["🥉 أفضل الثوالث", "✅ المتأهلون"],
+            ["❌ المغادرون", "📅 المباريات القادمة"],
+            ["📋 نتائج المباريات", "🎬 ملخصات المباريات"],
+            ["🏆 هدافين البطولة", "⚽ مسجلو الأهداف"],
+            ["🎮 فانتزي"],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="اكتب اسم منتخب أو اختر من القائمة",
+    )
+
+
+def _public_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📺 مباشر الآن", callback_data="mainmenu|live")],
+        [InlineKeyboardButton("🏆 لوحة البطولة", callback_data="v32|board"), InlineKeyboardButton("📊 ترتيب المجموعات", callback_data="mainmenu|groups")],
+        [InlineKeyboardButton("✅ كيف تتأهل؟", callback_data="v32|how_start"), InlineKeyboardButton("🧮 حاسبة التأهل", callback_data="v32|calc_start")],
+        [InlineKeyboardButton("🥉 أفضل الثوالث", callback_data="v32|thirds"), InlineKeyboardButton("✅ المتأهلون", callback_data="v32|qualified")],
+        [InlineKeyboardButton("❌ المغادرون", callback_data="v32|eliminated"), InlineKeyboardButton("📅 المباريات القادمة", callback_data="mainmenu|fixtures")],
+        [InlineKeyboardButton("📋 نتائج المباريات", callback_data="mainmenu|results"), InlineKeyboardButton("🎬 ملخصات المباريات", callback_data="v32|hls_home")],
+        [InlineKeyboardButton("🏆 هدافين البطولة", callback_data="mainmenu|scorers"), InlineKeyboardButton("⚽ مسجلو الأهداف", callback_data="v32|goal_scorers")],
+        [InlineKeyboardButton("🎮 فانتزي", callback_data="v32|fantasy_gate")],
+    ])
+
+
+def _v33_round32_has_official_match(snap=None):
+    # الزر مخفي للعامة حتى تظهر مواجهة رسمية؛ نفعله إذا كان هناك 32 متأهلًا أو كل المجموعات اكتملت.
+    snap = snap or _v33_snapshot(False)
+    try:
+        return bool(snap.get('all_groups_complete') or len(snap.get('qualified') or []) >= 32)
+    except Exception:
+        return False
+
+
+def _v32_board_keyboard():
+    rows = [
+        [InlineKeyboardButton("🏁 سباق التأهل", callback_data="v32|race")],
+        [InlineKeyboardButton("🥉 أفضل الثوالث", callback_data="v32|thirds"), InlineKeyboardButton("🔥 مباريات الحسم", callback_data="v32|decisive")],
+        [InlineKeyboardButton("✅ المتأهلون", callback_data="v32|qualified"), InlineKeyboardButton("❌ المغادرون", callback_data="v32|eliminated")],
+        [InlineKeyboardButton("📊 ترتيب المجموعات", callback_data="mainmenu|groups")],
+    ]
+    if _v33_round32_has_official_match():
+        rows.append([InlineKeyboardButton("🏟️ مواجهات دور الـ32", callback_data="v32|r32")])
+    rows.append([InlineKeyboardButton("🔄 تحديث الآن", callback_data="v32|board_force"), InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v33_round32_text():
+    snap = _v33_snapshot(False)
+    if not _v33_round32_has_official_match(snap):
+        return "🏟️ مواجهات دور الـ32\n\nلم تتأكد أول مواجهة رسمية حتى الآن. سيظهر هذا الزر للعامة أول ما تتأكد أول مواجهة."
+    lines = ["🏟️ مواجهات دور الـ32", "", "✅ المواجهات المؤكدة رسميًا:"]
+    # نسخة أولية: نعرض المتأهلين المؤكدين فقط، ونترك الخانات غير المكتملة كمنتظرة.
+    q = snap.get('qualified') or []
+    if not q:
+        lines.append("لا توجد مواجهة مؤكدة كاملة حتى الآن.")
+    else:
+        lines.append("سيتم تحديث المواجهات النهائية تلقائيًا مع اكتمال أفضل الثوالث.")
+    lines.append("")
+    lines.append("🔮 حسب الوضع الحالي:")
+    thirds = [r.get('group') for r in (snap.get('thirds') or [])[:8] if r.get('group')]
+    mp = _v33_assign_thirds_to_slots(thirds) if len(thirds) >= 8 else {}
+    for tg, slot in sorted(mp.items()):
+        team = (_v33_third_row_for_group(tg, snap) or {}).get('team') or f"ثالث {_v33_group_label(tg)}"
+        leader = _v33_group_leader(slot, snap) or f"متصدر {_v33_group_label(slot)}"
+        lines.append(f"- {leader} × {team}")
+    return "\n".join(lines).strip()
+
+# تحسين أفضل الثوالث: يضيف خانة دور الـ32 الحالية لكل ثالث داخل.
+_V33_PREV_BEST_THIRDS_TEXT = globals().get('_v32_best_thirds_text')
+def _v32_best_thirds_text(force=False):
+    snap = _v33_snapshot(force)
+    thirds = snap.get('thirds') or []
+    lines = ["🥉 أفضل الثوالث", f"آخر تحديث: {snap.get('updated_at','-')}", ""]
+    if not thirds:
+        return "🥉 أفضل الثوالث\nلا توجد بيانات كافية حتى الآن."
+    lines.append("✅ داخلين حاليًا")
+    for i, r in enumerate(thirds[:8], start=1):
+        code = r.get('group')
+        slot, leader = _v33_third_matchup_line(code, snap)
+        lines.append(f"{i}. {r.get('team')} — {_v33_group_label(code)}")
+        lines.append(f"   النقاط: {r.get('Pts')} — الفارق: {int(r.get('GD') or 0):+d} — الأهداف: {r.get('GF')}")
+        if slot:
+            lines.append(f"   🏟️ دور الـ32 يقابل: متصدر {_v33_group_label(slot)}")
+            lines.append(f"   حسب الجدول الحالي: {leader or '-'}")
+        lines.append("")
+    lines.append("❌ خارجين حاليًا")
+    for i, r in enumerate(thirds[8:], start=9):
+        lines.append(f"{i}. {r.get('team')} — {_v33_group_label(r.get('group'))}")
+        lines.append(f"   النقاط: {r.get('Pts')} — الفارق: {int(r.get('GD') or 0):+d} — الأهداف: {r.get('GF')}")
+        lines.append(f"   الحالة: {r.get('third_status','❌ خارج حاليًا')}")
+        lines.append("")
+    lines.append("ملاحظة: مواجهات دور الـ32 محسوبة حسب جدول FIFA وترتيب أفضل الثوالث الحالي، وقد تتغير مع تغيّر نتائج المجموعات.")
+    return "\n".join(lines).strip()
+
+# نلغي إشارات "يحتاج مراجعة" من مسجلي الأهداف ونحفظ مباشرة في goals_data.json.
+_V33_PREV_LOAD_GOALS = globals().get('_v32_load_goal_scorers_data')
+def _v32_load_goal_scorers_data():
+    data = _v33_safe_load_json(GOALS_DATA_FILE, {"updated_at": "", "matches": {}, "alerts": []})
+    data.pop('review', None); data.pop('needs_review', None); data.pop('goals_review', None)
+    return data
+
+
+def _v32_save_goal_scorers_data(data):
+    data = data or {"updated_at": "", "matches": {}, "alerts": []}
+    data.pop('review', None); data.pop('needs_review', None); data.pop('goals_review', None)
+    # لا نحذف alerts لأنها تقرير إداري، لكنها لا تظهر كـ "يحتاج مراجعة" في ملف الجمهور.
+    return _v33_safe_save_json(GOALS_DATA_FILE, data)
+
+# فلتر أسماء أوضح قبل إدخال الأهداف.
+_V33_PREV_PARSE_GOALS = globals().get('_v32_parse_youtube_goal_scorers')
+def _v32_parse_youtube_goal_scorers(desc, team1='', team2=''):
+    goals = []
+    try:
+        if _V33_PREV_PARSE_GOALS:
+            goals = _V33_PREV_PARSE_GOALS(desc, team1, team2) or []
+    except Exception:
+        goals = []
+    bad = re.compile(r'^(?:في|ضد|امام|أمام|منتخب|بواسطة|عن طريق|فيما|بينما|غير محدد|الشوط|الدقيقة|الدقيقتين|هدف|أهداف|اهداف|سجل|احرز|أحرز|تعادل|افتتح|التسجيل)$')
+    cleaned = []
+    seen = set()
+    for g in goals:
+        name = re.sub(r'\s+', ' ', str((g or {}).get('player') or '')).strip()
+        if not name or bad.search(name):
+            continue
+        key = (name, (g or {}).get('minute'), (g or {}).get('team'))
+        if key in seen:
+            continue
+        seen.add(key)
+        gg = dict(g); gg['player'] = name
+        cleaned.append(gg)
+    return cleaned
+
+# واجهات النص والقوائم.
+_V33_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    txt_raw = update.message.text or ''
+    txt = normalize_name(txt_raw).strip()
+    if txt == "✅ كيف تتأهل؟":
+        _v33_set_waiting_state(context, 'how')
+        await update.message.reply_text(_v33_how_start_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")]])); return
+    if txt == "🧮 حاسبة التأهل":
+        _v33_set_waiting_state(context, 'calc')
+        await update.message.reply_text(_v33_calc_start_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")]])); return
+    if _V33_PREV_PUBLIC_REPLY_MENU_ROUTER:
+        return await _V33_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+_V33_PREV_TEXT_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt_raw = update.message.text or ''
+    txt = normalize_name(txt_raw).strip()
+    state = _v33_get_waiting_state(context)
+    if txt in V32_FINAL_MENU_LABELS:
+        return await public_reply_menu_router(update, context)
+    if state == 'how':
+        _v33_clear_waiting_state(context)
+        team = _v33_find_team(txt_raw)
+        if not team:
+            await update.message.reply_text("ما عرفت المنتخب. اكتب مثلًا: السعودية أو مصر أو العراق."); return
+        await update.message.reply_text(_v33_how_qualify_text(team), reply_markup=_v33_how_qualify_keyboard(team)); return
+    if state == 'calc':
+        _v33_clear_waiting_state(context)
+        text, kb = _v33_scenario_result_text(txt_raw)
+        await update.message.reply_text(text, reply_markup=kb); return
+    # يشتغل من المحادثة مباشرة
+    if re.search(r'(كيف\s+(?:تتأهل|يتأهل|تتاهل|يتاهل)|احتمالات\s+.+(?:للتأهل|للتاهل)|وش\s+يحتاج|ماذا\s+يحتاج)', txt):
+        team = _v33_find_team(txt_raw)
+        if team:
+            await update.message.reply_text(_v33_how_qualify_text(team), reply_markup=_v33_how_qualify_keyboard(team)); return
+    if re.search(r'(فوز|خسارة|خساره|هزيمة|تعادل)', txt) and _v33_detect_scenario_items(txt_raw):
+        text, kb = _v33_scenario_result_text(txt_raw)
+        await update.message.reply_text(text, reply_markup=kb); return
+    if _V33_PREV_TEXT_ROUTER:
+        return await _V33_PREV_TEXT_ROUTER(update, context)
+
+# Callback wrapper.
+_V33_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if data == 'v32|how_start':
+        _v33_set_waiting_state(context, 'how')
+        await q.edit_message_text(_v33_how_start_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")]])); return
+    if data == 'v32|calc_start':
+        _v33_set_waiting_state(context, 'calc')
+        await q.edit_message_text(_v33_calc_start_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")]])); return
+    if action == 'r32':
+        await q.edit_message_text(_v33_round32_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ لوحة البطولة", callback_data="v32|board")]])); return
+    if action == 'how_thirds' and len(parts) >= 3:
+        team = _v33_team_from_button_key(parts[2])
+        await q.edit_message_text(_v33_how_thirds_text(team), reply_markup=_v33_how_qualify_keyboard(team)); return
+    if action == 'opp_all' and len(parts) >= 3:
+        team = _v33_team_from_button_key(parts[2])
+        await q.edit_message_text(_v33_all_opponents_text(team), reply_markup=_v33_opponent_buttons(team)); return
+    if action == 'opp' and len(parts) >= 4:
+        team = _v33_team_from_button_key(parts[2]); slot = parts[3]
+        await q.edit_message_text(_v33_opponent_detail_text(team, slot), reply_markup=_v33_opponent_buttons(team)); return
+    if _V33_PREV_V32_CALLBACK:
+        return await _V33_PREV_V32_CALLBACK(update, context)
+
+# نضيف أزرار القائمة الجديدة إلى زر home العام إذا كان يمر عبر mainmenu callback القديم.
+# ==================== END V33 QUALIFICATION CALCULATOR + PERSISTENT HIGHLIGHTS/GOALS PATCH ====================
+
 if __name__ == "__main__":
     main()
