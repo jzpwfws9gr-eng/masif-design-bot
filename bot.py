@@ -42930,5 +42930,475 @@ def _v33_how_qualify_text(team, force=False):
 
 # ==================== END V37 LIGHT THIRD-PATH + OFFICIAL BEST-THIRDS LINK PATCH ====================
 
+
+# ==================== V38 PRECISE QUALIFICATION ENGINE PATCH ====================
+# اعتماد فهد:
+# - لا نعرض أفضل الثوالث قبل الطريق المباشر.
+# - نحسب كل مباريات المجموعة المتبقية، وليس المباراة القادمة فقط.
+# - لا نكتب "قد يصبح ثالثًا" لحالة 0 نقاط أو مسار غير مفيد.
+# - الفوز/التعادل/الخسارة في المباراة القادمة يشرح أثره بدون مبالغة.
+# - طريق أفضل الثوالث لا يظهر إلا إذا كان هناك مسار ثالث نهائي برصيد منطقي.
+
+
+def _v38_pair_key(m):
+    try:
+        t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+        t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+        return frozenset([t1, t2])
+    except Exception:
+        return frozenset()
+
+
+def _v38_result_mode(r):
+    try:
+        s1 = int(r.get('score1') or 0); s2 = int(r.get('score2') or 0)
+        if s1 > s2:
+            return 't1_win'
+        if s2 > s1:
+            return 't2_win'
+        return 'draw'
+    except Exception:
+        return 'draw'
+
+
+def _v38_mode_words_for_match(m, mode):
+    try:
+        t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+        t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+        if mode == 'draw':
+            return 'تعادل'
+        if mode == 't1_win':
+            return f'فوز {t1}'
+        if mode == 't2_win':
+            return f'فوز {t2}'
+    except Exception:
+        pass
+    return 'نتيجة مؤثرة'
+
+
+def _v38_outcome_points(outcome):
+    return 3 if outcome == 'win' else 1 if outcome == 'draw' else 0
+
+
+def _v38_target_match_for_team(team, snap=None):
+    try:
+        rem = _v33_remaining_for_team(team, snap or _v33_snapshot(False))
+        return rem[0] if rem else None
+    except Exception:
+        return None
+
+
+def _v38_outcome_result_for_team_match(team, outcome, match):
+    try:
+        return _v35_make_match_result(match, outcome, team=team)
+    except Exception:
+        t1 = canonical_team_name(match.get('team1')) or match.get('team1')
+        t2 = canonical_team_name(match.get('team2')) or match.get('team2')
+        if outcome == 'draw':
+            s1, s2 = 0, 0
+        elif (outcome == 'win' and t1 == team) or (outcome == 'loss' and t2 == team):
+            s1, s2 = 1, 0
+        else:
+            s1, s2 = 0, 1
+        return {'group': match.get('group'), 'team1': t1, 'team2': t2, 'score1': s1, 'score2': s2, 'status': 'SIM'}
+
+
+def _v38_all_group_scenarios(code, snap=None, forced_results=None, max_cases=729):
+    """يحاكي كل مباريات المجموعة المتبقية مع إمكانية تثبيت نتيجة/نتائج.
+    النتيجة لا تفترض مباراة واحدة فقط؛ لذلك تمنع أخطاء مثل العراق والسعودية.
+    """
+    snap = snap or _v33_snapshot(False)
+    forced_results = list(forced_results or [])
+    g = ((snap.get('groups') or {}).get(code, {}) or {})
+    teams = _v37_group_teams(code) or [r.get('team') for r in (g.get('rows') or []) if r.get('team')]
+    base_results = list(g.get('results') or [])
+    try:
+        remaining = list(_v32_group_remaining_fixtures_for_sim(code, g))
+    except Exception:
+        remaining = []
+    if not remaining:
+        try:
+            rows = _v32_stats_rows_from_results(teams, base_results)
+        except Exception:
+            rows = list(g.get('rows') or [])
+        return [{'rows': rows, 'results': base_results, 'forced': forced_results, 'remaining': []}]
+
+    forced_by_pair = {}
+    for fr in forced_results:
+        forced_by_pair[_v38_pair_key(fr)] = fr
+
+    free = []
+    fixed = []
+    for m in remaining:
+        pk = _v38_pair_key(m)
+        if pk in forced_by_pair:
+            fixed.append(forced_by_pair[pk])
+        else:
+            free.append(m)
+
+    if len(free) > 6:
+        free = free[:6]
+    from itertools import product
+    outcomes = [(1,0), (0,0), (0,1)]
+    scenarios = []
+    for combo in product(outcomes, repeat=len(free)):
+        sim_results = list(base_results) + list(fixed)
+        for m, (s1, s2) in zip(free, combo):
+            t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+            t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+            sim_results.append({'group': code, 'team1': t1, 'team2': t2, 'score1': s1, 'score2': s2, 'status': 'SIM'})
+        try:
+            rows = _v32_stats_rows_from_results(teams, sim_results)
+        except Exception:
+            rows = []
+        scenarios.append({'rows': rows, 'results': sim_results, 'forced': list(fixed), 'remaining': list(free)})
+        if len(scenarios) >= max_cases:
+            break
+    return scenarios
+
+
+def _v38_position_row(team, rows):
+    try:
+        for i, r in enumerate(rows or [], start=1):
+            if r.get('team') == team:
+                return i, r
+    except Exception:
+        pass
+    return 99, {}
+
+
+def _v38_eval_next_outcome(team, outcome, snap=None):
+    snap = snap or _v33_snapshot(False)
+    team = _v33_find_team(team) or team
+    code = _v33_team_group(team)
+    target = _v38_target_match_for_team(team, snap)
+    if not code or not target:
+        return {'available': False, 'cases': [], 'pts_after_next': None, 'target_match': target}
+    forced = _v38_outcome_result_for_team_match(team, outcome, target)
+    scenarios = _v38_all_group_scenarios(code, snap, [forced])
+    cases = []
+    for sc in scenarios:
+        pos, row = _v38_position_row(team, sc.get('rows'))
+        cases.append({'pos': pos, 'row': row, 'rows': sc.get('rows') or [], 'results': sc.get('results') or [], 'target_result': forced})
+    code0, pos0, row0, rows0 = _v33_group_row(team, snap)
+    cur_pts = _v37_safe_int((row0 or {}).get('Pts'))
+    pts_after_next = cur_pts + _v38_outcome_points(outcome)
+    return {'available': True, 'cases': cases, 'pts_after_next': pts_after_next, 'target_match': target, 'target_result': forced}
+
+
+def _v38_case_final_pts(case):
+    try:
+        return int((case.get('row') or {}).get('Pts') or 0)
+    except Exception:
+        return 0
+
+
+def _v38_classify_cases(cases):
+    positions = [int(c.get('pos') or 99) for c in (cases or [])]
+    if not positions:
+        return {'direct_guaranteed': False, 'direct_possible': False, 'third_possible': False, 'viable_third_possible': False, 'third_cases': [], 'direct_cases': []}
+    direct_cases = [c for c in cases if int(c.get('pos') or 99) <= 2]
+    third_cases = [c for c in cases if int(c.get('pos') or 99) == 3]
+    viable_third = [c for c in third_cases if _v38_case_final_pts(c) >= 3]
+    return {
+        'direct_guaranteed': len(direct_cases) == len(cases),
+        'direct_possible': bool(direct_cases),
+        'third_possible': bool(third_cases),
+        'viable_third_possible': bool(viable_third),
+        'third_cases': third_cases,
+        'viable_third_cases': viable_third,
+        'direct_cases': direct_cases,
+    }
+
+
+def _v38_next_outcome_label(team, outcome, snap=None):
+    ev = _v38_eval_next_outcome(team, outcome, snap)
+    if not ev.get('available'):
+        return None, ev
+    target = ev.get('target_match') or {}
+    t1 = canonical_team_name(target.get('team1')) or target.get('team1')
+    t2 = canonical_team_name(target.get('team2')) or target.get('team2')
+    opp = t2 if t1 == team else t1
+    if outcome == 'win':
+        lead = f"الفوز على {opp}"
+    elif outcome == 'draw':
+        lead = f"التعادل مع {opp}"
+    else:
+        lead = f"الخسارة أمام {opp}"
+    return lead, ev
+
+
+def _v37_outcome_simplified_line(team, outcome, snap=None):
+    team = _v33_find_team(team) or team
+    snap = snap or _v33_snapshot(False)
+    lead, ev = _v38_next_outcome_label(team, outcome, snap)
+    if not lead:
+        return None, ev
+    cls = _v38_classify_cases(ev.get('cases') or [])
+    pts_txt = f"{ev.get('pts_after_next')} نقاط" if ev.get('pts_after_next') is not None else "رصيد جديد"
+    rem_count_after = 0
+    try:
+        row = _v33_group_row(team, snap)[2]
+        rem_count_after = max(0, 3 - int((row or {}).get('P') or 0) - 1)
+    except Exception:
+        rem_count_after = 0
+
+    if outcome == 'loss':
+        if rem_count_after > 0:
+            status = "لا تؤهله الآن، ويحتاج الفوز فيما تبقى مع حسابات صعبة جدًا"
+        elif cls['direct_possible']:
+            status = "قد يبقى داخل التأهل المباشر حسب نتيجة المباراة الأخرى"
+        elif cls['viable_third_possible']:
+            status = "قد يصبح ثالثًا ويدخل أفضل الثوالث حسب نتيجة المباراة الأخرى"
+        else:
+            status = "لا تؤهله، وخروجه يصبح قريبًا جدًا"
+    elif cls['direct_guaranteed']:
+        status = "تأهل رسمي مباشر"
+    elif cls['direct_possible'] and cls['viable_third_possible']:
+        status = "يفتح طريقين: تأهل مباشر أو أفضل الثوالث حسب بقية النتائج"
+    elif cls['direct_possible']:
+        status = "يبقي التأهل المباشر ممكنًا حسب بقية النتائج"
+    elif cls['viable_third_possible']:
+        status = "يدخله مسار أفضل الثوالث حسب بقية النتائج"
+    else:
+        status = "لا يكفي وحده، ويحتاج نتائج أخرى قوية"
+    return f"- {lead} ➜ {pts_txt} ➜ {status}", ev
+
+
+def _v38_scenario_required_lines(team, scenario, snap=None, max_lines=4):
+    snap = snap or _v33_snapshot(False)
+    g = _v33_team_group(team)
+    base = list((((snap.get('groups') or {}).get(g, {}) or {}).get('results') or []))
+    base_pairs = {_v38_pair_key(r) for r in base}
+    out = []
+    for r in scenario.get('results') or []:
+        if _v38_pair_key(r) in base_pairs:
+            continue
+        try:
+            out.append(_v35_result_sentence(r))
+        except Exception:
+            t1 = r.get('team1'); t2 = r.get('team2'); s1 = r.get('score1'); s2 = r.get('score2')
+            out.append(f"{t1} {s1}-{s2} {t2}")
+    return out[:max_lines]
+
+
+def _v38_direct_path_lines(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    team = _v33_find_team(team) or team
+    lines = []
+    next_target = _v38_target_match_for_team(team, snap)
+    if not next_target:
+        return lines
+    # للمجموعات التي بقي فيها مباراتان فقط، نصنع سطرًا دقيقًا ومختصرًا حسب نتيجة المباراة الأخرى.
+    try:
+        g = _v33_team_group(team)
+        group_data = ((snap.get('groups') or {}).get(g, {}) or {})
+        remaining = list(_v32_group_remaining_fixtures_for_sim(g, group_data))
+    except Exception:
+        remaining = []
+    for outcome in ['win', 'draw', 'loss']:
+        lead, ev = _v38_next_outcome_label(team, outcome, snap)
+        if not lead:
+            continue
+        cls = _v38_classify_cases(ev.get('cases') or [])
+        if not cls['direct_possible']:
+            continue
+        # إذا الحسم مضمون بعد هذه النتيجة.
+        if cls['direct_guaranteed']:
+            lines.append(f"- {lead} ➜ يتأهل مباشرًا.")
+            continue
+        # إذا فيه مباراة أخرى واحدة فقط، نوضح النتائج التي تساعده.
+        other_matches = [m for m in remaining if _v38_pair_key(m) != _v38_pair_key(next_target)]
+        if len(other_matches) == 1:
+            m = other_matches[0]
+            ok_modes = []
+            for c in cls['direct_cases']:
+                for r in c.get('results') or []:
+                    if _v38_pair_key(r) == _v38_pair_key(m):
+                        md = _v38_result_mode(r)
+                        if md not in ok_modes:
+                            ok_modes.append(md)
+            if ok_modes:
+                # ترتيب منطقي: فوز صاحب الأرض، تعادل، فوز الضيف.
+                order = ['t1_win', 'draw', 't2_win']
+                ok_modes = [x for x in order if x in ok_modes]
+                modes_txt = " أو ".join(_v38_mode_words_for_match(m, md) for md in ok_modes)
+                t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+                t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+                lines.append(f"- {lead} + {t1} × {t2}: {modes_txt} ➜ يتأهل مباشرًا.")
+                continue
+        # للمجموعات التي بقي فيها أكثر من مباراة.
+        best = cls['direct_cases'][0]
+        reqs = _v38_scenario_required_lines(team, best, snap, max_lines=3)
+        if reqs:
+            lines.append(f"- {lead} + " + " + ".join(reqs[1:] if reqs and lead in reqs[0] else reqs[:3]) + " ➜ طريق مباشر ممكن.")
+        else:
+            lines.append(f"- {lead} ➜ طريق مباشر ممكن حسب بقية النتائج.")
+    return lines[:4]
+
+
+def _v37_third_case_info(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    team = _v33_find_team(team) or team
+    g = _v33_team_group(team)
+    best = None
+    for sc in _v38_all_group_scenarios(g, snap):
+        pos, row = _v38_position_row(team, sc.get('rows'))
+        pts = _v37_safe_int((row or {}).get('Pts'))
+        if pos == 3 and pts >= 3:
+            item = {'case': {'pos': pos, 'row': row, 'rows': sc.get('rows') or [], 'results': sc.get('results') or []}, 'pts': pts, 'scenario': sc}
+            if best is None or pts > best.get('pts', -1):
+                best = item
+    return best
+
+
+def _v37_target_third_points(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    case = _v37_third_case_info(team, snap)
+    if case:
+        return case.get('pts'), case
+    code, pos, row, rows = _v33_group_row(team, snap)
+    if int(pos or 99) == 3 and row and _v37_safe_int(row.get('Pts')) >= 3:
+        return _v37_safe_int(row.get('Pts')), None
+    return None, None
+
+
+def _v38_how_summary_line(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    team = _v33_find_team(team) or team
+    rem = _v33_remaining_for_team(team, snap)
+    direct_lines = _v38_direct_path_lines(team, snap)
+    win_line, win_ev = _v37_outcome_simplified_line(team, 'win', snap)
+    draw_line, draw_ev = _v37_outcome_simplified_line(team, 'draw', snap)
+    loss_line, loss_ev = _v37_outcome_simplified_line(team, 'loss', snap)
+    target = _v38_target_match_for_team(team, snap) or {}
+    t1 = canonical_team_name(target.get('team1')) or target.get('team1')
+    t2 = canonical_team_name(target.get('team2')) or target.get('team2')
+    opp = t2 if t1 == team else t1 or 'المنافس'
+    if len(rem) > 1:
+        if direct_lines:
+            return f"{team} لديه {len(rem)} مباريات متبقية. الطريق الأفضل يبدأ بنتيجة قوية أمام {opp}، والحسم يعتمد على بقية مباريات المجموعة."
+        third = _v37_third_case_info(team, snap)
+        if third:
+            return f"{team} يحتاج جمع النقاط في مبارياته المتبقية حتى يدخل مسار المركز الثالث وأفضل الثوالث."
+        return f"{team} يحتاج نتائج قوية في مبارياته المتبقية؛ أي تعثر جديد يصعّب موقفه كثيرًا."
+    # مباراة واحدة متبقية
+    for ev, label in [(win_ev, 'الفوز'), (draw_ev, 'التعادل')]:
+        cls = _v38_classify_cases((ev or {}).get('cases') or [])
+        if cls.get('direct_guaranteed'):
+            if label == 'الفوز' and _v38_classify_cases((draw_ev or {}).get('cases') or []).get('direct_guaranteed'):
+                return f"الفوز أو التعادل أمام {opp} يؤهل {team} مباشرة إلى دور الـ32."
+            return f"{label} أمام {opp} يؤهل {team} مباشرة إلى دور الـ32."
+    if direct_lines:
+        return f"{team} يحتاج نتيجة تخدمه في مباراته ومباراة المجموعة الأخرى للوصول إلى المركز الثاني، وإلا يدخل حسابات أفضل الثوالث."
+    third = _v37_third_case_info(team, snap)
+    if third:
+        return f"{team} يحتاج نتيجة إيجابية أمام {opp} حتى يدخل حسابات أفضل الثوالث."
+    return f"موقف {team} صعب، ويحتاج نتيجة قوية وتعثرات أخرى في المجموعة."
+
+
+_V38_PREV_HOW_QUALIFY_TEXT = globals().get('_v33_how_qualify_text')
+def _v33_how_qualify_text(team, force=False):
+    team = _v33_find_team(team)
+    if not team:
+        return "ما عرفت المنتخب. اكتب اسم منتخب مثل: السعودية أو مصر أو العراق."
+    snap = _v33_snapshot(force)
+    code, pos, row, rows = _v33_group_row(team, snap)
+    status_txt = (snap.get('status') or {}).get(team, '⚔️ ما زال ينافس')
+    if ('مستبعد' in str(status_txt) or 'غادر' in str(status_txt) or ('متأهل' in str(status_txt) and 'رسمي' in str(status_txt))):
+        if _V38_PREV_HOW_QUALIFY_TEXT:
+            return _V38_PREV_HOW_QUALIFY_TEXT(team, force)
+    rem = _v33_remaining_for_team(team, snap)
+    lines = [_v35_team_title(team), ""]
+    lines.append("✅ الخلاصة:")
+    lines.append(_v38_how_summary_line(team, snap))
+    lines.append("")
+    lines.append("📊 الوضع الحالي:")
+    lines.append(f"{_v33_group_label(code)}:")
+    lines.append(_v35_group_teams_pretty(code))
+    lines.append("")
+    if row:
+        lines.append(f"المركز: {pos}")
+        lines.append(f"النقاط: {row.get('Pts')}")
+        lines.append(f"لعب: {row.get('P')}/3")
+        lines.append(f"الفارق: {int(row.get('GD') or 0):+d}")
+    if rem:
+        lines.append("")
+        lines.append("المباراة القادمة:" if len(rem) > 1 else "المباراة المتبقية:")
+        lines.append(_v33_format_remaining_match(rem[0]))
+        if len(rem) > 1:
+            lines.append(f"متبقي بعد هذه المباراة: {len(rem)-1} مباراة")
+    lines.append("")
+    direct_lines = _v38_direct_path_lines(team, snap)
+    if direct_lines:
+        lines.append("🏆 الطريق المباشر:")
+        lines.extend(direct_lines)
+        lines.append("")
+    lines.append("✅ حسابات المباراة القادمة:")
+    for out in ['win', 'draw', 'loss']:
+        ln, _ev = _v37_outcome_simplified_line(team, out, snap)
+        if ln:
+            lines.append(ln)
+    lines.append("")
+    case = _v37_third_case_info(team, snap)
+    lines.append(f"🥉 متى يدخل {team} مسار أفضل الثوالث؟")
+    if case:
+        pts = case.get('pts')
+        reqs = _v38_scenario_required_lines(team, case.get('scenario') or {}, snap, max_lines=4)
+        lines.append(f"إذا أنهى المجموعة ثالثًا برصيد {pts} نقاط أو أكثر، يدخل مقارنة أفضل الثوالث.")
+        if reqs:
+            lines.append("مثال مسار يجعله ثالثًا:")
+            for i, r in enumerate(reqs, start=1):
+                lines.append(f"{i}. {r}")
+        rows_case = ((case.get('case') or {}).get('rows') or [])[:4]
+        if rows_case:
+            lines.append("")
+            lines.append("ترتيب هذا المثال:")
+            for i, rr in enumerate(rows_case, start=1):
+                lines.append(f"{i}. {rr.get('team')} — {rr.get('Pts')} نقاط")
+    else:
+        lines.append("لا يوجد مسار أفضل ثوالث واضح ومفيد من البيانات الحالية؛ طريقه يكون مباشرًا أو يصبح موقفه صعبًا جدًا.")
+    lines.append("")
+    target_pts, _case2 = _v37_target_third_points(team, snap)
+    if target_pts is not None:
+        danger, compare, safe = _v37_third_categories(team, target_pts, snap)
+        lines.append(f"عدد الثوالث المضمون خلف {team} إذا أصبح ثالثًا بهذا الرصيد: {min(len(safe),4)}/4")
+    lines.append("")
+    lines.append("اضغط الأزرار بالأسفل لمعرفة:")
+    lines.append("🥉 طريق أفضل الثوالث")
+    lines.append("🏟️ الخصوم المحتملين")
+    lines.append("📊 تفاصيل المجموعة")
+    return "\n".join(lines).strip()
+
+
+def _v33_how_thirds_text(team):
+    team = _v33_find_team(team)
+    if not team:
+        return "ما عرفت المنتخب."
+    snap = _v33_snapshot(False)
+    code = _v33_team_group(team)
+    target_pts, case = _v37_target_third_points(team, snap)
+    lines = [f"🥉 طريق أفضل الثوالث — {team}", ""]
+    if target_pts is None:
+        lines.append("لا يوجد مسار ثالث واضح ومفيد من البيانات الحالية.")
+        lines.append("إذا تغيّرت النتائج وظهر مسار ثالث، سيحسبه البوت تلقائيًا.")
+        return "\n".join(lines).strip()
+    lines.append(f"إذا أصبح {team} ثالث {_v33_group_label(code)} بـ{target_pts} نقاط، يدخل سباق أفضل الثوالث.")
+    lines.append("")
+    lines.append("✅ المطلوب:")
+    lines.append("أن يكون خلفه 4 منتخبات ثالثة على الأقل، لأن أفضل 8 ثوالث من أصل 12 يتأهلون.")
+    if case:
+        reqs = _v38_scenario_required_lines(team, case.get('scenario') or {}, snap, max_lines=4)
+        if reqs:
+            lines.append("")
+            lines.append("📍 مثال مسار يجعله ثالثًا:")
+            for i, r in enumerate(reqs, start=1):
+                lines.append(f"{i}. {r}")
+    lines.append("")
+    lines.extend(_v37_third_path_summary_block(team, target_pts, snap))
+    return "\n".join(lines).strip()
+
+# ==================== END V38 PRECISE QUALIFICATION ENGINE PATCH ====================
+
 if __name__ == "__main__":
     main()
