@@ -46426,5 +46426,517 @@ async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ==================== END V39 ALL AGREED FIXES — FAHAD ====================
 
 
+
+# ==================== V40 FINAL TEST FIXES — FAHAD ====================
+# اعتماد فهد:
+# 1) عدد المباريات في لوحة البطولة = المكتملة + المباشرة فقط، ولا تُحسب المجدولة ولو فيها 0-0.
+# 2) هدافين البطولة من ESPN statistics/byathlete فقط، مع قراءة أوسع وبدون تكرار رسالة الخطأ.
+# 3) ترتيب الهدافين من الأكثر أهدافًا للأقل، وترقيم تسلسلي عادي عند التعادل.
+# 4) تحليل المركز الثالث مختصر: الاسم والمجموعة ثم النقاط/لعب/الفارق، مع توضيح كأفضل ثالث.
+# 5) احتمالات المركز الأول/الثاني تعرض خصم دور الـ32 حسب الترتيب الحالي في آخر الرسالة.
+
+# ---------- V40: match state + counted matches/goals ----------
+def _v40_text_blob(obj):
+    vals = []
+    if isinstance(obj, dict):
+        for k in ('status','state','detail','shortDetail','description','statusText','stage','phase'):
+            v = obj.get(k)
+            if isinstance(v, dict):
+                for kk in ('state','detail','shortDetail','description','name','type'):
+                    if v.get(kk) is not None:
+                        vals.append(str(v.get(kk)))
+            elif v is not None:
+                vals.append(str(v))
+        st = obj.get('status')
+        if isinstance(st, dict):
+            typ = st.get('type') if isinstance(st.get('type'), dict) else {}
+            for kk in ('state','detail','shortDetail','description','name'):
+                if typ.get(kk) is not None:
+                    vals.append(str(typ.get(kk)))
+    return ' '.join(vals).lower()
+
+
+def _v40_fixture_date_key(m):
+    try:
+        return _date_key(_normalize_date_arg((m or {}).get('date')))
+    except Exception:
+        try:
+            return _date_key((m or {}).get('date'))
+        except Exception:
+            return None
+
+
+def _v40_match_bucket(obj, fixture=None):
+    """complete / live / scheduled"""
+    if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
+        return 'scheduled'
+    blob = _v40_text_blob(obj)
+    # ESPN/football-data states
+    if any(x in blob for x in ('post', 'final', 'full time', 'full-time', 'ft', 'finished', 'complete', 'completed', 'انتهت', 'نهاية', 'نهائي')):
+        return 'complete'
+    if any(x in blob for x in (' in ', 'in_progress', 'in-progress', 'live', 'halftime', 'half time', 'ht', 'مباشر', 'الشوط')):
+        return 'live'
+    if any(x in blob for x in ('pre', 'scheduled', 'not started', 'لم تبدأ', 'قبل المباراة')):
+        return 'scheduled'
+    # إذا ما فيه حالة واضحة: لا نحسب مباريات اليوم/المستقبل لمجرد وجود 0-0.
+    try:
+        dkey = _v40_fixture_date_key(fixture or {})
+        today = _v32_today_key()
+        if dkey and dkey < today:
+            return 'complete'
+    except Exception:
+        pass
+    return 'scheduled'
+
+
+_V40_PREV_RESULT_FOR_FIXTURE = globals().get('_v32_result_for_fixture')
+def _v32_result_for_fixture(m, force=False):
+    obj = None
+    if _V40_PREV_RESULT_FOR_FIXTURE:
+        try:
+            obj = _V40_PREV_RESULT_FOR_FIXTURE(m, force=force)
+        except TypeError:
+            obj = _V40_PREV_RESULT_FOR_FIXTURE(m)
+        except Exception:
+            obj = None
+    if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
+        return obj
+    bucket = _v40_match_bucket(obj, m)
+    if bucket == 'scheduled':
+        # لا تدخل المباراة المجدولة في الإحصائيات أو الحسبة حتى لو فيها 0-0 محفوظة.
+        return None
+    obj = dict(obj)
+    obj['_v40_bucket'] = bucket
+    return obj
+
+
+def _v40_counted_matches_and_goals(force=False):
+    completed = live = goals = 0
+    seen = set()
+    try:
+        fixtures = _v32_all_group_fixtures() if '_v32_all_group_fixtures' in globals() else []
+    except Exception:
+        fixtures = []
+    for m in fixtures or []:
+        try:
+            key = str(m.get('id') or '') or f"{m.get('date')}|{m.get('team1')}|{m.get('team2')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            obj = _v32_result_for_fixture(m, force=force)
+            if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
+                continue
+            bucket = obj.get('_v40_bucket') or _v40_match_bucket(obj, m)
+            if bucket == 'complete':
+                completed += 1
+                goals += _v41_total_goals(obj) if '_v41_total_goals' in globals() else (int(obj.get('score1') or 0)+int(obj.get('score2') or 0))
+            elif bucket == 'live':
+                live += 1
+                goals += _v41_total_goals(obj) if '_v41_total_goals' in globals() else (int(obj.get('score1') or 0)+int(obj.get('score2') or 0))
+        except Exception:
+            continue
+    return {'completed': completed, 'live': live, 'counted': completed + live, 'goals': goals}
+
+
+# بعد أي snapshot قديم، صحح أرقام العرض فقط حتى لا تظهر 44 بدل 42.
+_V40_PREV_V33_SNAPSHOT = globals().get('_v33_snapshot')
+def _v33_snapshot(force=False):
+    snap = _V40_PREV_V33_SNAPSHOT(force) if _V40_PREV_V33_SNAPSHOT else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
+    try:
+        cnt = _v40_counted_matches_and_goals(force=force)
+        snap['finished_count'] = int(cnt.get('counted') or 0)
+        snap['completed_count'] = int(cnt.get('completed') or 0)
+        snap['live_count'] = int(cnt.get('live') or 0)
+        snap['goals'] = int(cnt.get('goals') or 0)
+        snap['count_rule'] = 'المكتملة + المباشرة فقط'
+    except Exception:
+        pass
+    return snap
+
+
+_V40_PREV_V32_SNAPSHOT = globals().get('_v32_snapshot')
+def _v32_snapshot(force=False):
+    snap = _V40_PREV_V32_SNAPSHOT(force) if _V40_PREV_V32_SNAPSHOT else {}
+    try:
+        cnt = _v40_counted_matches_and_goals(force=force)
+        snap['finished_count'] = int(cnt.get('counted') or 0)
+        snap['completed_count'] = int(cnt.get('completed') or 0)
+        snap['live_count'] = int(cnt.get('live') or 0)
+        snap['goals'] = int(cnt.get('goals') or 0)
+        snap['count_rule'] = 'المكتملة + المباشرة فقط'
+    except Exception:
+        pass
+    return snap
+
+
+# ---------- V40: top scorers parser/order/error ----------
+def _v40_pick_stat_value(node, names):
+    if not isinstance(node, dict):
+        return None
+    names_l = {str(x).lower() for x in names}
+    # مفاتيح مباشرة
+    for k, v in node.items():
+        lk = str(k).lower()
+        if lk in names_l or any(n in lk for n in names_l if len(n) > 2):
+            out = _v39_int(v) if '_v39_int' in globals() else None
+            if out is not None:
+                return out
+    # قوائم ESPN المتعددة
+    for list_key in ('statistics', 'stats', 'splits', 'categories', 'leaders'):
+        arr = node.get(list_key)
+        if isinstance(arr, list):
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                nm = str(it.get('name') or it.get('displayName') or it.get('shortDisplayName') or it.get('abbreviation') or it.get('label') or '').lower().strip()
+                if nm and (nm in names_l or any(n in nm for n in names_l if len(n) > 2)):
+                    out = _v39_int(it.get('value') or it.get('displayValue') or it.get('total') or it.get('stat') or it.get('rankValue'))
+                    if out is not None:
+                        return out
+                out = _v40_pick_stat_value(it, names)
+                if out is not None:
+                    return out
+    return None
+
+
+def _v40_name_from_byathlete_node(node):
+    if not isinstance(node, dict):
+        return ''
+    # اللاعب غالبًا داخل athlete/player/participant، لكن بعض صيغ byathlete تضع الاسم على نفس الصف.
+    for k in ('athlete', 'player', 'participant'):
+        v = node.get(k)
+        if isinstance(v, dict):
+            for nk in ('displayName', 'fullName', 'shortName', 'name'):
+                nm = _v39_clean_player_name(v.get(nk)) if '_v39_clean_player_name' in globals() else normalize_name(v.get(nk) or '')
+                if nm:
+                    return nm
+    for nk in ('displayName', 'fullName', 'shortName', 'name'):
+        nm = _v39_clean_player_name(node.get(nk)) if '_v39_clean_player_name' in globals() else normalize_name(node.get(nk) or '')
+        if nm:
+            return nm
+    return ''
+
+
+def _v40_team_from_byathlete_node(node):
+    try:
+        tm = _v39_team_from_node(node) if '_v39_team_from_node' in globals() else ''
+        if tm:
+            return tm
+    except Exception:
+        pass
+    if isinstance(node, dict):
+        for k in ('team', 'club', 'competitor'):
+            v = node.get(k)
+            if isinstance(v, dict):
+                nm = v.get('displayName') or v.get('shortDisplayName') or v.get('abbreviation') or v.get('name') or ''
+                if nm:
+                    return canonical_team_name(nm) or normalize_name(nm)
+    return '-'
+
+
+def _v39_extract_byathlete_json(data):
+    found = {}
+    # استخدم مستخرج النسخة القديمة كداعم JSON فقط، لا كمصدر مختلف.
+    try:
+        old_items = _v29_extract_top_scorers_from_json(data) if '_v29_extract_top_scorers_from_json' in globals() else []
+    except Exception:
+        old_items = []
+    for it in old_items or []:
+        name = _v39_clean_player_name(it.get('name')) if '_v39_clean_player_name' in globals() else normalize_name(it.get('name') or '')
+        goals = _v39_int(it.get('goals')) if '_v39_int' in globals() else None
+        if not name or goals is None or goals <= 0 or goals > 20:
+            continue
+        team = canonical_team_name(it.get('team')) or normalize_name(it.get('team') or '-')
+        played = _v39_int(it.get('played')) if '_v39_int' in globals() else None
+        key = (simple_key(name), simple_key(team))
+        found[key] = {'name': name, 'team': team or '-', 'played': played if played is not None else '', 'goals': int(goals)}
+
+    for node in _v39_walk(data) if '_v39_walk' in globals() else []:
+        if not isinstance(node, dict):
+            continue
+        goals = _v40_pick_stat_value(node, ('goals', 'goal', 'g'))
+        # بعض صفوف byathlete تضع الرقم في value/displayValue داخل صف اللاعب.
+        if goals is None:
+            goals = _v39_int(node.get('value') or node.get('displayValue') or node.get('total') or node.get('rankValue')) if '_v39_int' in globals() else None
+        if goals is None or goals <= 0 or goals > 20:
+            continue
+        name = _v40_name_from_byathlete_node(node)
+        if not name:
+            continue
+        team = _v40_team_from_byathlete_node(node) or '-'
+        played = _v40_pick_stat_value(node, ('appearances', 'appearance', 'gamesplayed', 'games', 'played', 'gp', 'p'))
+        key = (simple_key(name), simple_key(team))
+        row = {'name': name, 'team': team, 'played': played if played is not None else '', 'goals': int(goals)}
+        old = found.get(key)
+        if not old or int(row['goals']) > int(old.get('goals') or 0):
+            found[key] = row
+
+    items = list(found.values())
+    # ترتيب الهدافين: أهداف أكثر ثم اسم اللاعب، والترقيم في الصورة يبقى تسلسليًا عاديًا.
+    items.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
+    return [x for x in items if x.get('name') and int(x.get('goals') or 0) > 0][:25]
+
+
+def fetch_espn_top_scorers(force_refresh=True):
+    """V40: ESPN statistics/byathlete فقط — لا Leaders ولا وصف أحداث."""
+    global _V39_TOP_SCORERS_LAST_ERROR, _V38_TOP_SCORERS_LAST_ERROR, _V38F_ESPN_SCORERS_LAST_ERROR
+    _V39_TOP_SCORERS_LAST_ERROR = ''
+    try:
+        _V38_TOP_SCORERS_LAST_ERROR = ''
+        _V38F_ESPN_SCORERS_LAST_ERROR = ''
+    except Exception:
+        pass
+    last_http = []
+    for cache_name in ('TOP_SCORERS_CACHE', '_TOP_SCORERS_CACHE', 'ESPN_TOP_SCORERS_CACHE'):
+        try:
+            obj = globals().get(cache_name)
+            if hasattr(obj, 'clear'):
+                obj.clear()
+        except Exception:
+            pass
+    for url in _v39_espn_byathlete_urls():
+        try:
+            r = _v39_http_get(url, timeout=24)
+            status = int(getattr(r, 'status_code', 200) or 200)
+            if status >= 400:
+                last_http.append(f'HTTP {status}')
+                continue
+            try:
+                data = r.json()
+            except Exception:
+                last_http.append('JSON غير صالح')
+                continue
+            items = _v39_extract_byathlete_json(data)
+            if items:
+                return items
+            last_http.append('بدون صفوف صالحة')
+        except Exception as e:
+            last_http.append(str(e)[:70])
+    # رسالة واحدة فقط، بدون تكرار سبب كل رابط.
+    suffix = f" ({' / '.join(list(dict.fromkeys(last_http))[:3])})" if last_http else ''
+    msg = 'ESPN byathlete لم يرجع قائمة هدافين صالحة الآن' + suffix
+    _V39_TOP_SCORERS_LAST_ERROR = msg
+    try:
+        _V38_TOP_SCORERS_LAST_ERROR = msg
+        _V38F_ESPN_SCORERS_LAST_ERROR = msg
+    except Exception:
+        pass
+    return []
+
+
+async def _v39_send_top_scorers(message):
+    wait = await message.reply_text('⏳ جاري سحب هدافين البطولة من ESPN statistics/byathlete...')
+    try:
+        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=55)
+        if not items:
+            err = _V39_TOP_SCORERS_LAST_ERROR or 'ESPN byathlete لم يرجع قائمة هدافين صالحة الآن.'
+            await wait.edit_text(f'⚠️ تعذر سحب هدافين البطولة من ESPN حاليًا.\n{err}')
+            return
+        # تأكيد الترتيب النهائي قبل التصميم.
+        items = sorted(items, key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
+        path = _v39_render_unique_top_scorers(items)
+        await send_photo_path(message, path, 'هدافين البطولة ✅\nالمصدر: ESPN statistics/byathlete')
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await wait.edit_text(f'تعذر جلب هدافين البطولة ❌\n{str(e)[:250]}')
+
+
+# ---------- V40: compact third-place best-third analysis ----------
+def _v40_third_item_lines(x):
+    g = _v33_group_label(x.get('group')) if '_v33_group_label' in globals() else f"المجموعة {x.get('group','')}"
+    return [
+        f"- {x.get('team')} — {g}",
+        f"  النقاط: {x.get('pts')} | لعب: {x.get('played')}/3 | الفارق: {int(x.get('gd') or 0):+d}"
+    ]
+
+
+def _v37_third_path_summary_block(team, target_pts, snap=None):
+    danger, mixed, compare, safe = _v38e_third_categories(team, target_pts, snap)
+    guaranteed = len(safe)
+    lines = []
+    lines.append(f'✅ المضمون خلف {team}: {min(guaranteed,4)}/4')
+    if guaranteed >= 4:
+        lines.append(f'الحالة: ✅ {team} يضمن التأهل كأفضل ثالث إذا أنهى المجموعة بهذا الرصيد.')
+    else:
+        lines.append(f'الحالة: يحتاج {4-guaranteed} منتخبات ثالثة إضافية تبقى خلفه لضمان التأهل.')
+    lines.append('')
+    if danger:
+        lines.append(f'🔥 قد يتجاوز {team} كأفضل ثالث:')
+        for x in danger[:8]:
+            lines.extend(_v40_third_item_lines(x))
+            lines.append('')
+    if mixed:
+        lines.append(f'⚠️ قد يتجاوز أو يدخل مقارنة الفارق مع {team} كأفضل ثالث:')
+        for x in mixed[:8]:
+            lines.extend(_v40_third_item_lines(x))
+            lines.append('')
+    if compare:
+        lines.append(f'⚖️ قد يدخل مقارنة الفارق مع {team} كأفضل ثالث:')
+        for x in compare[:8]:
+            lines.extend(_v40_third_item_lines(x))
+            lines.append('')
+    if safe:
+        lines.append(f'✅ خلف {team} مضمون كأفضل ثالث:')
+        for x in safe[:6]:
+            lines.extend(_v40_third_item_lines(x))
+            lines.append('')
+    lines.append('⚠️ في حال تساوي النقاط، يتم الحسم بفارق الأهداف ثم الأهداف المسجلة.')
+    return lines
+
+
+# ---------- V40: add R32 opponent for first/second position analysis ----------
+def _v40_group_code_from_text(txt):
+    s = str(txt or '')
+    for code, _teams in WORLD_CUP_GROUPS:
+        try:
+            ar = _v33_group_ar(code) if '_v33_group_ar' in globals() else code
+            if f'المجموعة {ar}' in s or f'مجموعة {ar}' in s or f'Group {code}' in s or f'المجموعة {code}' in s:
+                return code
+        except Exception:
+            pass
+    return ''
+
+
+def _v40_group_team_by_position(code, pos, snap=None):
+    try:
+        snap = snap or _v33_snapshot(False)
+        rows = ((snap.get('groups') or {}).get(code, {}).get('rows') or [])
+        idx = int(pos) - 1
+        if 0 <= idx < len(rows):
+            return rows[idx].get('team') or ''
+    except Exception:
+        pass
+    return ''
+
+
+def _v40_counterpart_from_slot(slot, snap=None):
+    s = str(slot or '')
+    code = _v40_group_code_from_text(s)
+    if not code:
+        return 'يتحدد لاحقًا', ''
+    if 'أول' in s:
+        return _v40_group_team_by_position(code, 1, snap) or f'متصدر {_v33_group_label(code)}', code
+    if 'ثاني' in s:
+        return _v40_group_team_by_position(code, 2, snap) or f'ثاني {_v33_group_label(code)}', code
+    if 'ثالث' in s:
+        return f'ثالث {_v33_group_label(code)}', code
+    return 'يتحدد لاحقًا', code
+
+
+def _v40_r32_info_for_position(team, target_pos, snap=None):
+    snap = snap or _v33_snapshot(False)
+    code = _v33_team_group(team)
+    ar = _v33_group_ar(code) if '_v33_group_ar' in globals() else code
+    token = ('أول' if int(target_pos) == 1 else 'ثاني') + f' المجموعة {ar}'
+    try:
+        fixtures = globals().get('TOURNAMENT_FIXTURES', []) or []
+        for m in fixtures:
+            if str(m.get('stage') or '') != 'دور الـ32':
+                continue
+            note = str(m.get('note') or '')
+            if token not in note:
+                continue
+            parts = [p.strip() for p in note.split('×')]
+            other = ''
+            if len(parts) >= 2:
+                if parts[0] == token:
+                    other = parts[1]
+                elif parts[1] == token:
+                    other = parts[0]
+                else:
+                    other = parts[1] if token in parts[0] else parts[0]
+            opponent, opp_group = _v40_counterpart_from_slot(other, snap)
+            date_line = _v38e_match_datetime_line(m) if '_v38e_match_datetime_line' in globals() else (str(m.get('date') or '') + (' — ' + str(m.get('time')) if m.get('time') else ''))
+            return {'slot': note or token, 'opponent': opponent or 'يتحدد لاحقًا', 'date_line': date_line or 'يتحدد لاحقًا', 'opp_group': opp_group}
+    except Exception:
+        pass
+    return {'slot': token, 'opponent': 'يتحدد لاحقًا', 'date_line': 'يتحدد لاحقًا', 'opp_group': ''}
+
+
+def _v40_position_opponent_block(team, target_pos, snap=None):
+    snap = snap or _v33_snapshot(False)
+    pos_word = 'الأول' if int(target_pos) == 1 else 'الثاني'
+    info = _v40_r32_info_for_position(team, target_pos, snap)
+    lines = ['', f'🏟️ إذا أنهى {team} المجموعة في المركز {pos_word}، فسيواجه حسب الترتيب الحالي:', str(info.get('slot') or '-'), f"      {team}      ×      {info.get('opponent') or 'يتحدد لاحقًا'}", '', '🗓️ موعد المباراة:', str(info.get('date_line') or 'يتحدد لاحقًا')]
+    if info.get('opp_group'):
+        lines += ['', f"⚠️ قد يتغير الخصم إذا تغيّر ترتيب {_v33_group_label(info.get('opp_group'))}."]
+    return '\n'.join(lines).strip('\n')
+
+
+_V40_PREV_POSITION_TEXT = globals().get('_v38d_position_text')
+def _v38d_position_text(team, target_pos):
+    base = _V40_PREV_POSITION_TEXT(team, target_pos) if _V40_PREV_POSITION_TEXT else ''
+    try:
+        if 'غير ممكن' in str(base) or 'لا توجد بيانات' in str(base):
+            return base
+        t = _v33_find_team(team) or team
+        snap = _v33_snapshot(False)
+        return (str(base).rstrip() + '\n\n' + _v40_position_opponent_block(t, target_pos, snap)).strip()
+    except Exception:
+        return base
+
+
+# ---------- V40: tournament board text with corrected counted matches ----------
+def _v32_tournament_board_text(force=False):
+    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
+    biggest = snap.get('biggest') or {}
+    big = '-' if not biggest else f"{biggest.get('team1')} {biggest.get('score1')}-{biggest.get('score2')} {biggest.get('team2')}"
+    ba = snap.get('best_attack') or ('-',0)
+    bd = snap.get('best_defense') or ('-',0)
+    last_q = (snap.get('qualified') or ['-'])[-1]
+    last_e = (snap.get('eliminated') or ['-'])[-1]
+    try:
+        decisive_count = len(_v32_decisive_rows(False))
+    except Exception:
+        decisive_count = 0
+    counted = int(snap.get('finished_count') or 0)
+    completed = int(snap.get('completed_count') or 0)
+    live = int(snap.get('live_count') or 0)
+    lines = [
+        '🏆 لوحة البطولة',
+        f"آخر تحديث: {snap.get('updated_at','-')}",
+        '',
+        f'مباريات البطولة المحتسبة: {counted} / {snap.get("total_tournament_matches",104)}',
+        f'مباريات دور المجموعات المحتسبة: {counted} / {snap.get("total_group_matches",72)}',
+        f'تفصيلها: {completed} مكتملة + {live} مباشرة',
+        f"إجمالي الأهداف: {snap.get('goals',0)}",
+        f'أكبر نتيجة: {big}',
+        f'أقوى هجوم: {ba[0]} — {ba[1]} أهداف',
+        f'أقوى دفاع: {bd[0]} — استقبل {bd[1]}',
+        f'آخر متأهل رسميًا: {last_q}',
+        f'آخر مستبعد رسميًا: {last_e}',
+        f'مباريات الحسم القادمة: {decisive_count}',
+    ]
+    return '\n'.join(lines)
+
+
+def _v39_board_text(force=False):
+    return _v32_tournament_board_text(force)
+
+
+
+# ---------- V40.1: light cache for corrected match counts ----------
+_V40_RAW_COUNTED_MATCHES_AND_GOALS = _v40_counted_matches_and_goals
+_V40_COUNTED_MATCHES_CACHE = {'ts': 0, 'data': None}
+def _v40_counted_matches_and_goals(force=False):
+    try:
+        now = time.time()
+    except Exception:
+        now = 0
+    if (not force) and isinstance(_V40_COUNTED_MATCHES_CACHE.get('data'), dict) and now - float(_V40_COUNTED_MATCHES_CACHE.get('ts') or 0) < 75:
+        return dict(_V40_COUNTED_MATCHES_CACHE['data'])
+    data = _V40_RAW_COUNTED_MATCHES_AND_GOALS(force=force)
+    try:
+        _V40_COUNTED_MATCHES_CACHE['ts'] = now
+        _V40_COUNTED_MATCHES_CACHE['data'] = dict(data or {})
+    except Exception:
+        pass
+    return data
+
+# ==================== END V40 FINAL TEST FIXES — FAHAD ====================
+
 if __name__ == "__main__":
     main()
