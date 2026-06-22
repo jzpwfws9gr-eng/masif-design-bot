@@ -22551,7 +22551,7 @@ def _status_picker_keyboard(kind="qualified", selected=None):
     if row:
         rows.append(row)
     rows.append([InlineKeyboardButton("✅ تأكيد", callback_data=f"spick|confirm|{kind}"), InlineKeyboardButton("تصفير", callback_data=f"spick|clear|{kind}")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -22737,7 +22737,7 @@ def _v28_previous_results_keyboard():
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -22750,7 +22750,7 @@ def _v29_group_menu_keyboard():
         InlineKeyboardButton("6 مجموعات", callback_data="grp|half2"),
     ])
     rows.append([InlineKeyboardButton("جميع المجموعات", callback_data="grp|all")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -22759,7 +22759,7 @@ def _fixtures_day_keyboard(date):
     miss = [m for m in _fixtures_for_date(date) if _has_unknown(m)]
     for i, m in enumerate(miss, 1):
         rows.append([InlineKeyboardButton(f"تحديث مباراة {i} — {m.get('time')}", callback_data=f"fx|upd|{m.get('id')}")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -22787,7 +22787,7 @@ def _fixtures_dates_keyboard(mode="single", selected=None):
         rows.append([InlineKeyboardButton("تصفير الاختيار", callback_data="fx|clear")])
     else:
         rows.append([InlineKeyboardButton("اختيار أكثر من يوم", callback_data="fx|multi")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -23416,7 +23416,7 @@ def _fantasy_public_keyboard():
         [InlineKeyboardButton("👥 اختيارات المشاركين", callback_data="fantasy|participants")],
         [InlineKeyboardButton("⭐ أساطير الفانتزي", callback_data="fantasy|legends")],
         [InlineKeyboardButton("📋 نموذج المشاركة", callback_data="fantasy|template")],
-        [InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")],
+        [InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")],
     ])
 
 
@@ -23436,8 +23436,8 @@ def _fantasy_days_keyboard(action_prefix, selected=None):
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("رجوع لفانتزي المصيف", callback_data="fantasy|menu")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع لفانتزي", callback_data="fantasy|menu")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -23455,7 +23455,7 @@ def _fantasy_participants_keyboard(day):
     if row:
         rows.append(row)
     rows.append([InlineKeyboardButton("رجوع للأيام", callback_data="fantasy|participants")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -23636,7 +23636,7 @@ def _status_picker_keyboard(kind="qualified", selected=None):
         if row:
             rows.append(row)
     rows.append([InlineKeyboardButton("✅ تأكيد", callback_data=f"spick|confirm|{kind}"), InlineKeyboardButton("تصفير", callback_data=f"spick|clear|{kind}")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -24434,7 +24434,7 @@ def _v29_live_today_keyboard(date_str=None, admin=False):
         else:
             label = f"{m.get('team1')} × {m.get('team2')}"
         kb_rows.append([InlineKeyboardButton(label[:58], callback_data=f"livefx|match|{m.get('id')}")])
-    kb_rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    kb_rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(kb_rows)
 
 
@@ -24554,7 +24554,7 @@ async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             if _has_unknown(m):
                 continue
             kb.append([InlineKeyboardButton(f"{m.get('team1')} × {m.get('team2')}", callback_data=f"livefx|{target_action}|{m.get('id')}")])
-        kb.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+        kb.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
         title = "اختر المباراة لإضافة رابط الملخص:" if action == "summary_menu" else "اختر المباراة لإضافة مسجلي الأهداف:"
         await q.edit_message_text(title, reply_markup=InlineKeyboardMarkup(kb))
         return
@@ -24723,7 +24723,7 @@ def _v28_previous_results_keyboard():
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -24865,12 +24865,12 @@ def _status_admin_keyboard(kind="qualified"):
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("➕ إضافة متأهل", callback_data="status|pick|qualified")],
             [InlineKeyboardButton("🚪 استبعاد منتخب", callback_data="status|pick|eliminated")],
-            [InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")],
+            [InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")],
         ])
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🚪 استبعاد منتخب", callback_data="status|pick|eliminated")],
         [InlineKeyboardButton("➕ إضافة متأهل", callback_data="status|pick|qualified")],
-        [InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")],
+        [InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")],
     ])
 
 
@@ -25149,7 +25149,7 @@ def _highlights_keyboard():
         label = f"{item.get('team1','')} × {item.get('team2','')}".strip()
         if label and item.get("url"):
             rows.append([InlineKeyboardButton(label[:58], callback_data=f"hls|show|{key}")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -25346,7 +25346,7 @@ def _status_picker_keyboard(kind="qualified", selected=None):
     if row:
         rows.append(row)
     rows.append([InlineKeyboardButton("✅ تأكيد", callback_data=f"spick|confirm|{kind}"), InlineKeyboardButton("تصفير", callback_data=f"spick|clear|{kind}")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -26105,7 +26105,7 @@ async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             if _has_unknown(m):
                 continue
             kb.append([InlineKeyboardButton(f"{m.get('team1')} × {m.get('team2')}", callback_data=f"livefx|{target_action}|{m.get('id')}")])
-        kb.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+        kb.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
         title = "اختر المباراة لإضافة رابط الملخص:" if action == "summary_menu" else "اختر المباراة لإضافة مسجلي الأهداف:"
         await q.edit_message_text(title, reply_markup=InlineKeyboardMarkup(kb))
         return
@@ -26299,7 +26299,7 @@ def _status_admin_keyboard(kind="qualified"):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 تحديث من FIFA", callback_data=f"status|refresh|{kind}")],
         [InlineKeyboardButton("➕ إضافة متأهل", callback_data="status|pick|qualified"), InlineKeyboardButton("🚪 استبعاد منتخب", callback_data="status|pick|eliminated")],
-        [InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")],
+        [InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")],
     ])
 
 
@@ -27073,7 +27073,7 @@ def _v28_previous_results_keyboard():
     if not rows:
         for d, day in _fixture_dates():
             rows.append([InlineKeyboardButton(f"{day} {d}", callback_data=f"res|{d}")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 # ==================== END V31.7 HOTFIX ====================
@@ -27656,7 +27656,7 @@ def _v28_previous_results_keyboard():
         rows.append([InlineKeyboardButton(title, callback_data=f"res|day|{d}")])
     if not rows:
         rows.append([InlineKeyboardButton("لا توجد أيام نتائج حتى الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -28531,7 +28531,7 @@ def _v28_previous_results_keyboard():
         rows.append(row)
     if not rows:
         rows.append([InlineKeyboardButton("لا توجد أيام نتائج حتى الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -28829,7 +28829,7 @@ def _v28_previous_results_keyboard():
         rows.append(row)
     if not rows:
         rows.append([InlineKeyboardButton("لا توجد أيام نتائج حتى الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -28845,7 +28845,7 @@ def _v33_results_matches_keyboard(d):
         rows.append([InlineKeyboardButton(label[:60], callback_data=f"res|match|{d}|{m.get('id')}")])
     if not rows:
         rows.append([InlineKeyboardButton("ما فيه مباريات بهذا التاريخ", callback_data="noop")])
-    rows.append([InlineKeyboardButton("↩️ رجوع للتواريخ", callback_data="res|dates"), InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("↩️ رجوع للتواريخ", callback_data="res|dates"), InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -28991,7 +28991,7 @@ def _v29_live_today_keyboard(date_str=None):
         kb_rows.append([InlineKeyboardButton(label[:58], callback_data=f"livefx|match|{m.get('id')}")])
     if not kb_rows:
         kb_rows.append([InlineKeyboardButton("لا توجد مباريات مباشرة الآن", callback_data="noop")])
-    kb_rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    kb_rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(kb_rows)
 
 
@@ -29727,7 +29727,7 @@ def _v29_live_today_keyboard(date_str=None):
         kb_rows.append([InlineKeyboardButton(label[:60], callback_data=f"livefx|match|{m.get('id')}")])
     if not kb_rows:
         kb_rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
-    kb_rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    kb_rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(kb_rows)
 
 
@@ -30232,7 +30232,7 @@ def _v28_previous_results_keyboard():
         rows.append(row)
     if not rows:
         rows.append([InlineKeyboardButton("لا توجد أيام نتائج حتى الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -30257,7 +30257,7 @@ def _v33_results_matches_keyboard(d):
         rows.append([InlineKeyboardButton(label[:60], callback_data=f"res|match|{d}|{m.get('id')}")])
     if not rows:
         rows.append([InlineKeyboardButton("ما فيه مباريات بهذا التاريخ", callback_data="noop")])
-    rows.append([InlineKeyboardButton("↩️ رجوع للتواريخ", callback_data="res|dates"), InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("↩️ رجوع للتواريخ", callback_data="res|dates"), InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -30398,7 +30398,7 @@ def _v29_live_today_keyboard(date_str=None):
         rows.append([InlineKeyboardButton(_v40_live_button_label(m)[:60], callback_data=f"livefx|match|{m.get('id')}")])
     if not rows:
         rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -30560,7 +30560,7 @@ def _v29_live_today_keyboard(date_str=None):
         rows.append([InlineKeyboardButton(str(label)[:60], callback_data=f"livefx|match|{m.get('id')}")])
     if not rows:
         rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -30731,7 +30731,7 @@ def _v28_previous_results_keyboard():
         rows.append(row)
     if not rows:
         rows.append([InlineKeyboardButton("لا توجد نتائج منتهية حتى الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -31195,7 +31195,7 @@ def _v29_live_today_keyboard(date_str=None):
         rows.append([InlineKeyboardButton(_v40_live_button_label(m)[:62], callback_data=f"livefx|match|{m.get('id')}")])
     if not rows or (len(rows) == 1 and active):
         rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -32931,7 +32931,7 @@ def _v29_live_today_keyboard(date_str=None):
         rows.append([InlineKeyboardButton(_v40_live_button_label(m)[:62], callback_data=f"livefx|match|{m.get('id')}")])
     if not rows or (len(rows) == 2 and active):
         rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -33089,15 +33089,13 @@ async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # Fantasy card button: يربط على أمر /بطاقة الحالي، مع كابشن مختصر بدون أفضل لاعب/كابتن/حارس.
+# اعتماد فهد: ترتيب أزرار فانتزي جنب بعض + زر رجوع واضح.
 def _fantasy_public_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏆 الترتيب العام", callback_data="fantasy|ranking")],
-        [InlineKeyboardButton("🔥 نقاط اليوم", callback_data="fantasy|today_points")],
-        [InlineKeyboardButton("🪪 بطاقة فانتزي", callback_data="fantasy|card")],
-        [InlineKeyboardButton("👥 اختيارات المشاركين", callback_data="fantasy|participants")],
-        [InlineKeyboardButton("⭐ أساطير الفانتزي", callback_data="fantasy|legends")],
-        [InlineKeyboardButton("📋 نموذج المشاركة", callback_data="fantasy|template")],
-        [InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")],
+        [InlineKeyboardButton("🏆 الترتيب العام", callback_data="fantasy|ranking"), InlineKeyboardButton("🔥 نقاط اليوم", callback_data="fantasy|today_points")],
+        [InlineKeyboardButton("🪪 بطاقة فانتزي", callback_data="fantasy|card"), InlineKeyboardButton("👥 اختيارات المشاركين", callback_data="fantasy|participants")],
+        [InlineKeyboardButton("⭐ أساطير الفانتزي", callback_data="fantasy|legends"), InlineKeyboardButton("📋 نموذج المشاركة", callback_data="fantasy|template")],
+        [InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")],
     ])
 
 
@@ -33110,8 +33108,8 @@ def _v44_fantasy_card_participants_keyboard():
             rows.append(row); row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("رجوع لفانتزي المصيف", callback_data="fantasy|menu")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع لفانتزي", callback_data="fantasy|menu")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -33326,7 +33324,7 @@ def _v29_live_today_keyboard(date_str=None):
             continue
     if active and added == 0:
         rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -33746,7 +33744,7 @@ def _v28_previous_results_keyboard():
         rows.append(row)
     if not rows:
         rows.append([InlineKeyboardButton("لا توجد نتائج منتهية حتى الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -33829,7 +33827,7 @@ def _v29_live_today_keyboard(date_str=None):
         rows.append([InlineKeyboardButton(label, callback_data=f"livefx|match|{_v46_date_code(active)}|{idx}")])
     if active and not matches:
         rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -34205,7 +34203,7 @@ def _highlights_keyboard():
         label = f"{item.get('team1','')} × {item.get('team2','')}".strip()
         if label and item.get('url'):
             rows.append([InlineKeyboardButton(label[:58], callback_data=f"hls|show|{key}")])
-    rows.append([InlineKeyboardButton("إلغاء", callback_data="mainmenu|home")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -37842,6 +37840,101 @@ def _v32_goal_scorers_standings(data=None):
     return sorted(players.values(), key=lambda r: (-int(r.get('goals') or 0), r.get('player','')))
 
 
+
+# ==================== V32 GOAL SCORERS BACKGROUND UPDATE PATCH ====================
+# تحديث مسجلي الأهداف يعمل بالخلفية حتى لا يوقف البوت على المستخدمين.
+V32_GOAL_SCORERS_UPDATE_TASK = None
+V32_GOAL_SCORERS_UPDATE_STARTED_AT = ""
+V32_GOAL_SCORERS_UPDATE_LAST_REPORT = None
+
+
+def _v32_goal_scorers_update_is_running():
+    try:
+        task = globals().get('V32_GOAL_SCORERS_UPDATE_TASK')
+        return bool(task and not task.done())
+    except Exception:
+        return False
+
+
+def _v32_goal_scorers_update_status_line():
+    if _v32_goal_scorers_update_is_running():
+        started = globals().get('V32_GOAL_SCORERS_UPDATE_STARTED_AT') or 'الآن'
+        return f"⏳ يوجد تحديث جارٍ بالخلفية منذ: {started}"
+    return ""
+
+
+def _v32_goal_scorers_update_report_lines(res):
+    res = res or {}
+    lines = [
+        "✅ تم تحديث مسجلي الأهداف",
+        f"تم فحص: {res.get('checked', 0)} ملخص جديد أو معدل",
+        f"تم تحديث مباريات: {res.get('updated_matches', 0)}",
+        f"تمت إضافة/حفظ أهداف: {res.get('added_goals', 0)}",
+        f"تم تجاوز: {res.get('skipped', 0)}",
+        f"تحتاج مراجعة: {res.get('failed', 0)}",
+    ]
+    if res.get('alerts'):
+        lines += ["", "⚠️ ملاحظات:"] + [f"- {a}" for a in res.get('alerts')[:8]]
+    lines += ["", "اضغط ملف مسجلي الأهداف لعرض النسخة الجديدة."]
+    return lines
+
+
+async def _v32_goal_scorers_update_background(bot, chat_id, force=False):
+    global V32_GOAL_SCORERS_UPDATE_TASK, V32_GOAL_SCORERS_UPDATE_LAST_REPORT, V32_GOAL_SCORERS_UPDATE_STARTED_AT
+    try:
+        res = await asyncio.to_thread(_v32_goal_scorers_update_from_highlights, force)
+        V32_GOAL_SCORERS_UPDATE_LAST_REPORT = res
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text="\n".join(_v32_goal_scorers_update_report_lines(res)),
+                reply_markup=_v32_goal_scorers_home_keyboard(is_admin=True),
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        safe = _v32_youtube_safe_error(e) if '_v32_youtube_safe_error' in globals() else str(e)[:180]
+        V32_GOAL_SCORERS_UPDATE_LAST_REPORT = {'error': safe}
+        try:
+            await bot.send_message(chat_id=chat_id, text=f"تعذر تحديث مسجلي الأهداف ❌\n{safe}")
+        except Exception:
+            pass
+    finally:
+        V32_GOAL_SCORERS_UPDATE_TASK = None
+        V32_GOAL_SCORERS_UPDATE_STARTED_AT = ""
+
+
+def _v32_start_goal_scorers_background_task(update, context, force=False):
+    """يشغل تحديث مسجلي الأهداف في الخلفية ويرجع True إذا بدأ."""
+    global V32_GOAL_SCORERS_UPDATE_TASK, V32_GOAL_SCORERS_UPDATE_STARTED_AT
+    if _v32_goal_scorers_update_is_running():
+        return False
+    q = getattr(update, 'callback_query', None)
+    chat_id = None
+    try:
+        chat_id = q.message.chat_id if q and q.message else None
+    except Exception:
+        chat_id = None
+    if chat_id is None:
+        try:
+            chat_id = update.effective_chat.id
+        except Exception:
+            chat_id = None
+    if chat_id is None:
+        return False
+    try:
+        V32_GOAL_SCORERS_UPDATE_STARTED_AT = _now_riyadh_text() if '_now_riyadh_text' in globals() else datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+    except Exception:
+        V32_GOAL_SCORERS_UPDATE_STARTED_AT = "الآن"
+    coro = _v32_goal_scorers_update_background(context.bot, chat_id, force=force)
+    try:
+        V32_GOAL_SCORERS_UPDATE_TASK = context.application.create_task(coro)
+    except Exception:
+        V32_GOAL_SCORERS_UPDATE_TASK = asyncio.create_task(coro)
+    return True
+
+# ==================== END V32 GOAL SCORERS BACKGROUND UPDATE PATCH ====================
+
 def _v32_goal_scorers_home_keyboard(is_admin=False):
     rows = [[InlineKeyboardButton("📄 ملف مسجلي الأهداف", callback_data="v32|goal_scorers_file")]]
     if is_admin:
@@ -37865,6 +37958,9 @@ def _v32_goal_scorers_home_text():
         f"المباريات المحفوظة: {matches_total}",
         f"إجمالي الأهداف المحفوظة: {goals_total}",
     ]
+    status_line = _v32_goal_scorers_update_status_line() if '_v32_goal_scorers_update_status_line' in globals() else ''
+    if status_line:
+        lines += ["", status_line, "تقدر تفتح آخر ملف محفوظ، والبوت باقي شغال للجميع."]
     if top:
         lines += ["", "🔥 الأعلى حاليًا:"]
         for i, r in enumerate(top, start=1):
@@ -38047,27 +38143,958 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not _v32_is_admin_update_or_query(update):
             await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒")
             return
-        wait = await q.message.reply_text("⏳ جاري تحديث مسجلي الأهداف من ملخصات اليوتيوب...\nراح أنتظر 20 ثانية بين كل ملخص عشان ما يحظرنا يوتيوب.")
-        try:
-            res = await asyncio.wait_for(asyncio.to_thread(_v32_goal_scorers_update_from_highlights, False), timeout=2400)
-            lines = [
-                "✅ تم تحديث مسجلي الأهداف",
-                f"تم فحص: {res.get('checked', 0)} ملخص جديد أو معدل",
-                f"تم تحديث مباريات: {res.get('updated_matches', 0)}",
-                f"تمت إضافة/حفظ أهداف: {res.get('added_goals', 0)}",
-                f"تم تجاوز: {res.get('skipped', 0)}",
-                f"تحتاج مراجعة: {res.get('failed', 0)}",
-            ]
-            if res.get('alerts'):
-                lines += ["", "⚠️ ملاحظات:"] + [f"- {a}" for a in res.get('alerts')[:5]]
-            lines += ["", "اضغط ملف مسجلي الأهداف لعرض النسخة الجديدة."]
-            await wait.edit_text("\n".join(lines), reply_markup=_v32_goal_scorers_home_keyboard(is_admin=True))
-        except Exception as e:
-            await wait.edit_text(f"تعذر تحديث مسجلي الأهداف ❌\n{str(e)[:180]}")
+        if _v32_goal_scorers_update_is_running():
+            await q.message.reply_text(
+                "⏳ يوجد تحديث لمسجلي الأهداف شغال بالخلفية بالفعل.\n"
+                "انتظر التقرير النهائي، والبوت باقي يعمل للجميع.",
+                reply_markup=_v32_goal_scorers_home_keyboard(is_admin=True),
+            )
+            return
+        started = _v32_start_goal_scorers_background_task(update, context, force=False)
+        if not started:
+            await q.message.reply_text("تعذر بدء تحديث الخلفية، جرّب مرة ثانية.")
+            return
+        await q.message.reply_text(
+            "⏳ جاري تحديث مسجلي الأهداف من ملخصات اليوتيوب...\n"
+            "التحديث شغال بالخلفية، والبوت باقي يعمل للجميع.\n"
+            "راح أنتظر 20 ثانية بين كل ملخص عشان ما يحظرنا يوتيوب.\n\n"
+            "إذا فتحت ملف مسجلي الأهداف الآن بيطلع لك آخر ملف محفوظ، ولما يخلص التحديث بيرسل لك تقرير هنا.",
+            reply_markup=_v32_goal_scorers_home_keyboard(is_admin=True),
+        )
         return
     return await _V32_GOALS_PREV_V32_CALLBACK(update, context)
 
 # ==================== END V32 GOAL SCORERS ARCHIVE PATCH ====================
+
+
+# ==================== V32 SMART BEIN GOAL PARSER + SQUADS PATCH ====================
+# اعتماد فهد:
+# - تحديث مسجلي الأهداف بالخلفية حتى لا يتعطل البوت.
+# - 20 ثانية بين كل ملخص.
+# - قراءة وصف beIN العربي: سجل/أحرز/افتتح/تعادل/الدقيقة/الدقيقتين.
+# - دعم الدقائق حتى 3 خانات وبدل الضائع مثل 90+4.
+# - إضافة ملف قوائم لاعبين داخلي يساعد على معرفة منتخب اللاعب.
+# - فلترة الكلمات الغلط؛ أي اسم مشكوك فيه يذهب للمراجعة بدل الترتيب.
+
+YOUTUBE_SQUADS_FILE = "world_cup_squads.json"
+V32_LAST_GOAL_PARSE_ALERTS = []
+
+_V32_TEAM_ADJECTIVES = {
+    "المكسيكي": "المكسيك", "جنوب الإفريقي": "جنوب أفريقيا", "الجنوب إفريقي": "جنوب أفريقيا", "الكوري": "كوريا الجنوبية", "الكوري الجنوبي": "كوريا الجنوبية", "التشيكي": "التشيك",
+    "الكندي": "كندا", "البوسني": "البوسنة والهرسك", "البوسني والهرسكي": "البوسنة والهرسك", "القطري": "قطر", "السويسري": "سويسرا",
+    "البرازيلي": "البرازيل", "المغربي": "المغرب", "الهايتي": "هايتي", "الاسكتلندي": "اسكتلندا",
+    "الأمريكي": "الولايات المتحدة", "الامريكي": "الولايات المتحدة", "الباراغوياني": "باراغواي", "الباراغواياني": "باراغواي", "الأسترالي": "أستراليا", "الاسترالي": "أستراليا", "التركي": "تركيا",
+    "الألماني": "ألمانيا", "الالماني": "ألمانيا", "الكوراساوي": "كوراساو", "الإيفواري": "ساحل العاج", "الايفواري": "ساحل العاج", "العاجي": "ساحل العاج", "الإكوادوري": "الإكوادور", "الاكوادوري": "الإكوادور",
+    "الهولندي": "هولندا", "الياباني": "اليابان", "السويدي": "السويد", "التونسي": "تونس",
+    "البلجيكي": "بلجيكا", "المصري": "مصر", "الإيراني": "إيران", "الايراني": "إيران", "النيوزيلندي": "نيوزيلندا",
+    "الإسباني": "إسبانيا", "الاسباني": "إسبانيا", "الرأس أخضري": "الرأس الأخضر", "الرأس الأخضري": "الرأس الأخضر", "السعودي": "السعودية", "الأوروغوياني": "أوروجواي", "الاوروغوياني": "أوروجواي", "الأوروجوياني": "أوروجواي", "الاوروجوياني": "أوروجواي",
+    "الفرنسي": "فرنسا", "السنغالي": "السنغال", "العراقي": "العراق", "النرويجي": "النرويج",
+    "الأرجنتيني": "الأرجنتين", "الارجنتيني": "الأرجنتين", "الجزائري": "الجزائر", "النمساوي": "النمسا", "الأردني": "الأردن", "الاردني": "الأردن",
+    "البرتغالي": "البرتغال", "الكونغولي": "الكونغو الديمقراطية", "الأوزبكي": "أوزبكستان", "الاوزبكي": "أوزبكستان", "الكولومبي": "كولومبيا",
+    "الإنجليزي": "إنجلترا", "الانجليزي": "إنجلترا", "الكرواتي": "كرواتيا", "الغاني": "غانا", "البنمي": "بنما",
+}
+
+_V32_GOAL_BAD_NAME_WORDS = {
+    "في", "من", "على", "عن", "الى", "إلى", "ضد", "امام", "أمام", "منتخب", "المنتخب", "بواسطة", "طريق", "عن طريق", "فيما", "بينما",
+    "غير", "محدد", "غير محدد", "الشوط", "الدقيقة", "دقيقة", "الدقيقتين", "الدقائق", "هدف", "اهداف", "أهداف", "هدفي", "ثلاثية",
+    "سجل", "سجّل", "أحرز", "احرز", "تعادل", "افتتح", "التسجيل", "النتيجة", "المباراة", "ملخص", "كأس", "العالم", "بطولة",
+    "الجولة", "المجموعة", "ضمن", "منافسات", "الفوز", "فوزا", "فوز", "التعادل", "الإيجابي", "الايجابي", "متقدما", "تقدم", "قلص", "ضاعف", "اختتم",
+}
+
+_V32_PLAYER_TEAM_SEED = {
+    "كندا": ["كايل لارين", "Kyle Larin", "لارين", "جوناثان ديفيد", "Jonathan David", "ألفونسو ديفيز", "Alphonso Davies", "تاجون بوكانان"],
+    "البوسنة والهرسك": ["جوفو لوكيتش", "Jovo Lukic", "لوكيتش", "إدين دجيكو", "Edin Dzeko", "دجيكو"],
+    "إيران": ["رامين رضائيان", "Ramin Rezaeian", "رضائيان", "محمد محبي", "Mohammad Mohebi", "محبي", "مهدي طارمي", "Taremi"],
+    "نيوزيلندا": ["إيليا جوست", "Elijah Just", "إيليجا جوست", "جوست", "كريس وود", "Chris Wood"],
+    "ألمانيا": ["دينيس أونداف", "Deniz Undav", "أونداف", "فلوريان فيرتز", "كاى هافيرتز", "هافيرتز", "موسيالا", "جمال موسيالا", "ليروي ساني"],
+    "ساحل العاج": ["دون فرانك كيسي", "دون فرانك كيسييه", "فرانك كيسي", "Franck Kessie", "Kessie", "سيكو فوفانا", "نيكولاس بيبي"],
+    "المغرب": ["إسماعيل صيباري", "Ismael Saibari", "صيباري", "أشرف حكيمي", "حكيمي", "يوسف النصيري", "النصيري"],
+    "سويسرا": ["بريل إمبولو", "Breel Embolo", "إمبولو", "ايمبولو", "شاكيري", "جرانيت تشاكا", "تشاكا"],
+    "قطر": ["عاصم مادبو", "Assim Madibo", "مادبو", "أكرم عفيف", "المعز علي", "المعز", "خوخي", "بوخلال"],
+    "كولومبيا": ["لويس دياز", "Luis Diaz", "دياز", "جون دوران", "Jhon Duran", "دوران", "خاميس رودريغيز", "خاميس"],
+    "السويد": ["ألكسندر إيساك", "Alexander Isak", "إيساك", "ديان كولوسيفسكي", "كولوسيفسكي"],
+    "اليابان": ["أياسي أويدا", "Ayase Ueda", "أويدا", "تاكيفوسا كوبو", "كوبو", "مينامينو", "إيتو", "ميتوما"],
+    "البرازيل": ["فينيسيوس", "فينيسيوس جونيور", "Vinicius Junior", "رافينيا", "رودريغو", "نيمار", "إندريك"],
+    "الأرجنتين": ["ميسي", "ليونيل ميسي", "Lionel Messi", "لاوتارو", "لاوتارو مارتينيز", "جوليان ألفاريز", "ألفاريز"],
+    "فرنسا": ["مبابي", "كيليان مبابي", "Kylian Mbappe", "ديمبلي", "غريزمان", "ماركوس تورام"],
+    "النرويج": ["هالاند", "إيرلينغ هالاند", "Erling Haaland", "نوسا", "Antonio Nusa", "أوديغارد", "سورلوث"],
+    "أوروجواي": ["داروين نونيز", "نونيز", "Darwin Nunez", "فالفيردي", "سواريز"],
+    "إسبانيا": ["أولمو", "داني أولمو", "لامين يامال", "موراتا", "فيران توريس", "توريس", "أوريارزابال", "اوريازابال"],
+    "السعودية": ["سالم الدوسري", "الدوسري", "فراس البريكان", "البريكان", "صالح الشهري", "الشهري"],
+    "الولايات المتحدة": ["بوليسيتش", "كريستيان بوليسيتش", "Christian Pulisic", "بالوغان", "فولارين بالوغان", "تايلر أدامز", "أدامز"],
+    "المكسيك": ["راؤول خيمينيز", "خيمينيز", "Raul Jimenez", "سانتياغو خيمينيز", "أنتونا", "هنري مارتن"],
+    "بلجيكا": ["لوكاكو", "روميلو لوكاكو", "دي بروين", "كيفن دي بروين", "دوكو"],
+    "البرتغال": ["رونالدو", "كريستيانو رونالدو", "برونو فيرنانديز", "برونو", "غونزالو راموس", "لياو"],
+    "إنجلترا": ["هاري كين", "كين", "بيلينغهام", "جود بيلينغهام", "ساكا", "فودين"],
+    "هولندا": ["خاكبو", "كودي خاكبو", "ممفيس ديباي", "ديباي", "فان دايك", "فريج"],
+    "تونس": ["الخنيسي", "مساكني", "الجزيري"],
+    "مصر": ["محمد صلاح", "صلاح", "تريزيجيه", "مصطفى محمد", "مرموش"],
+    "تركيا": ["أردا غولر", "غولر", "هاكان تشالهان أوغلو", "يلماز"],
+    "أستراليا": ["ميتشل ديوك", "ديوك", "كونور ميتكالف", "ميتكالف"],
+    "باراغواي": ["أنطونيو سانابريا", "سانابريا", "ألميرون"],
+    "كرواتيا": ["مودريتش", "لوكا مودريتش", "كراماريتش", "بيريسيتش"],
+    "غانا": ["محمد قدوس", "قدوس", "أندريه آيو", "جوردان آيو"],
+    "بنما": ["فاخاردو", "غودوي"],
+    "العراق": ["أيمن حسين", "مهند علي", "إبراهيم بايش", "زيدان إقبال"],
+    "السنغال": ["ساديو ماني", "ماني", "إسماعيلا سار", "نيكولاس جاكسون"],
+    "الجزائر": ["رياض محرز", "محرز", "بغداد بونجاح", "سعيد بن رحمة"],
+    "النمسا": ["أرناوتوفيتش", "ماركو أرناوتوفيتش", "سابيتزر", "باومغارتنر"],
+    "الأردن": ["موسى التعمري", "التعمري", "يزن النعيمات"],
+}
+
+
+def _v32_goal_load_squads():
+    data = _v32_load_json(YOUTUBE_SQUADS_FILE, {}) if '_v32_load_json' in globals() else {}
+    if not isinstance(data, dict) or not data.get('players'):
+        players = {}
+        for team, names in _V32_PLAYER_TEAM_SEED.items():
+            for n in names:
+                k = simple_key(n) if 'simple_key' in globals() else str(n).lower()
+                players.setdefault(k, {'name': normalize_name(n), 'team': team, 'aliases': []})
+        data = {'updated_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else '', 'source': 'seed + manual', 'players': players}
+        try:
+            _v32_save_json(YOUTUBE_SQUADS_FILE, data)
+        except Exception:
+            pass
+    return data
+
+
+def _v32_goal_save_squads(data):
+    if '_v32_save_json' in globals():
+        return _v32_save_json(YOUTUBE_SQUADS_FILE, data or {})
+    with open(YOUTUBE_SQUADS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data or {}, f, ensure_ascii=False, indent=2)
+
+
+def _v32_goal_squad_team_for_player(player, team1='', team2=''):
+    pkey = simple_key(player) if 'simple_key' in globals() else str(player or '').lower()
+    if not pkey:
+        return ''
+    data = _v32_goal_load_squads()
+    rec = ((data or {}).get('players') or {}).get(pkey)
+    if not rec:
+        # تقريب بسيط للاختلافات الصغيرة
+        keys = list(((data or {}).get('players') or {}).keys())
+        close = difflib.get_close_matches(pkey, keys, n=1, cutoff=0.90) if 'difflib' in globals() else []
+        if close:
+            rec = ((data or {}).get('players') or {}).get(close[0])
+    team = (rec or {}).get('team') or ''
+    if not team:
+        return ''
+    # لو المباراة معروفة، لا نعتمد لاعب خارج طرفي المباراة إلا إذا ما عندنا طرفين.
+    if team1 or team2:
+        try:
+            if team1 and _v31_team_same(team, team1):
+                return team1
+            if team2 and _v31_team_same(team, team2):
+                return team2
+        except Exception:
+            pass
+        if simple_key(team) in (simple_key(team1), simple_key(team2)):
+            return team
+        return ''
+    return team
+
+
+def _v32_goal_team_from_text(text, team1='', team2=''):
+    txt = normalize_name(text or '')
+    sk = simple_key(txt) if 'simple_key' in globals() else txt.lower()
+    for tm in [team1, team2]:
+        if not tm:
+            continue
+        forms = [tm]
+        try:
+            forms += TEAM_SEARCH_EN.get(tm, []) or []
+        except Exception:
+            pass
+        try:
+            for k, v in (TEAM_ALIASES.items() if 'TEAM_ALIASES' in globals() else []):
+                if v == tm:
+                    forms.append(k)
+        except Exception:
+            pass
+        for f in forms:
+            if f and simple_key(f) and simple_key(f) in sk:
+                return tm
+    for adj, tm in _V32_TEAM_ADJECTIVES.items():
+        if simple_key(adj) in sk:
+            if team1 or team2:
+                try:
+                    if team1 and _v31_team_same(tm, team1):
+                        return team1
+                    if team2 and _v31_team_same(tm, team2):
+                        return team2
+                except Exception:
+                    pass
+            return tm
+    try:
+        # جرّب أجزاء النص القصيرة كاسم منتخب.
+        for piece in re.split(r'[،,\.\n\-–—:؛]+', txt):
+            can = canonical_team_name(piece.strip()) if 'canonical_team_name' in globals() else None
+            if can:
+                return can
+    except Exception:
+        pass
+    return ''
+
+
+def _v32_goal_minutes_in_text(text):
+    """يدعم دقائق من خانة إلى 3 خانات + بدل ضائع مثل 90+4، مع تجنب السنوات والأرقام الكبيرة."""
+    text = str(text or '')
+    mins = []
+    minute_pat = r'([1-9]\d{0,2}(?:\+\d{1,2})?)'
+    patterns = [
+        rf"{minute_pat}\s*['’]",
+        rf"(?:الدقيقة|دقيقة|د|minute|min)\s*[:\-]?\s*{minute_pat}",
+        rf"(?:الدقيقتين|الدقائق)\s*[:\-]?\s*{minute_pat}(?:\s*(?:و|،|,)\s*{minute_pat})*",
+        rf"\(\s*{minute_pat}(?:\s*(?:و|،|,)\s*{minute_pat})*\s*\)",
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, text, re.I):
+            for g in m.groups():
+                if not g:
+                    continue
+                try:
+                    base = int(str(g).split('+', 1)[0])
+                    if 1 <= base <= 130 and g not in mins:
+                        mins.append(g)
+                except Exception:
+                    pass
+    return mins
+
+
+def _v32_goal_clean_player_candidate(name):
+    s = normalize_name(name or '')
+    s = re.sub(r'https?://\S+|www\.\S+', ' ', s, flags=re.I)
+    s = re.sub(r'[#@]\S+', ' ', s)
+    s = re.sub(r'[\[\](){}|•،,:;=+*_/\\]+', ' ', s)
+    s = re.sub(r"[0-9]+(?:\+[0-9]+)?\s*['’]?", ' ', s)
+    s = re.sub(r'\b\d+\s*[-:x×]\s*\d+\b', ' ', s)
+    # احذف كلمات الفعل والسياق من البداية والنهاية فقط ولا تمس الأسماء المركبة.
+    s = re.sub(r'^(?:و|ف|ثم|كما|بينما|فيما|وقد|حيث|بهدف|هدف|أحرزه|احرزه|سجله|سجل|أحرز|احرز|افتتح|تعادل|تقدم|بواسطة|عن طريق|لاعبه|لاعب)\s+', '', s).strip()
+    s = re.sub(r'\s+(?:في|من|لمنتخب|للمنتخب|هدف|هدفي|أهداف|اهداف|التسجيل|الدقيقة|دقيقة|والوحيد|الوحيد)$', '', s).strip()
+    s = re.sub(r'\s{2,}', ' ', s).strip(" -–—'’.،")
+    return s
+
+
+def _v32_goal_is_bad_player_name(name, team1='', team2=''):
+    s = _v32_goal_clean_player_candidate(name)
+    if not s or len(s) < 2 or len(s) > 42:
+        return True
+    sk = simple_key(s) if 'simple_key' in globals() else s.lower()
+    if not sk or re.fullmatch(r'[\W\d_]+', s):
+        return True
+    # لا نقبل أسماء هي منتخب أو كلمات سياق.
+    if 'canonical_team_name' in globals() and canonical_team_name(s):
+        return True
+    words = [w for w in re.split(r'\s+', s) if w]
+    if not words:
+        return True
+    if words[0] in _V32_GOAL_BAD_NAME_WORDS or s in _V32_GOAL_BAD_NAME_WORDS:
+        return True
+    bad_key_words = {simple_key(x) for x in _V32_GOAL_BAD_NAME_WORDS if x}
+    if sk in bad_key_words:
+        return True
+    bad_re = re.compile(r'(fifa|worldcup|youtube|subscribe|channel|watch|video|highlight|match|ملخص|البطولة|كأس العالم|مونديال|المجموعة|الجولة|منافسات|المباراة|الفيديو|المشاهدات|المعجبين)', re.I)
+    if bad_re.search(s):
+        return True
+    # أمثلة أخطاء ظهرت: في كولومبيا / غير محدد / في قطر.
+    if words[0] in ('في', 'من', 'ضد', 'أمام', 'امام', 'غير', 'منتخب', 'المنتخب'):
+        return True
+    return False
+
+
+def _v32_clean_goal_player_name(name):
+    s = _v32_goal_clean_player_candidate(name)
+    if _v32_goal_is_bad_player_name(s):
+        return ''
+    return s
+
+
+def _v32_add_goal_record(goals, seen, player, team='', minute='', raw='', team1='', team2=''):
+    player = _v32_goal_clean_player_candidate(player)
+    if _v32_goal_is_bad_player_name(player, team1, team2):
+        if raw:
+            globals().setdefault('V32_LAST_GOAL_PARSE_ALERTS', []).append(f"اسم مشكوك فيه لم يعتمد: {normalize_name(player)} | {normalize_name(raw)[:120]}")
+        return False
+    minute = str(minute or '').replace("'", '').replace('’', '').strip()
+    if minute:
+        if not re.fullmatch(r'[1-9]\d{0,2}(?:\+\d{1,2})?', minute):
+            minute = ''
+        else:
+            try:
+                if int(minute.split('+',1)[0]) > 130:
+                    minute = ''
+            except Exception:
+                minute = ''
+    team = normalize_name(team or '')
+    if not team:
+        team = _v32_goal_squad_team_for_player(player, team1, team2)
+    key = (simple_key(player) if 'simple_key' in globals() else player.lower(), simple_key(team) if 'simple_key' in globals() else team.lower(), minute)
+    if key in seen:
+        return False
+    seen.add(key)
+    goals.append({'player': player, 'team': team or 'غير محدد', 'minute': minute, 'raw': normalize_name(raw or '')})
+    return True
+
+
+def _v32_goal_split_sentences(desc):
+    desc = _v32_clean_youtube_description(desc) if '_v32_clean_youtube_description' in globals() else normalize_name(desc)
+    # أزل الهاشتاقات والروابط وأرقام المشاهدات.
+    clean_lines = []
+    for raw in desc.splitlines():
+        line = normalize_name(raw)
+        if not line:
+            continue
+        if re.search(r'https?://|subscribe|اشترك|تابعونا|copyright|©|tickets|instagram|tiktok|facebook|twitter|x\.com|عدد المشاهدات|عدد المعجبين', line, re.I):
+            continue
+        if len(line) > 520:
+            # وصف beIN أحيانًا فقرة طويلة، نقبلها بعد تقطيعها.
+            pass
+        clean_lines.append(line)
+    text = ' '.join(clean_lines)
+    # قص بعد الهاشتاقات إن وجدت لأنها تسبب أسماء وهمية.
+    text = re.split(r'#[\w\u0600-\u06FF_]+', text)[0]
+    # قسّم على علامات الوقف وكذلك على فيما/بينما/في المقابل لأنها غالبًا تفصل أهداف الفريقين.
+    parts = re.split(r'(?:\.|؛|\n|\r|\s+فيما\s+|\s+بينما\s+|\s+في المقابل\s+|\s+وعادل\s+|\s+وتعادل\s+)', text)
+    out = []
+    for p in parts:
+        p = normalize_name(p).strip(' -–—:،')
+        if not p:
+            continue
+        if re.search(r'(سجل|سجّل|أحرز|احرز|أحرزه|افتتح|تعادل|تقدم|هدف|الدقيقة|الدقيقتين|الدقائق|بواسطة|عن طريق)', p):
+            out.append(p[:500])
+    return out
+
+
+def _v32_goal_add_pairs_from_chunk(goals, seen, chunk, team_hint='', raw='', team1='', team2=''):
+    chunk = normalize_name(chunk)
+    if not chunk:
+        return 0
+    # احذف بدايات الفريق والعبارات الزائدة.
+    chunk = re.sub(r'^(?:سجل|سجّل|أحرز|احرز|افتتح|تعادل|تقدم|لمنتخب|للمنتخب|منتخب|المنتخب|هدف|أهداف|اهداف)\s+', '', chunk).strip()
+    # أجزاء مثل: رامين رضائيان 32، ومحمد محبي 64
+    pieces = re.split(r'(?:،|,|؛|;|\s+و(?=[\u0600-\u06FFA-Za-z]))', chunk)
+    added = 0
+    for piece in pieces:
+        part = normalize_name(piece).strip(' -–—:،')
+        if not part:
+            continue
+        mins = _v32_goal_minutes_in_text(part)
+        if not mins:
+            continue
+        # الاسم هو النص قبل أول دقيقة/الدقيقة.
+        name = re.split(r'(?:\(|\s+في\s+الدقيقة|\s+الدقيقة|\s+دقيقة|\s+د\s*|\s+[1-9]\d{0,2}(?:\+\d{1,2})?\s*[\'’]?)', part, maxsplit=1)[0]
+        if not name:
+            # صيغة الدقيقة قبل الاسم: 12' ميسي
+            m = re.search(r"[1-9]\d{0,2}(?:\+\d{1,2})?\s*['’]\s*(.+)$", part)
+            name = m.group(1) if m else ''
+        for minute in mins:
+            if _v32_add_goal_record(goals, seen, name, team_hint, minute, raw or part, team1, team2):
+                added += 1
+    return added
+
+
+def _v32_parse_bein_sentence(sentence, team1='', team2='', goals=None, seen=None):
+    if goals is None:
+        goals = []
+    if seen is None:
+        seen = set()
+    raw = normalize_name(sentence)
+    added = 0
+    team_hint = _v32_goal_team_from_text(raw, team1, team2)
+
+    # 1) سجل لمنتخب/للمنتخب/منتخب X: فلان 32 وفلان 64
+    for m in re.finditer(r'(?:سجل|سجّل|أحرز|احرز)\s+(?:لمنتخب|للمنتخب|منتخب|المنتخب)\s+(.{2,45}?)(?:\s|،|:)\s+(.{2,170})', raw):
+        tm = _v32_goal_team_from_text(m.group(1), team1, team2) or team_hint
+        chunk = re.split(r'(?:وحصل|ورفع|ليحصل|بذلك|ضمن|في إطار|اليوم|فجر|مساء|صباح)', m.group(2))[0]
+        added += _v32_goal_add_pairs_from_chunk(goals, seen, chunk, tm, raw, team1, team2)
+
+    # 2) افتتح منتخب X التسجيل بواسطة فلان في الدقيقة 21
+    for m in re.finditer(r'(?:افتتح|تقدم)\s+(?:منتخب|المنتخب)?\s*(.{2,45}?)\s+(?:التسجيل|بالنتيجة)?\s*(?:بواسطة|عن طريق|بهدف\s+أحرزه|بهدف\s+احرزه)?\s*([\u0600-\u06FFA-Za-z][\u0600-\u06FFA-Za-z\s\.\-]{2,45}?)\s+في\s+الدقيقة\s+([1-9]\d{0,2}(?:\+\d{1,2})?)', raw):
+        tm = _v32_goal_team_from_text(m.group(1), team1, team2) or team_hint
+        if _v32_add_goal_record(goals, seen, m.group(2), tm, m.group(3), raw, team1, team2):
+            added += 1
+
+    # 3) وتعادل منتخب X في الدقيقة 78 بهدف أحرزه فلان
+    for m in re.finditer(r'(?:تعادل|عادل|أدرك\s+التعادل|ادرك\s+التعادل)\s+(?:منتخب|المنتخب)?\s*(.{2,45}?)\s+في\s+الدقيقة\s+([1-9]\d{0,2}(?:\+\d{1,2})?)\s+(?:بهدف\s+)?(?:أحرزه|احرزه|سجله|سجل(?:ه)?)\s+([\u0600-\u06FFA-Za-z][\u0600-\u06FFA-Za-z\s\.\-]{2,45})', raw):
+        tm = _v32_goal_team_from_text(m.group(1), team1, team2) or team_hint
+        if _v32_add_goal_record(goals, seen, m.group(3), tm, m.group(2), raw, team1, team2):
+            added += 1
+
+    # 4) فلان هدف منتخب كوت ديفوار الوحيد في الدقيقة 30
+    for m in re.finditer(r'([\u0600-\u06FFA-Za-z][\u0600-\u06FFA-Za-z\s\.\-]{2,45}?)\s+(?:هدف|أهداف|اهداف|هدفي)\s+(?:منتخب|المنتخب)?\s*(.{2,45}?)\s+(?:الوحيد|الأول|الثاني|الثالث|الرابع)?\s*في\s+الدقيقة\s+([1-9]\d{0,2}(?:\+\d{1,2})?)', raw):
+        tm = _v32_goal_team_from_text(m.group(2), team1, team2) or team_hint
+        if _v32_add_goal_record(goals, seen, m.group(1), tm, m.group(3), raw, team1, team2):
+            added += 1
+
+    # 5) سجل دينيس أونداف (68 و90+4) هدفي المنتخب الألماني
+    for m in re.finditer(r'(?:سجل|سجّل|أحرز|احرز)\s+([\u0600-\u06FFA-Za-z][\u0600-\u06FFA-Za-z\s\.\-]{2,45}?)\s*(?:\(([^\)]{1,35})\)|في\s+الدقيقتين\s+([^\.،]{1,40})|في\s+الدقائق\s+([^\.،]{1,50}))\s+(?:هدفي|أهداف|اهداف|ثلاثية|هدف)?\s*(?:منتخب|المنتخب)?\s*([^\.،]{0,55})', raw):
+        name = m.group(1)
+        min_txt = m.group(2) or m.group(3) or m.group(4) or ''
+        tm = _v32_goal_team_from_text(m.group(5) or raw, team1, team2) or team_hint
+        for minute in _v32_goal_minutes_in_text(min_txt):
+            if _v32_add_goal_record(goals, seen, name, tm, minute, raw, team1, team2):
+                added += 1
+
+    # 6) سجل فلان في الدقيقة 32 / أحرز فلان في الدقيقة 32
+    for m in re.finditer(r'(?:سجل|سجّل|أحرز|احرز)\s+([\u0600-\u06FFA-Za-z][\u0600-\u06FFA-Za-z\s\.\-]{2,45}?)\s+(?:هدف\s+)?(?:في\s+)?(?:الدقيقة|دقيقة)\s+([1-9]\d{0,2}(?:\+\d{1,2})?)', raw):
+        if _v32_add_goal_record(goals, seen, m.group(1), team_hint, m.group(2), raw, team1, team2):
+            added += 1
+
+    # 7) بواسطة فلان في الدقيقة 21 / عن طريق لاعبه فلان في الدقيقة 21
+    for m in re.finditer(r'(?:بواسطة|عن\s+طريق(?:\s+لاعبه)?|أحرزه|احرزه|سجله)\s+([\u0600-\u06FFA-Za-z][\u0600-\u06FFA-Za-z\s\.\-]{2,45}?)\s+(?:في\s+)?(?:الدقيقة|دقيقة)\s+([1-9]\d{0,2}(?:\+\d{1,2})?)', raw):
+        if _v32_add_goal_record(goals, seen, m.group(1), team_hint, m.group(2), raw, team1, team2):
+            added += 1
+
+    # 8) اسم ثم دقيقة مباشرة في نهاية جزء؛ تستخدم للفقرات المختصرة فقط.
+    if added == 0 and re.search(r'(سجل|أحرز|احرز|هدف|الدقيقة|الدقيقتين)', raw):
+        added += _v32_goal_add_pairs_from_chunk(goals, seen, raw, team_hint, raw, team1, team2)
+
+    return added
+
+
+def _v32_parse_youtube_goal_scorers(desc, team1='', team2=''):
+    """قارئ عربي ذكي لأوصاف beIN + دعم الأنماط الإنجليزية البسيطة."""
+    globals()['V32_LAST_GOAL_PARSE_ALERTS'] = []
+    desc = _v32_clean_youtube_description(desc)
+    if not desc:
+        return []
+    goals = []
+    seen = set()
+    sentences = _v32_goal_split_sentences(desc)
+    for sent in sentences:
+        _v32_parse_bein_sentence(sent, team1, team2, goals, seen)
+
+    # fallback للأنماط المرتبة القديمة: 12' Messi / Messi 12'
+    if not goals:
+        lines = []
+        for raw in desc.splitlines():
+            line = normalize_name(raw).strip(' -–—•|')
+            if not line or len(line) > 240:
+                continue
+            if re.search(r'https?://|subscribe|اشترك|تابعونا|copyright|©|tickets|instagram|tiktok|facebook|twitter|x\.com', line, re.I):
+                continue
+            if _v32_goal_minutes_in_text(line) or re.search(r'goal|scorer|goals|هدف|أهداف|اهداف|سجل|سجّل', line, re.I):
+                lines.append(line)
+        split_pat = re.compile(r'\s*(?:,|،|;|/|\|| and | و )\s*', re.I)
+        for line in lines:
+            team_hint = _v32_goal_team_from_text(line, team1, team2)
+            parts = [p.strip() for p in split_pat.split(line) if p.strip()] or [line]
+            for part in parts:
+                for m in re.finditer(r"(?<!\d)([1-9]\d{0,2}(?:\+\d{1,2})?)\s*['’]\s*([A-Za-zÀ-ÖØ-öø-ÿأ-يء-ي][A-Za-zÀ-ÖØ-öø-ÿأ-يء-ي'’\.\-\s]{1,45})", part):
+                    _v32_add_goal_record(goals, seen, m.group(2), team_hint, m.group(1), line, team1, team2)
+                for m in re.finditer(r"([A-Za-zÀ-ÖØ-öø-ÿأ-يء-ي][A-Za-zÀ-ÖØ-öø-ÿأ-يء-ي'’\.\-\s]{1,45}?)[\s\(\-–—:]+([1-9]\d{0,2}(?:\+\d{1,2})?)\s*['’]", part):
+                    _v32_add_goal_record(goals, seen, m.group(1), team_hint, m.group(2), line, team1, team2)
+
+    # آخر فلترة: لا ندخل أي غير محدد إن كان الاسم مشكوك فيه.
+    clean = []
+    final_seen = set()
+    for g in goals:
+        p = _v32_clean_goal_player_name((g or {}).get('player'))
+        if not p:
+            continue
+        tm = (g or {}).get('team') or _v32_goal_squad_team_for_player(p, team1, team2) or 'غير محدد'
+        minute = (g or {}).get('minute') or ''
+        key = (simple_key(p), simple_key(tm), minute)
+        if key in final_seen:
+            continue
+        final_seen.add(key)
+        gg = dict(g)
+        gg['player'] = p
+        gg['team'] = tm
+        clean.append(gg)
+    return clean[:80]
+
+
+def _v32_expected_match_goals_from_fixture(team1, team2):
+    try:
+        fx = _find_fixture_for_pair(team1, team2) if '_find_fixture_for_pair' in globals() else None
+        if not isinstance(fx, dict):
+            return 0
+        vals = []
+        for k1, k2 in [('score1','score2'), ('home_score','away_score'), ('team1_score','team2_score'), ('homeScore','awayScore')]:
+            if k1 in fx or k2 in fx:
+                try:
+                    vals = [int(str(fx.get(k1, 0)).strip()), int(str(fx.get(k2, 0)).strip())]
+                    break
+                except Exception:
+                    pass
+        return sum(vals) if vals else 0
+    except Exception:
+        return 0
+
+
+def _v32_goal_scorers_update_from_highlights(force=False):
+    data = _v32_load_goal_scorers_data()
+    if not isinstance(data, dict):
+        data = {"updated_at": "", "matches": {}, "alerts": []}
+    data.setdefault('matches', {})
+    data.setdefault('alerts', [])
+    # تأكد من وجود قوائم اللاعبين الأساسية قبل السحب.
+    try:
+        _v32_goal_load_squads()
+    except Exception:
+        pass
+    highlights = _load_highlights() if '_load_highlights' in globals() else {}
+    checked = added_goals = updated_matches = skipped = failed = 0
+    alerts = []
+    last_fetch_started = False
+
+    for key, item in (highlights or {}).items():
+        if not isinstance(item, dict):
+            continue
+        url = item.get('url') or item.get('summary_url') or item.get('summary_url_manual') or ''
+        team1 = item.get('team1') or ''
+        team2 = item.get('team2') or ''
+        if not url:
+            continue
+        if not _v32_is_youtube_url(url):
+            skipped += 1
+            continue
+        old = (data.get('matches') or {}).get(key) or {}
+        if not force and old.get('url') == url and old.get('goals'):
+            skipped += 1
+            continue
+
+        if last_fetch_started:
+            try:
+                _time.sleep(int(YOUTUBE_GOAL_FETCH_DELAY_SECONDS or 20))
+            except Exception:
+                pass
+        last_fetch_started = True
+        checked += 1
+
+        try:
+            desc = _v32_fetch_youtube_description(url)
+            goals = _v32_parse_youtube_goal_scorers(desc, team1, team2)
+            parse_alerts = list(globals().get('V32_LAST_GOAL_PARSE_ALERTS') or [])
+            if not goals:
+                failed += 1
+                msg = f"{team1} × {team2}: لم يتم العثور على مسجلي أهداف واضحين في وصف اليوتيوب"
+                alerts.append(msg)
+                if parse_alerts:
+                    alerts.extend([f"{team1} × {team2}: {x}" for x in parse_alerts[:3]])
+                data['matches'][key] = {
+                    'team1': team1, 'team2': team2, 'url': url,
+                    'updated_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else '',
+                    'goals': [], 'note': 'no_goals_found', 'last_error': 'no_goals_found'
+                }
+                continue
+
+            enriched = []
+            for g in goals:
+                gg = dict(g)
+                tm = gg.get('team') or _v32_goal_squad_team_for_player(gg.get('player'), team1, team2) or ''
+                try:
+                    same1 = bool(tm and team1 and '_v31_team_same' in globals() and _v31_team_same(tm, team1))
+                    same2 = bool(tm and team2 and '_v31_team_same' in globals() and _v31_team_same(tm, team2))
+                except Exception:
+                    same1 = same2 = False
+                if same1:
+                    gg['team'] = team1; gg['against'] = team2
+                elif same2:
+                    gg['team'] = team2; gg['against'] = team1
+                else:
+                    gg['team'] = tm or 'غير محدد'; gg['against'] = f"{team1} × {team2}".strip()
+                    alerts.append(f"{team1} × {team2}: اللاعب يحتاج مراجعة للمنتخب - {gg.get('player')}")
+                enriched.append(gg)
+
+            expected_goals = _v32_expected_match_goals_from_fixture(team1, team2)
+            if expected_goals and len(enriched) < expected_goals:
+                alerts.append(f"{team1} × {team2}: قد تكون الأهداف ناقصة - المستخرج {len(enriched)} من {expected_goals}")
+            data['matches'][key] = {
+                'team1': team1, 'team2': team2, 'url': url,
+                'updated_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else '',
+                'goals': enriched,
+                'expected_goals': expected_goals,
+            }
+            added_goals += len(enriched)
+            updated_matches += 1
+        except Exception as e:
+            failed += 1
+            clean_err = _v32_youtube_safe_error(e) if '_v32_youtube_safe_error' in globals() else str(e)[:90]
+            alerts.append(f"{team1} × {team2}: {clean_err}")
+            data['matches'][key] = {
+                'team1': team1, 'team2': team2, 'url': url,
+                'updated_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else '',
+                'goals': [], 'note': 'read_failed', 'last_error': clean_err
+            }
+
+    data['updated_at'] = _now_riyadh_text() if '_now_riyadh_text' in globals() else datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+    data['alerts'] = alerts[:120]
+    _v32_save_goal_scorers_data(data)
+    return {
+        'checked': checked,
+        'updated_matches': updated_matches,
+        'added_goals': added_goals,
+        'skipped': skipped,
+        'failed': failed,
+        'alerts': alerts[:10],
+        'data': data,
+    }
+
+
+# أمر إداري اختياري لتجهيز ملف القوائم الأساسي بدون تعطيل البوت.
+_V32_SMART_GOALS_PREV_TEXT_STATE_ROUTER = text_state_router
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt_raw = (update.message.text or '').strip()
+    if txt_raw.startswith('/تحديث_قوائم_اللاعبين') or txt_raw.startswith('/قوائم_اللاعبين'):
+        if not is_admin_user(update):
+            await update.message.reply_text('هذا الأمر للمشرف فقط 🔒')
+            return
+        try:
+            data = await asyncio.to_thread(_v32_goal_load_squads)
+            count = len(((data or {}).get('players') or {}))
+            await update.message.reply_text(f'✅ تم تجهيز قوائم اللاعبين الأساسية\nعدد الأسماء/الأسماء البديلة: {count}\nالملف: {YOUTUBE_SQUADS_FILE}')
+        except Exception as e:
+            await update.message.reply_text(f'تعذر تجهيز قوائم اللاعبين ❌\n{str(e)[:160]}')
+        return
+    return await _V32_SMART_GOALS_PREV_TEXT_STATE_ROUTER(update, context)
+
+# ==================== END V32 SMART BEIN GOAL PARSER + SQUADS PATCH ====================
+
+
+# ==================== V32 BEIN PARSER HOTFIX ====================
+# تصحيح إضافي بعد الاختبار: منع التقاط "وسجل/في كولومبيا/غير محدد" كأسماء،
+# والاعتماد على طرفي المباراة لاستخراج الفريق من صياغات beIN.
+
+def _v32_goal_team_variants(team):
+    team = normalize_name(team or '')
+    if not team:
+        return []
+    forms = [team]
+    try:
+        forms += TEAM_SEARCH_EN.get(team, []) or []
+    except Exception:
+        pass
+    try:
+        for k, v in (TEAM_ALIASES.items() if 'TEAM_ALIASES' in globals() else []):
+            if v == team:
+                forms.append(k)
+    except Exception:
+        pass
+    try:
+        for adj, tm in _V32_TEAM_ADJECTIVES.items():
+            if tm == team:
+                forms.append(adj)
+    except Exception:
+        pass
+    # صيغ شائعة: المنتخب الألماني / منتخب كندا
+    more = []
+    for f in forms:
+        more.append(f"منتخب {f}")
+        more.append(f"المنتخب {f}")
+    forms += more
+    uniq = []
+    seen = set()
+    for f in forms:
+        f = normalize_name(f)
+        k = simple_key(f) if 'simple_key' in globals() else f.lower()
+        if f and k not in seen:
+            uniq.append(f); seen.add(k)
+    return sorted(uniq, key=len, reverse=True)
+
+
+def _v32_goal_clean_player_candidate(name):
+    s = normalize_name(name or '')
+    s = re.sub(r'https?://\S+|www\.\S+', ' ', s, flags=re.I)
+    s = re.sub(r'[#@]\S+', ' ', s)
+    s = re.sub(r'^[\s،,:;\-–—]*(?:و|ف|ثم|كما)?\s*', '', s).strip()
+    # أفعال ملتصقة بحرف الواو: وسجل / وأحرز / وافتتح
+    s = re.sub(r'^(?:و|ف)?(?:سجل|سجّل|أحرز|احرز|افتتح|تعادل|تقدم|أضاف|اضاف|قلص|ضاعف|اختتم)\s+', '', s).strip()
+    s = re.sub(r'^(?:بواسطة|عن\s+طريق(?:\s+لاعبه)?|لاعبه|لاعب|بهدف\s+أحرزه|بهدف\s+احرزه|أحرزه|احرزه|سجله)\s+', '', s).strip()
+    s = re.sub(r'[\[\](){}|•،,:;=+*_/\\]+', ' ', s)
+    s = re.sub(r"[0-9]+(?:\+[0-9]+)?\s*['’]?", ' ', s)
+    s = re.sub(r'\b\d+\s*[-:x×]\s*\d+\b', ' ', s)
+    s = re.sub(r'\s+(?:في|من|لمنتخب|للمنتخب|منتخب|المنتخب|هدف|هدفي|أهداف|اهداف|التسجيل|الدقيقة|دقيقة|والوحيد|الوحيد|الأول|الثاني|الثالث|الرابع)$', '', s).strip()
+    s = re.sub(r'\s{2,}', ' ', s).strip(" -–—'’.،")
+    return s
+
+
+def _v32_goal_is_bad_player_name(name, team1='', team2=''):
+    s = _v32_goal_clean_player_candidate(name)
+    if not s or len(s) < 2 or len(s) > 42:
+        return True
+    if re.search(r'(التسجيل|النتيجة|المباراة|المجموعة|الجولة|منافسات|الدقيقة|الدقيقتين|الدقائق|المنتخب|منتخب|غير محدد|في كولومبيا|في قطر|في |ضد |أمام |امام )', s):
+        return True
+    if 'canonical_team_name' in globals() and canonical_team_name(s):
+        return True
+    words = [w for w in re.split(r'\s+', s) if w]
+    if not words:
+        return True
+    if words[0] in ('في','من','ضد','أمام','امام','غير','منتخب','المنتخب','الدقيقة','هدف','هدفي','سجل','أحرز','احرز','وسجل','وأحرز'):
+        return True
+    bad_re = re.compile(r'(fifa|worldcup|youtube|subscribe|channel|watch|video|highlight|match|ملخص|البطولة|كأس العالم|مونديال|المجموعة|الجولة|منافسات|المباراة|الفيديو|المشاهدات|المعجبين)', re.I)
+    if bad_re.search(s):
+        return True
+    if re.fullmatch(r'[\W\d_]+', s):
+        return True
+    return False
+
+
+def _v32_goal_add_pairs_from_chunk(goals, seen, chunk, team_hint='', raw='', team1='', team2=''):
+    chunk = normalize_name(chunk)
+    if not chunk:
+        return 0
+    chunk = re.sub(r'^(?:و|ف|ثم)?\s*(?:سجل|سجّل|أحرز|احرز|افتتح|تعادل|تقدم|لمنتخب|للمنتخب|منتخب|المنتخب|هدف|أهداف|اهداف)\s+', '', chunk).strip()
+    pieces = re.split(r'(?:،|,|؛|;|\s+و(?=[\u0600-\u06FFA-Za-z]))', chunk)
+    added = 0
+    for piece in pieces:
+        part = normalize_name(piece).strip(' -–—:،')
+        if not part:
+            continue
+        mins = _v32_goal_minutes_in_text(part)
+        if not mins:
+            continue
+        # لا تجعل "الدقيقتين 68 و90+4" اسم لاعب.
+        name = re.split(r'(?:\(|\s+في\s+الدقيقة|\s+الدقيقة|\s+دقيقة|\s+د\s*|\s+[1-9]\d{0,2}(?:\+\d{1,2})?\s*[\'’]?)', part, maxsplit=1)[0]
+        name = _v32_goal_clean_player_candidate(name)
+        if not name:
+            m = re.search(r"[1-9]\d{0,2}(?:\+\d{1,2})?\s*['’]\s*(.+)$", part)
+            name = _v32_goal_clean_player_candidate(m.group(1) if m else '')
+        for minute in mins:
+            if _v32_add_goal_record(goals, seen, name, team_hint, minute, raw or part, team1, team2):
+                added += 1
+    return added
+
+
+def _v32_parse_youtube_goal_scorers(desc, team1='', team2=''):
+    """قارئ beIN العربي المحسن: يعتمد على طرفي المباراة + صيغ وصف beIN."""
+    globals()['V32_LAST_GOAL_PARSE_ALERTS'] = []
+    desc = _v32_clean_youtube_description(desc)
+    if not desc:
+        return []
+    text = normalize_name(desc)
+    text = re.split(r'#[\w\u0600-\u06FF_]+', text)[0]
+    text = re.sub(r'https?://\S+|www\.\S+', ' ', text, flags=re.I)
+    text = re.sub(r'\s+', ' ', text).strip()
+    goals = []
+    seen = set()
+
+    match_teams = [t for t in [team1, team2] if t]
+
+    # A) سجل/أحرز لمنتخب X فلان 32، وفلان 64
+    # نبحث عن اسم الفريق صراحة ثم نقرأ الجزء الذي بعده حتى فاصل منطقي أو الفريق الآخر.
+    stop_words = r'(?:فيما|بينما|في المقابل|وتعادل|وعادل|وسجل\s+لمنتخب|وسجّل\s+لمنتخب|وأحرز\s+لمنتخب|وحصل|ورفع|ليحصل|بذلك|ضمن|فجر|مساء|صباح|$)'
+    for tm in match_teams:
+        for var in _v32_goal_team_variants(tm):
+            v = re.escape(var)
+            pat = rf'(?:سجل|سجّل|أحرز|احرز)\s+(?:لمنتخب|للمنتخب|منتخب|المنتخب)?\s*{v}\s+(.+?)(?={stop_words})'
+            for m in re.finditer(pat, text):
+                _v32_goal_add_pairs_from_chunk(goals, seen, m.group(1), tm, m.group(0), team1, team2)
+
+    # B) افتتح/تقدم منتخب X التسجيل بواسطة/عن طريق فلان في الدقيقة N
+    for tm in match_teams:
+        for var in _v32_goal_team_variants(tm):
+            v = re.escape(var)
+            patterns = [
+                rf'(?:افتتح|تقدم)\s+(?:منتخب|المنتخب)?\s*{v}\s+(?:التسجيل|بالنتيجة)?\s*(?:بواسطة|عن\s+طريق(?:\s+لاعبه)?|بهدف\s+أحرزه|بهدف\s+احرزه)\s+(.+?)\s+في\s+الدقيقة\s+([1-9]\d{{0,2}}(?:\+\d{{1,2}})?)',
+                rf'(?:تعادل|عادل|أدرك\s+التعادل|ادرك\s+التعادل)\s+(?:منتخب|المنتخب)?\s*{v}\s+في\s+الدقيقة\s+([1-9]\d{{0,2}}(?:\+\d{{1,2}})?)\s+(?:بهدف\s+)?(?:أحرزه|احرزه|سجله|سجل(?:ه)?)\s+(.+?)(?=\.|،|$)',
+            ]
+            for pat in patterns:
+                for m in re.finditer(pat, text):
+                    if len(m.groups()) >= 2:
+                        if re.fullmatch(r'[1-9]\d{0,2}(?:\+\d{1,2})?', m.group(1)):
+                            minute, player = m.group(1), m.group(2)
+                        else:
+                            player, minute = m.group(1), m.group(2)
+                        _v32_add_goal_record(goals, seen, player, tm, minute, m.group(0), team1, team2)
+
+    # C) سجل فلان (68 و90+4) هدفي المنتخب الألماني / هدفين لمنتخب ألمانيا
+    for tm in match_teams:
+        for var in _v32_goal_team_variants(tm):
+            v = re.escape(var)
+            pat = rf'(?:سجل|سجّل|أحرز|احرز)\s+(.+?)\s*(?:\(([^\)]{{1,45}})\)|في\s+الدقيقتين\s+([^\.،]{{1,45}})|في\s+الدقائق\s+([^\.،]{{1,60}}))\s+(?:هدفي|أهداف|اهداف|ثلاثية|هدفين|هدف)?\s*(?:منتخب|المنتخب)?\s*{v}'
+            for m in re.finditer(pat, text):
+                player = m.group(1)
+                min_txt = m.group(2) or m.group(3) or m.group(4) or ''
+                for minute in _v32_goal_minutes_in_text(min_txt):
+                    _v32_add_goal_record(goals, seen, player, tm, minute, m.group(0), team1, team2)
+
+    # D) فلان هدف منتخب X الوحيد في الدقيقة N
+    for tm in match_teams:
+        for var in _v32_goal_team_variants(tm):
+            v = re.escape(var)
+            pat = rf'(.+?)\s+(?:هدف|أهداف|اهداف|هدفي)\s+(?:منتخب|المنتخب)?\s*{v}\s+(?:الوحيد|الأول|الثاني|الثالث|الرابع)?\s*في\s+الدقيقة\s+([1-9]\d{{0,2}}(?:\+\d{{1,2}})?)'
+            for m in re.finditer(pat, text):
+                # خذ آخر 4 كلمات قبل "هدف منتخب" لتجنب التقاط فقرة كاملة.
+                player = ' '.join(_v32_goal_clean_player_candidate(m.group(1)).split()[-4:])
+                _v32_add_goal_record(goals, seen, player, tm, m.group(2), m.group(0), team1, team2)
+
+    # E) عن طريق لاعبه فلان في الدقيقة N - الفريق من أقرب ذكر قبلها أو من القوائم.
+    for m in re.finditer(r'(?:بواسطة|عن\s+طريق(?:\s+لاعبه)?|أحرزه|احرزه|سجله)\s+([\u0600-\u06FFA-Za-z][\u0600-\u06FFA-Za-z\s\.\-]{2,45}?)\s+(?:في\s+)?(?:الدقيقة|دقيقة)\s+([1-9]\d{0,2}(?:\+\d{1,2})?)', text):
+        start = max(0, m.start() - 90)
+        ctx = text[start:m.end()+40]
+        tm = _v32_goal_team_from_text(ctx, team1, team2) or _v32_goal_squad_team_for_player(m.group(1), team1, team2)
+        _v32_add_goal_record(goals, seen, m.group(1), tm, m.group(2), ctx, team1, team2)
+
+    # F) fallback مرتب فقط: 12' Messi / Messi 12'. لا نقرأ الجمل الطويلة حتى لا نعيد أخطاء "في كولومبيا".
+    if not goals:
+        for line in re.split(r'[\n\r]+', desc):
+            line = normalize_name(line).strip(' -–—•|')
+            if not line or len(line) > 180:
+                continue
+            if re.search(r'https?://|subscribe|اشترك|تابعونا|copyright|©|tickets|instagram|tiktok|facebook|twitter|x\.com', line, re.I):
+                continue
+            team_hint = _v32_goal_team_from_text(line, team1, team2)
+            for m in re.finditer(r"(?<!\d)([1-9]\d{0,2}(?:\+\d{1,2})?)\s*['’]\s*([A-Za-zÀ-ÖØ-öø-ÿأ-يء-ي][A-Za-zÀ-ÖØ-öø-ÿأ-يء-ي'’\.\-\s]{1,38})", line):
+                _v32_add_goal_record(goals, seen, m.group(2), team_hint, m.group(1), line, team1, team2)
+            for m in re.finditer(r"([A-Za-zÀ-ÖØ-öø-ÿأ-يء-ي][A-Za-zÀ-ÖØ-öø-ÿأ-يء-ي'’\.\-\s]{1,38}?)[\s\(\-–—:]+([1-9]\d{0,2}(?:\+\d{1,2})?)\s*['’]", line):
+                _v32_add_goal_record(goals, seen, m.group(1), team_hint, m.group(2), line, team1, team2)
+
+    clean = []
+    final_seen = set()
+    for g in goals:
+        p = _v32_clean_goal_player_name((g or {}).get('player'))
+        if not p:
+            continue
+        tm = (g or {}).get('team') or _v32_goal_squad_team_for_player(p, team1, team2) or 'غير محدد'
+        minute = (g or {}).get('minute') or ''
+        key = (simple_key(p), simple_key(tm), minute)
+        if key in final_seen:
+            continue
+        final_seen.add(key)
+        gg = dict(g); gg['player'] = p; gg['team'] = tm
+        clean.append(gg)
+    return clean[:80]
+
+# ==================== END V32 BEIN PARSER HOTFIX ====================
+
+
+# ==================== V32 BEIN PARSER MINUTES/DEDUP HOTFIX ====================
+# دعم الأرقام العارية داخل جمل beIN مثل: رامين رضائيان 32، إيليا جوست 7 و54.
+# ومنع تكرار نفس اللاعب والدقيقة لو التقطه نمطان بفريقين مختلفين.
+
+def _v32_goal_minutes_in_text(text):
+    text = str(text or '')
+    mins = []
+    minute_pat = r'([1-9]\d{0,2}(?:\+\d{1,2})?)'
+    patterns = [
+        rf"{minute_pat}\s*['’]",
+        rf"(?:الدقيقة|دقيقة|د|minute|min)\s*[:\-]?\s*{minute_pat}",
+        rf"(?:الدقيقتين|الدقائق)\s*[:\-]?\s*{minute_pat}(?:\s*(?:و|،|,)\s*{minute_pat})*",
+        rf"\(\s*{minute_pat}(?:\s*(?:و|،|,)\s*{minute_pat})*\s*\)",
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, text, re.I):
+            for g in m.groups():
+                if not g:
+                    continue
+                try:
+                    base = int(str(g).split('+', 1)[0])
+                    if 1 <= base <= 130 and g not in mins:
+                        mins.append(g)
+                except Exception:
+                    pass
+    # داخل القطع القصيرة بعد اسم اللاعب، beIN يكتب الدقائق بدون علامة: "محمد محبي 64".
+    if not mins and len(text) <= 90 and not re.search(r'20\d{2}|\d{4,}|\d+\s*[-:x×]\s*\d+', text):
+        for g in re.findall(r'(?<!\d)([1-9]\d{0,2}(?:\+\d{1,2})?)(?!\d)', text):
+            try:
+                base = int(str(g).split('+', 1)[0])
+                if 1 <= base <= 130 and g not in mins:
+                    mins.append(g)
+            except Exception:
+                pass
+    return mins
+
+
+def _v32_add_goal_record(goals, seen, player, team='', minute='', raw='', team1='', team2=''):
+    player = _v32_goal_clean_player_candidate(player)
+    if _v32_goal_is_bad_player_name(player, team1, team2):
+        if raw:
+            globals().setdefault('V32_LAST_GOAL_PARSE_ALERTS', []).append(f"اسم مشكوك فيه لم يعتمد: {normalize_name(player)} | {normalize_name(raw)[:120]}")
+        return False
+    minute = str(minute or '').replace("'", '').replace('’', '').strip()
+    if minute:
+        if not re.fullmatch(r'[1-9]\d{0,2}(?:\+\d{1,2})?', minute):
+            minute = ''
+        else:
+            try:
+                if int(minute.split('+',1)[0]) > 130:
+                    minute = ''
+            except Exception:
+                minute = ''
+    team = normalize_name(team or '')
+    if not team:
+        team = _v32_goal_squad_team_for_player(player, team1, team2)
+    pkey = simple_key(player) if 'simple_key' in globals() else player.lower()
+    # إذا نفس اللاعب ونفس الدقيقة موجود، لا نضيفه مرة ثانية حتى لو اختلف الفريق بسبب سياق بعيد.
+    for ex in goals or []:
+        if (simple_key((ex or {}).get('player')) if 'simple_key' in globals() else str((ex or {}).get('player','')).lower()) == pkey and str((ex or {}).get('minute') or '') == minute:
+            return False
+    key = (pkey, simple_key(team) if 'simple_key' in globals() else team.lower(), minute)
+    if key in seen:
+        return False
+    seen.add(key)
+    goals.append({'player': player, 'team': team or 'غير محدد', 'minute': minute, 'raw': normalize_name(raw or '')})
+    return True
+
+# ==================== END V32 BEIN PARSER MINUTES/DEDUP HOTFIX ====================
+
+
+# ==================== V32 BEIN PARSER COTE DIVOIRE / LAST PLAYER HOTFIX ====================
+_V32_PREV_GOAL_TEAM_VARIANTS = _v32_goal_team_variants
+
+def _v32_goal_team_variants(team):
+    forms = list(_V32_PREV_GOAL_TEAM_VARIANTS(team) or [])
+    can = normalize_name(team or '')
+    extra_map = {
+        'ساحل العاج': ['كوت ديفوار', 'منتخب كوت ديفوار', 'المنتخب كوت ديفوار', 'الإيفواري', 'الايفواري'],
+        'الرأس الأخضر': ['كاب فيردي', 'كاب فيردى', 'منتخب كاب فيردي', 'الرأس الاخضر'],
+        'أوروجواي': ['أوروغواي', 'الاوروغواي', 'منتخب أوروغواي'],
+        'الكونغو الديمقراطية': ['الكونغو الديمقراطية', 'الكونغو الديموقراطية', 'الكونغو'],
+    }
+    forms += extra_map.get(can, [])
+    uniq=[]; seen=set()
+    for f in forms:
+        f=normalize_name(f)
+        k=f.lower()
+        if f and k not in seen:
+            uniq.append(f); seen.add(k)
+    return sorted(uniq, key=len, reverse=True)
+
+_V32_PREV_PARSE_YT_GOALS = _v32_parse_youtube_goal_scorers
+
+def _v32_parse_youtube_goal_scorers(desc, team1='', team2=''):
+    goals = list(_V32_PREV_PARSE_YT_GOALS(desc, team1, team2) or [])
+    # احذف أي اسم واضح أنه بقايا سياق، مثل: "المقابل دون فرانك كيسييه".
+    filtered=[]; seen=set()
+    for g in goals:
+        p=normalize_name((g or {}).get('player') or '')
+        if re.search(r'(المقابل|هدفي المنتخب|هدف منتخب|التسجيل بواسطة|الدقيقة)', p):
+            continue
+        k=(simple_key(p), simple_key((g or {}).get('team') or ''), str((g or {}).get('minute') or ''))
+        if k in seen:
+            continue
+        seen.add(k); filtered.append(g)
+    goals=filtered
+    text = _v32_clean_youtube_description(desc)
+    text = re.split(r'#[\w\u0600-\u06FF_]+', text)[0]
+    text = re.sub(r'\s+', ' ', normalize_name(text)).strip()
+    local_seen={(simple_key((g or {}).get('player')), simple_key((g or {}).get('team') or ''), str((g or {}).get('minute') or '')) for g in goals}
+    # صيغة: "في المقابل دون فرانك كيسييه هدف منتخب كوت ديفوار الوحيد في الدقيقة 30"
+    for tm in [x for x in [team1, team2] if x]:
+        for var in _v32_goal_team_variants(tm):
+            v = re.escape(var)
+            pat = rf'(.{{2,140}}?)\s+(?:هدف|أهداف|اهداف|هدفي)\s+(?:منتخب|المنتخب)?\s*{v}\s+(?:الوحيد|الأول|الثاني|الثالث|الرابع)?\s*في\s+الدقيقة\s+([1-9]\d{{0,2}}(?:\+\d{{1,2}})?)'
+            for m in re.finditer(pat, text):
+                pre = normalize_name(m.group(1))
+                pre = re.split(r'(?:في\s+المقابل|بينما|فيما|،|\.)', pre)[-1]
+                pre = _v32_goal_clean_player_candidate(pre)
+                # خذ آخر 4 كلمات فقط، غالبًا هي اسم اللاعب.
+                player = ' '.join(pre.split()[-4:])
+                if not player:
+                    continue
+                tmp=[]; dummy_seen=set(local_seen)
+                if _v32_add_goal_record(tmp, dummy_seen, player, tm, m.group(2), m.group(0), team1, team2):
+                    gg=tmp[0]
+                    k=(simple_key(gg.get('player')), simple_key(gg.get('team') or ''), str(gg.get('minute') or ''))
+                    if k not in local_seen:
+                        local_seen.add(k); goals.append(gg)
+    return goals[:80]
+
+# ==================== END V32 BEIN PARSER COTE DIVOIRE / LAST PLAYER HOTFIX ====================
 
 if __name__ == "__main__":
     main()
