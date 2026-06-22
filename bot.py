@@ -46938,5 +46938,237 @@ def _v40_counted_matches_and_goals(force=False):
 
 # ==================== END V40 FINAL TEST FIXES — FAHAD ====================
 
+
+
+# ==================== V41 SCORERS ONLY FROM WORKING FILE — FAHAD ====================
+# المطلوب: سحب كود الهدافين فقط من الملف الشغال، بدون تغيير باقي التعديلات.
+# المصدر الأساسي/الاحتياطي كما كان في الملف الشغال: ESPN statistics/byathlete ثم صفحة ESPN stats.
+
+def _v29_scoring_stats_urls():
+    return [
+        "https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&season=2026&limit=50&sort=goals:desc",
+        "https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&limit=50&sort=goals:desc",
+        "https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics?region=us&lang=en&contentorigin=espn&season=2026",
+        "https://www.espn.com/soccer/stats/_/league/FIFA.WORLD/season/2026",
+        "https://www.espn.com/soccer/stats/_/league/FIFA.WORLD",
+    ]
+
+
+def _v29_pick_stat_value(obj, names=("goals", "goal", "G")):
+    if not isinstance(obj, dict):
+        return None
+    for k, v in obj.items():
+        lk = str(k).lower()
+        if any(str(n).lower() == lk or str(n).lower() in lk for n in names):
+            if isinstance(v, (int, float, str)) and str(v).strip() != "":
+                try:
+                    return int(float(str(v).strip()))
+                except Exception:
+                    pass
+            if isinstance(v, dict):
+                for kk in ["value", "displayValue", "display", "stat"]:
+                    if kk in v:
+                        try:
+                            return int(float(str(v[kk]).strip()))
+                        except Exception:
+                            pass
+    return None
+
+
+def _v29_extract_top_scorers_from_json(data):
+    items = []
+    for node in _v28_walk_json(data) if '_v28_walk_json' in globals() else []:
+        if not isinstance(node, dict):
+            continue
+        # احصل على اسم اللاعب
+        name = ""
+        for k in ["athlete", "player", "participant"]:
+            v = node.get(k)
+            if isinstance(v, dict):
+                name = v.get("displayName") or v.get("shortName") or v.get("name") or ""
+                if name:
+                    break
+        if not name:
+            name = node.get("displayName") or node.get("name") or ""
+        if not name or len(str(name)) > 60:
+            continue
+
+        # الفريق
+        team = ""
+        for k in ["team", "club", "competitor"]:
+            v = node.get(k)
+            if isinstance(v, dict):
+                team = v.get("displayName") or v.get("shortDisplayName") or v.get("name") or ""
+                if team:
+                    break
+        team = canonical_team_name(team) or normalize_name(team)
+
+        # إحصائيات
+        goals = _v29_pick_stat_value(node, ("goals", "goal", "G"))
+        played = _v29_pick_stat_value(node, ("appearances", "gamesPlayed", "games", "P"))
+
+        # بعض API يحط statistics كقائمة
+        if goals is None:
+            stats = node.get("statistics") or node.get("stats") or []
+            if isinstance(stats, list):
+                for st in stats:
+                    if not isinstance(st, dict):
+                        continue
+                    nm = str(st.get("name") or st.get("displayName") or st.get("abbreviation") or "").lower()
+                    if "goal" in nm or nm == "g":
+                        try:
+                            goals = int(float(str(st.get("value") or st.get("displayValue") or 0)))
+                        except Exception:
+                            pass
+                    if nm in ["p", "gp"] or "appearance" in nm or "games" in nm:
+                        try:
+                            played = int(float(str(st.get("value") or st.get("displayValue") or 0)))
+                        except Exception:
+                            pass
+
+        if goals is None or goals <= 0:
+            continue
+
+        item = {
+            "name": normalize_name(name),
+            "team": team or "-",
+            "played": played if played is not None else "",
+            "goals": int(goals),
+        }
+        key = (item["name"].lower(), item["team"].lower())
+        if key not in [(x["name"].lower(), x["team"].lower()) for x in items]:
+            items.append(item)
+
+    items.sort(key=lambda x: (-x.get("goals", 0), str(x.get("name", ""))))
+    return items[:25]
+
+
+def _v29_extract_top_scorers_from_html(html):
+    items = []
+    try:
+        # نمط قريب من جدول ESPN الظاهر: name/team/P/G داخل JSON أو HTML
+        # نبحث في __NEXT_DATA__ أولًا
+        m = re.search(r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, flags=re.S)
+        if m:
+            data = json.loads(m.group(1))
+            items = _v29_extract_top_scorers_from_json(data)
+            if items:
+                return items
+    except Exception:
+        pass
+
+    text = re.sub(r"<[^>]+>", " ", html or "")
+    text = re.sub(r"\s+", " ", text)
+    # fallback ضعيف لكن مفيد لو الصفحة HTML عادية
+    # يحاول التقاط Name Team P G عندما تكون البيانات متتابعة
+    for tm_ar, variants in (TEAM_SEARCH_EN.items() if 'TEAM_SEARCH_EN' in globals() else []):
+        for en in variants:
+            if not en or len(en) < 3:
+                continue
+            # Player Name Team 2 3
+            pat = r"([A-Z][A-Za-zÀ-ÖØ-öø-ÿ'\-. ]{2,55})\s+" + re.escape(en) + r"\s+(\d{1,2})\s+(\d{1,2})"
+            for mm in re.finditer(pat, text):
+                name = normalize_name(mm.group(1))
+                played = int(mm.group(2))
+                goals = int(mm.group(3))
+                if goals > 0:
+                    items.append({"name": name, "team": tm_ar, "played": played, "goals": goals})
+    unique = []
+    seen = set()
+    for it in items:
+        k = (it["name"].lower(), it["team"])
+        if k not in seen:
+            seen.add(k)
+            unique.append(it)
+    unique.sort(key=lambda x: (-x.get("goals", 0), str(x.get("name", ""))))
+    return unique[:25]
+
+
+def fetch_espn_top_scorers(force_refresh=True):
+    # نسخة الملف الشغال — مع توقيع يقبل force_refresh حتى لا تنكسر الاستدعاءات الجديدة.
+    global _V39_TOP_SCORERS_LAST_ERROR, _V38_TOP_SCORERS_LAST_ERROR, _V38F_ESPN_SCORERS_LAST_ERROR
+    try:
+        _V39_TOP_SCORERS_LAST_ERROR = ""
+        _V38_TOP_SCORERS_LAST_ERROR = ""
+        _V38F_ESPN_SCORERS_LAST_ERROR = ""
+    except Exception:
+        pass
+    if not requests:
+        return []
+    last_error = ""
+    for url in _v29_scoring_stats_urls():
+        try:
+            r = _requests_get(url, timeout=18)
+            if int(getattr(r, "status_code", 200) or 200) >= 400:
+                last_error = f"HTTP {getattr(r, 'status_code', '')}"
+                continue
+            ctype = (getattr(r, "headers", {}) or {}).get("content-type", "")
+            if "json" in ctype or url.endswith("byathlete?"):
+                try:
+                    data = r.json()
+                    items = _v29_extract_top_scorers_from_json(data)
+                    if items:
+                        items.sort(key=lambda x: (-int(x.get("goals") or 0), str(x.get("name") or "")))
+                        return items
+                except Exception as e:
+                    last_error = str(e)[:120]
+            html = r.text
+            items = _v29_extract_top_scorers_from_html(html)
+            if items:
+                items.sort(key=lambda x: (-int(x.get("goals") or 0), str(x.get("name") or "")))
+                return items
+        except Exception as e:
+            last_error = str(e)[:120]
+            continue
+    try:
+        msg = last_error or "ESPN لم يرجع قائمة هدافين صالحة الآن."
+        _V39_TOP_SCORERS_LAST_ERROR = msg
+        _V38_TOP_SCORERS_LAST_ERROR = msg
+        _V38F_ESPN_SCORERS_LAST_ERROR = msg
+    except Exception:
+        pass
+    return []
+
+
+async def _v41_send_working_top_scorers(message):
+    wait = await message.reply_text("⏳ أسحب هدافي البطولة من ESPN...")
+    try:
+        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=45)
+        if not items:
+            err = globals().get('_V39_TOP_SCORERS_LAST_ERROR') or 'لم يرجع ESPN قائمة هدافين صالحة الآن.'
+            await wait.edit_text(f"⚠️ تعذر سحب هدافين البطولة من ESPN حاليًا.\n{err}")
+            return
+        # ترتيب تسلسلي في الصورة يتم عبر enumerate داخل render_top_scorers_v29.
+        items = sorted(items, key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
+        try:
+            path = _v39_render_unique_top_scorers(items)
+        except Exception:
+            path = render_top_scorers_v29(items)
+        await send_photo_path(message, path, "هدافو البطولة ✅\nالمصدر: ESPN")
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await wait.edit_text(f"تعذر جلب هدافي البطولة ❌\n{str(e)[:300]}")
+
+
+async def _v39_send_top_scorers(message):
+    await _v41_send_working_top_scorers(message)
+
+
+async def _v38f_send_espn_top_scorers(message):
+    await _v41_send_working_top_scorers(message)
+
+
+async def _v38_send_fresh_espn_top_scorers(message):
+    await _v41_send_working_top_scorers(message)
+
+
+async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _v41_send_working_top_scorers(update.message)
+
+# ==================== END V41 SCORERS ONLY FROM WORKING FILE ====================
+
 if __name__ == "__main__":
     main()
