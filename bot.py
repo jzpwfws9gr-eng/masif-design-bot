@@ -47849,5 +47849,565 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V42 FINAL FIXES — FAHAD ====================
 
+
+# ==================== V43 FINAL AGREEMENT PATCH — FAHAD ====================
+# اعتماد فهد:
+# 1) لوحة البطولة لا تعتمد على قراءة عامة للجدول.
+#    العد = نتائج المباريات المنتهية + مباشر الآن فقط.
+#    المباريات القادمة لا تدخل أبدًا.
+# 2) مباشر الآن يستخدم الوقت كتصحيح مساعد: من بداية المباراة إلى 150 دقيقة = مباشر، بعدها مكتملة إذا عندها نتيجة.
+# 3) هدافين البطولة: كاش جديد + صورة باسم جديد، والكاش يظهر فقط كآخر نسخة محفوظة إذا فشل السحب المباشر.
+# 4) زر مغادرة البطولة: يوضح أولًا كيف يصبح المنتخب ثالث/رابع، ثم من يتعداه بالنقاط، ثم من يتعادل معه ويتفوق بالفارق.
+
+V43_BOARD_CACHE_FILE = 'tournament_board_cache_v43.json'
+try:
+    V42_BOARD_CACHE_FILE = V43_BOARD_CACHE_FILE
+except Exception:
+    pass
+try:
+    V42_SCORERS_CACHE_FILE = 'top_scorers_cache_v43.json'
+except Exception:
+    pass
+
+
+def _v43b_fixture_key(m):
+    try:
+        eid = str((m or {}).get('event_id') or '').replace('espn_', '').strip()
+        if eid:
+            return 'eid:' + eid
+    except Exception:
+        pass
+    try:
+        return f"{_normalize_date_arg((m or {}).get('date'))}|{simple_key((m or {}).get('team1',''))}|{simple_key((m or {}).get('team2',''))}"
+    except Exception:
+        return str(m)
+
+
+def _v43b_obj_is_complete(obj):
+    if not isinstance(obj, dict):
+        return False
+    blob = _v42_status_blob(obj) if '_v42_status_blob' in globals() else str(obj.get('status') or '').lower()
+    return any(x in blob for x in (
+        'status_final', 'final', 'post', 'full time', 'full-time', 'ft ', ' ft',
+        'finished', 'complete', 'completed', 'نهاية', 'انتهت', 'نهائي'
+    ))
+
+
+def _v43b_obj_is_live(obj):
+    if not isinstance(obj, dict):
+        return False
+    blob = _v42_status_blob(obj) if '_v42_status_blob' in globals() else str(obj.get('status') or '').lower()
+    return any(x in blob for x in (
+        'in_progress', 'in-progress', 'status_in_progress', 'live', 'halftime',
+        'half time', ' ht', 'ht ', 'مباشر', 'الشوط', 'استراحة'
+    ))
+
+
+def _v43b_fixture_status_by_time(m, now=None):
+    """scheduled / live / complete بالوقت فقط؛ يستخدم كتصحيح مساعد وليس مصدر نتيجة."""
+    now = now or (_v33_now_riyadh_dt() if '_v33_now_riyadh_dt' in globals() else _v42_riyadh_now())
+    dt = None
+    try:
+        dt = _v33_parse_fixture_datetime(m)
+    except Exception:
+        dt = None
+    if not dt:
+        try:
+            dt = _v42_parse_fixture_datetime_riyadh(m)
+        except Exception:
+            dt = None
+    if not dt:
+        return 'scheduled'
+    if now < dt:
+        return 'scheduled'
+    if dt <= now < dt + timedelta(minutes=150):
+        return 'live'
+    return 'complete'
+
+
+def _v43b_safe_fetch_result(m, d=None, force=False, allow_seed=True):
+    d = _normalize_date_arg(d or (m or {}).get('date'))
+    # استخدم نفس دالة نتائج المباريات الشغالة، مع كاشها.
+    try:
+        obj = _v41_fetch_result_for_fixture(m, d, force=force, allow_seed=allow_seed)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+    try:
+        obj = _v40_fetch_result_for_fixture(m, d, force=force, allow_seed=allow_seed)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+    try:
+        obj = _v33_fetch_result_for_fixture(m, d, force=force)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+    return None
+
+
+def _v43b_record_from_obj(m, obj, bucket):
+    t1 = canonical_team_name((m or {}).get('team1')) or (m or {}).get('team1') or (obj or {}).get('team1') or ''
+    t2 = canonical_team_name((m or {}).get('team2')) or (m or {}).get('team2') or (obj or {}).get('team2') or ''
+    s1 = _v42_int((obj or {}).get('score1')) if '_v42_int' in globals() else None
+    s2 = _v42_int((obj or {}).get('score2')) if '_v42_int' in globals() else None
+    return {
+        'key': _v43b_fixture_key(m), 'bucket': bucket,
+        'team1': t1, 'team2': t2,
+        'score1': int(s1 or 0), 'score2': int(s2 or 0),
+        'numeric': (s1 is not None and s2 is not None),
+    }
+
+
+def _v43b_board_records(force=False):
+    """مصدر اللوحة الجديد: نتائج المباريات + مباشر الآن فقط."""
+    records, seen = [], set()
+    now = _v33_now_riyadh_dt() if '_v33_now_riyadh_dt' in globals() else _v42_riyadh_now()
+    active = _normalize_date_arg(_v41_active_live_date()) if '_v41_active_live_date' in globals() else ''
+
+    # 1) نتائج المباريات: الأيام السابقة لليوم النشط فقط.
+    result_dates = []
+    try:
+        result_dates = [d for d, _dy in _v41_result_dates()]
+    except Exception:
+        try:
+            result_dates = [d for d, _dy in _v28_previous_result_dates()]
+        except Exception:
+            result_dates = []
+
+    for d in result_dates:
+        d = _normalize_date_arg(d)
+        try:
+            matches = _v43_results_fixtures_for_date(d, force=force, debug=[]) if '_v43_results_fixtures_for_date' in globals() else _v40_fixtures_for_date(d)
+        except Exception:
+            matches = []
+        for m in matches or []:
+            try:
+                key = _v43b_fixture_key(m)
+                if key in seen:
+                    continue
+                obj = _v43b_safe_fetch_result(m, d, force=force, allow_seed=True)
+                if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
+                    continue
+                # بما أنه من شاشة نتائج المباريات، نعده مكتملًا فقط.
+                seen.add(key)
+                records.append(_v43b_record_from_obj(m, obj, 'complete'))
+            except Exception:
+                continue
+
+    # 2) مباشر الآن: اليوم النشط فقط؛ القادم لا يدخل.
+    live_matches = []
+    if active:
+        try:
+            live_matches = _v40_live_rows(active) if '_v40_live_rows' in globals() else _v33_live_rows(active)
+        except Exception:
+            live_matches = []
+    for m in live_matches or []:
+        try:
+            key = _v43b_fixture_key(m)
+            if key in seen:
+                continue
+            time_bucket = _v43b_fixture_status_by_time(m, now)
+            if time_bucket == 'scheduled':
+                continue
+            obj = _v43b_safe_fetch_result(m, active or (m or {}).get('date'), force=force, allow_seed=False)
+            if not isinstance(obj, dict):
+                # المباراة بدأت لكن المصدر ما رجع نتيجة: نحسبها مباشر 0 أهداف مؤقتًا.
+                if time_bucket == 'live':
+                    seen.add(key)
+                    records.append({'key': key, 'bucket': 'live', 'team1': (m or {}).get('team1',''), 'team2': (m or {}).get('team2',''), 'score1': 0, 'score2': 0, 'numeric': False})
+                continue
+            # الحالة الرسمية تتقدم على الوقت.
+            if _v43b_obj_is_complete(obj):
+                bucket = 'complete'
+            elif _v43b_obj_is_live(obj):
+                bucket = 'live'
+            else:
+                bucket = time_bucket
+            if bucket not in ('complete', 'live'):
+                continue
+            # بعد 150 دقيقة: مكتملة مؤقتًا إذا النتيجة موجودة.
+            if bucket == 'complete' and not _patch6_numeric_score(obj):
+                continue
+            seen.add(key)
+            records.append(_v43b_record_from_obj(m, obj, bucket))
+        except Exception:
+            continue
+    return records
+
+
+def _v43b_board_metrics(force=False):
+    records = _v43b_board_records(force=force)
+    completed = sum(1 for r in records if r.get('bucket') == 'complete')
+    live = sum(1 for r in records if r.get('bucket') == 'live')
+    goals = sum(int(r.get('score1') or 0) + int(r.get('score2') or 0) for r in records if r.get('numeric'))
+    # أكبر نتيجة: أكبر مجموع أهداف ثم أكبر فارق.
+    biggest = None
+    for r in records:
+        if not r.get('numeric'):
+            continue
+        total = int(r.get('score1') or 0) + int(r.get('score2') or 0)
+        diff = abs(int(r.get('score1') or 0) - int(r.get('score2') or 0))
+        key = (total, diff)
+        if biggest is None or key > biggest[0]:
+            biggest = (key, r)
+    big_text = '-'
+    if biggest:
+        r = biggest[1]
+        big_text = f"{r.get('team1')} {r.get('score1')}-{r.get('score2')} {r.get('team2')}"
+    stats = {}
+    for r in records:
+        if not r.get('numeric'):
+            continue
+        a, b = r.get('team1'), r.get('team2')
+        s1, s2 = int(r.get('score1') or 0), int(r.get('score2') or 0)
+        for t in (a, b):
+            stats.setdefault(t, {'gf': 0, 'ga': 0, 'p': 0})
+        stats[a]['gf'] += s1; stats[a]['ga'] += s2; stats[a]['p'] += 1
+        stats[b]['gf'] += s2; stats[b]['ga'] += s1; stats[b]['p'] += 1
+    best_attack = ('-', 0)
+    best_defense = ('-', 0)
+    if stats:
+        best_attack = max(stats.items(), key=lambda kv: (kv[1]['gf'], -kv[1]['ga'], kv[0]))
+        best_attack = (best_attack[0], best_attack[1]['gf'])
+        best_defense = min(stats.items(), key=lambda kv: (kv[1]['ga'], -kv[1]['gf'], kv[0]))
+        best_defense = (best_defense[0], best_defense[1]['ga'])
+    return {
+        'completed': completed,
+        'live': live,
+        'counted': completed + live,
+        'goals': goals,
+        'biggest_text': big_text,
+        'best_attack': best_attack,
+        'best_defense': best_defense,
+        'records': records,
+    }
+
+
+def _v40_counted_matches_and_goals(force=False):
+    m = _v43b_board_metrics(force=force)
+    return {'completed': m['completed'], 'live': m['live'], 'counted': m['counted'], 'goals': m['goals']}
+
+
+def _v42_raw_board_text(force=False):
+    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
+    bm = _v43b_board_metrics(force=force)
+    try:
+        decisive_count = len(_v32_decisive_rows(False))
+    except Exception:
+        decisive_count = 0
+    last_q = (snap.get('qualified') or ['-'])[-1]
+    last_e = (snap.get('eliminated') or ['-'])[-1]
+    ba = bm.get('best_attack') or ('-', 0)
+    bd = bm.get('best_defense') or ('-', 0)
+    updated = _now_riyadh_text() if '_now_riyadh_text' in globals() else _v42_riyadh_now().strftime('%Y-%m-%d %H:%M') + ' بتوقيت مكة'
+    text = '\n'.join([
+        '🏆 لوحة البطولة',
+        f'آخر تحديث: {updated}',
+        '',
+        f'مباريات البطولة المحتسبة: {bm.get("counted",0)} / {snap.get("total_tournament_matches",104)}',
+        f'مباريات دور المجموعات المحتسبة: {bm.get("counted",0)} / {snap.get("total_group_matches",72)}',
+        f'تفصيلها: {bm.get("completed",0)} مكتملة + {bm.get("live",0)} مباشرة',
+        f'إجمالي الأهداف: {bm.get("goals",0)}',
+        f'أكبر نتيجة: {bm.get("biggest_text") or "-"}',
+        f'أقوى هجوم: {ba[0]} — {ba[1]} أهداف',
+        f'أقوى دفاع: {bd[0]} — استقبل {bd[1]}',
+        f'آخر متأهل رسميًا: {last_q}',
+        f'آخر مستبعد رسميًا: {last_e}',
+        f'مباريات الحسم القادمة: {decisive_count}',
+        '',
+        '✅ ترتيب المجموعات/سباق التأهل: تم',
+        '✅ الهدافين: تم',
+        '✅ أفضل الثوالث: تم',
+        '✅ لوحة البطولة: تم',
+    ])
+    _v42_json_save(V43_BOARD_CACHE_FILE, {'text': text, 'updated_at': updated, 'saved_ts': time.time(), 'source': 'live_now + results_only'})
+    return text
+
+
+def _v32_tournament_board_text(force=False):
+    if not force:
+        cache = _v42_json_load(V43_BOARD_CACHE_FILE, {})
+        if isinstance(cache, dict) and cache.get('text'):
+            return cache.get('text')
+    return _v42_raw_board_text(force=force)
+
+
+def _v39_board_text(force=False):
+    return _v32_tournament_board_text(force=force)
+
+
+# ---------- V43: Top scorers freshness ----------
+_V43_PREV_FETCH_TOP_SCORERS = globals().get('fetch_espn_top_scorers')
+
+def fetch_espn_top_scorers(force_refresh=True):
+    # السحب المباشر أولاً دائمًا. لا نرجع كاش إلا إذا force_refresh=False أو في دالة الإرسال بعد الفشل.
+    try:
+        if callable(_V43_PREV_FETCH_TOP_SCORERS):
+            items = _V43_PREV_FETCH_TOP_SCORERS(True)
+            clean = []
+            for it in items or []:
+                try:
+                    g = _v42_int(it.get('goals'))
+                    if g is None or g <= 0:
+                        continue
+                    clean.append({
+                        'name': normalize_name(it.get('name')),
+                        'team': canonical_team_name(it.get('team')) or normalize_name(it.get('team') or '-'),
+                        'played': _v42_int(it.get('played')) if _v42_int(it.get('played')) is not None else '',
+                        'goals': int(g),
+                    })
+                except Exception:
+                    continue
+            clean.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
+            if clean:
+                _v42_json_save(V42_SCORERS_CACHE_FILE, {'items': clean[:25], 'saved_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else str(_v42_riyadh_now()), 'saved_ts': time.time(), 'source': 'ESPN مباشر V43'})
+                return clean[:25]
+    except Exception as e:
+        try:
+            globals()['_V39_TOP_SCORERS_LAST_ERROR'] = str(e)[:300]
+        except Exception:
+            pass
+    if not force_refresh:
+        cache = _v42_json_load(V42_SCORERS_CACHE_FILE, {})
+        if isinstance(cache, dict) and isinstance(cache.get('items'), list):
+            return cache.get('items') or []
+    return []
+
+
+# ---------- V43: Exit scenarios detailed ----------
+def _v43b_result_sentence_from_sim(r):
+    try:
+        return _v35_result_sentence(r)
+    except Exception:
+        t1 = r.get('team1'); t2 = r.get('team2')
+        s1 = int(r.get('score1') or 0); s2 = int(r.get('score2') or 0)
+        if s1 > s2:
+            return f'فوز {t1} على {t2}'
+        if s2 > s1:
+            return f'فوز {t2} على {t1}'
+        return f'تعادل {t1} مع {t2}'
+
+
+def _v43b_required_lines_for_scenario(team, scenario, snap=None, max_lines=5):
+    try:
+        lines = _v38_scenario_required_lines(team, scenario, snap, max_lines=max_lines)
+        if lines:
+            return lines[:max_lines]
+    except Exception:
+        pass
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    code = _v33_team_group(team) if '_v33_team_group' in globals() else ''
+    base = list((((snap.get('groups') or {}).get(code, {}) or {}).get('results') or []))
+    try:
+        base_pairs = {_v38_pair_key(r) for r in base}
+    except Exception:
+        base_pairs = set()
+    out = []
+    for r in (scenario or {}).get('results') or []:
+        try:
+            if _v38_pair_key(r) in base_pairs:
+                continue
+        except Exception:
+            pass
+        out.append(_v43b_result_sentence_from_sim(r))
+        if len(out) >= max_lines:
+            break
+    return out
+
+
+def _v43b_fourth_case_info(team, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    try:
+        code = _v33_team_group(team)
+        for sc in _v38_all_group_scenarios(code, snap):
+            pos, row = _v38_position_row(team, sc.get('rows') or [])
+            if int(pos or 99) == 4:
+                return {'scenario': sc, 'row': row, 'pos': pos, 'pts': _v37_safe_int((row or {}).get('Pts')), 'played': _v37_safe_int((row or {}).get('P'))}
+    except Exception:
+        pass
+    return None
+
+
+def _v43b_points_need_phrase(team, x, target_pts, mode='exceed', snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    pts = int(x.get('pts') or 0)
+    target = int(target_pts or 0)
+    if mode == 'exceed':
+        need = max(0, target + 1 - pts)
+    else:
+        need = max(0, target - pts)
+    try:
+        rem = list(_v33_remaining_for_team(team, snap) or [])
+    except Exception:
+        rem = []
+    rem_txt = []
+    for m in rem[:2]:
+        try:
+            t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+            t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+            opp = t2 if t1 == team else t1
+            rem_txt.append(f'{team} × {opp}' if opp else _v33_format_remaining_match(m))
+        except Exception:
+            try:
+                rem_txt.append(_v33_format_remaining_match(m))
+            except Exception:
+                pass
+    match_hint = ' و '.join(rem_txt)
+    if need <= 0:
+        return f'يبقى {team} على رصيده الحالي مع نتائج المجموعة المناسبة'
+    if len(rem) >= 2:
+        if need >= 6:
+            return f'فوز {team} في مباراتيه المتبقيتين' + (f': {match_hint}' if match_hint else '')
+        if need == 4:
+            return f'فوز مباراة + تعادل مباراة لـ{team}' + (f' من: {match_hint}' if match_hint else '')
+        if need == 3:
+            return f'فوز {team} في مباراة من مبارياته المتبقية' + (f': {match_hint}' if match_hint else '')
+        if need == 2:
+            return f'تعادلان أو فوز واحد لـ{team}' + (f' من: {match_hint}' if match_hint else '')
+        return f'تعادل واحد على الأقل لـ{team}' + (f' من: {match_hint}' if match_hint else '')
+    # مباراة واحدة أو لا توجد.
+    match = x.get('match') or (match_hint if match_hint else '')
+    if need >= 3:
+        return _v42_match_win_phrase(team, match) if '_v42_match_win_phrase' in globals() else f'فوز {team}'
+    if need == 1:
+        return f'تعادل {team}' + (f' في {match}' if match else '')
+    return f'نتيجة إيجابية لـ{team}' + (f' في {match}' if match else '')
+
+
+def _v43b_exit_candidate_blocks(team, target_pts, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    danger, mixed, compare, safe = _v38e_third_categories(team, int(target_pts), snap) if '_v38e_third_categories' in globals() else ([], [], [], [])
+    over = []
+    equal = []
+    for x in list(danger) + list(mixed):
+        if int(x.get('current_max') or x.get('max_third') or 0) > int(target_pts):
+            over.append(x)
+    for x in list(mixed) + list(compare):
+        if x.get('can_equal') or int(x.get('current_max') or 0) >= int(target_pts):
+            equal.append(x)
+    # إزالة التكرار بين القوائم حسب المنتخب/المجموعة.
+    def unique(arr):
+        out, seen = [], set()
+        for x in arr:
+            k = (x.get('group'), x.get('team'))
+            if k in seen or x.get('team') == team:
+                continue
+            seen.add(k); out.append(x)
+        return out
+    over = unique(over)
+    equal = unique(equal)
+    lines = []
+    total_used = 0
+    if over:
+        lines.append(f'🔥 منتخبات قد تتجاوز {team} بالنقاط:')
+        for idx, x in enumerate(over[:8], start=1):
+            t = x.get('team') or '-'
+            g = _v33_group_label(x.get('group')) if '_v33_group_label' in globals() else x.get('group')
+            max_pts = int(x.get('current_max') or x.get('max_third') or x.get('pts') or 0)
+            played = int(x.get('played') or 0)
+            phrase = _v43b_points_need_phrase(t, x, target_pts, 'exceed', snap)
+            lines.extend([
+                f'{idx}. {g}',
+                f'النتيجة المطلوبة: {phrase}',
+                f'➡️ {t} قد يصبح ثالثًا بـ{max_pts} نقاط | لعب: 3/3',
+                f'➡️ يتقدم على {team} بالنقاط',
+                ''
+            ])
+            total_used += 1
+            if total_used >= 8:
+                break
+    if total_used < 8 and equal:
+        lines.append(f'⚖️ منتخبات قد تتعادل مع {team} بالنقاط وتتفوق بالفارق:')
+        start = 1
+        for x in equal[:max(0, 8-total_used)]:
+            t = x.get('team') or '-'
+            g = _v33_group_label(x.get('group')) if '_v33_group_label' in globals() else x.get('group')
+            phrase = _v43b_points_need_phrase(t, x, target_pts, 'equal', snap)
+            lines.extend([
+                f'{start}. {g}',
+                f'النتيجة المطلوبة: {phrase}',
+                f'➡️ {t} يصل إلى {int(target_pts)} نقاط | لعب: 3/3',
+                f'➡️ يحتاج فارق أهداف أو أهداف مسجلة أفضل من {team}',
+                ''
+            ])
+            start += 1
+            total_used += 1
+            if total_used >= 8:
+                break
+    return lines, total_used
+
+
+def _v42_how_exit_text(team):
+    team = _v33_find_team(team) or team
+    snap = _v33_snapshot(False) if '_v33_snapshot' in globals() else {}
+    code = _v33_team_group(team) if '_v33_team_group' in globals() else ''
+    lines = [f'❌ احتمالات مغادرة البطولة — {team}', '']
+    lines.append(f'{team} قد يغادر البطولة بطريقتين:')
+    lines.append('1. أن ينهي المجموعة في المركز الرابع.')
+    lines.append('2. أن ينهي المجموعة ثالثًا، لكنه لا يكون ضمن أفضل 8 ثوالث من أصل 12.')
+    lines.append('')
+
+    lines.append(f'📌 أولًا: كيف قد يصبح {team} ثالثًا أو رابعًا؟')
+    lines.append('')
+    third_pts = None
+    third_case = None
+    try:
+        third_pts, third_case = _v37_target_third_points(team, snap)
+    except Exception:
+        third_pts, third_case = None, None
+    if third_pts:
+        scenario = (third_case or {}).get('scenario') or (third_case or {}).get('case') or {}
+        row = ((third_case or {}).get('case') or {}).get('row') or (scenario.get('row') if isinstance(scenario, dict) else {}) or {}
+        played = _v37_safe_int(row.get('P')) if row else 3
+        req = _v43b_required_lines_for_scenario(team, scenario if isinstance(scenario, dict) else {}, snap, max_lines=4)
+        if req:
+            lines.append('سيناريو يجعله ثالثًا:')
+            for i, r in enumerate(req, start=1):
+                lines.append(f'{i}. {r}')
+        else:
+            lines.append('يوجد مسار حسابي يجعله ينهي المجموعة في المركز الثالث حسب نتائج مجموعته.')
+        lines.append(f'➡️ يصبح رصيد {team}: {int(third_pts)} نقاط | لعب: {played or 3}/3')
+        lines.append('')
+    fourth = _v43b_fourth_case_info(team, snap)
+    if fourth:
+        req = _v43b_required_lines_for_scenario(team, fourth.get('scenario') or {}, snap, max_lines=4)
+        lines.append('سيناريو يجعله رابعًا:')
+        if req:
+            for i, r in enumerate(req, start=1):
+                lines.append(f'{i}. {r}')
+        else:
+            lines.append('نتائج معيّنة داخل المجموعة قد تجعله ينهي المركز الرابع.')
+        lines.append(f"➡️ يصبح رصيد {team}: {int(fourth.get('pts') or 0)} نقاط | لعب: {int(fourth.get('played') or 3)}/3")
+        lines.append('➡️ إذا أنهى المركز الرابع يغادر مباشرة دون حسابات أفضل الثوالث.')
+        lines.append('')
+
+    if third_pts:
+        lines.append('🥉 ثانيًا: كيف تذهب عليه أفضل الثوالث؟')
+        lines.append('')
+        lines.append(f'إذا أنهى {team} مجموعته ثالثًا بـ{int(third_pts)} نقاط، يحتاج أن يكون ضمن أفضل 8 ثوالث من أصل 12.')
+        lines.append(f'حتى يغادر، يجب أن يصبح أمام {team} ثمانية منتخبات ثالثة أفضل منه.')
+        lines.append('')
+        cand_lines, n = _v43b_exit_candidate_blocks(team, int(third_pts), snap)
+        if cand_lines:
+            lines.extend(cand_lines)
+            lines.append('📊 النتيجة:')
+            if n >= 8:
+                lines.append(f'إذا تحققت هذه المسارات، يصبح أمام {team} 8 منتخبات ثالثة أفضل منه، فيغادر رغم أنه ثالث.')
+            else:
+                lines.append(f'حاليًا تظهر {n} مسارات ضغط واضحة فقط، وقد تتغير القائمة مع تحديث نتائج بقية المجموعات.')
+        else:
+            lines.append('لا تظهر حاليًا مسارات كافية تجعل 8 ثوالث أمامه حسب البيانات الحالية.')
+    else:
+        lines.append('لا يظهر حاليًا مسار واضح يجعله ثالثًا برصيد يدخل حسابات أفضل الثوالث.')
+    lines.append('')
+    lines.append('⚠️ هذا سيناريو محتمل، وليس استبعادًا رسميًا.')
+    return '\n'.join([str(x) for x in lines if x is not None]).strip()
+
+# ==================== END V43 FINAL AGREEMENT PATCH — FAHAD ====================
+
 if __name__ == "__main__":
     main()
