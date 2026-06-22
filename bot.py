@@ -44978,5 +44978,354 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V38E FULL AGREEMENT PATCH — FAHAD ====================
 
+
+# ==================== V38F FINAL ESPN TOP SCORERS ROUTE OVERRIDE ====================
+# هدف هذا الباتش:
+# - أي زر/أمر خاص بـ "هدافين البطولة" يمر من هنا فقط.
+# - لا رجوع للكاش ولا لدوال التصميم/الهدافين القديمة.
+# - إذا ESPN لم يرجع بيانات صالحة لا نعرض صورة قديمة.
+
+_V38F_ESPN_SCORERS_LAST_ERROR = ""
+
+
+def _v38f_no_cache_url(url):
+    try:
+        sep = '&' if '?' in url else '?'
+        return f"{url}{sep}nocache={int(time.time()*1000)}"
+    except Exception:
+        return url
+
+
+def _v38f_get(url, timeout=20):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+        'Accept': 'application/json,text/html;q=0.9,*/*;q=0.8',
+        'Cache-Control': 'no-cache, no-store, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+    }
+    url = _v38f_no_cache_url(url)
+    if requests is not None:
+        return requests.get(url, headers=headers, timeout=timeout)
+    import urllib.request
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+        enc = resp.headers.get_content_charset() or 'utf-8'
+        txt = raw.decode(enc, errors='replace')
+        return _SimpleHTTPResponse(txt, getattr(resp, 'status', 200), dict(resp.headers))
+
+
+def _v38f_espn_scorers_urls():
+    # ESPN فقط
+    return [
+        'https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&season=2026&limit=100&sort=goals:desc',
+        'https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&season=2026&limit=100&sort=goals%3Adesc',
+        'https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&limit=100&sort=goals:desc',
+        'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/leaders?category=goals&limit=100',
+        'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/statistics?season=2026',
+        'https://www.espn.com/soccer/stats/_/league/FIFA.WORLD/season/2026',
+        'https://www.espn.com/soccer/stats/_/league/FIFA.WORLD',
+    ]
+
+
+def _v38f_walk(obj, max_nodes=12000):
+    stack=[obj]
+    seen=0
+    while stack and seen < max_nodes:
+        cur=stack.pop()
+        seen += 1
+        yield cur
+        if isinstance(cur, dict):
+            stack.extend(cur.values())
+        elif isinstance(cur, list):
+            stack.extend(cur)
+
+
+def _v38f_int(v):
+    if isinstance(v, dict):
+        for k in ('value','displayValue','display','total','stat'):
+            if k in v:
+                x=_v38f_int(v.get(k))
+                if x is not None:
+                    return x
+        return None
+    try:
+        s=str(v).replace(',','').strip()
+        if not s:
+            return None
+        return int(float(s))
+    except Exception:
+        return None
+
+
+def _v38f_name(node):
+    if not isinstance(node, dict):
+        return ''
+    for k in ('athlete','player','participant'):
+        a=node.get(k)
+        if isinstance(a, dict):
+            name=a.get('displayName') or a.get('fullName') or a.get('shortName') or a.get('name') or ''
+            if name:
+                return normalize_name(name)
+    name=node.get('displayName') or node.get('fullName') or node.get('shortName') or node.get('name') or ''
+    if str(name).lower() in ('goals','goal','scoring','statistics','stats','team'):
+        return ''
+    return normalize_name(name)
+
+
+def _v38f_team(node):
+    if not isinstance(node, dict):
+        return ''
+    for k in ('team','club','competitor'):
+        t=node.get(k)
+        if isinstance(t, dict):
+            name=t.get('displayName') or t.get('shortDisplayName') or t.get('abbreviation') or t.get('name') or ''
+            if name:
+                return canonical_team_name(name) or normalize_name(name)
+    for k in ('athlete','player','participant'):
+        a=node.get(k)
+        if isinstance(a, dict):
+            tm=_v38f_team(a)
+            if tm:
+                return tm
+    return ''
+
+
+def _v38f_stat(node, targets):
+    if not isinstance(node, dict):
+        return None
+    targets=[str(x).lower() for x in targets]
+    for k,v in node.items():
+        lk=str(k).lower()
+        if lk in targets:
+            out=_v38f_int(v)
+            if out is not None:
+                return out
+    # statistics lists
+    for key in ('statistics','stats','categories','splits'):
+        arr=node.get(key)
+        if isinstance(arr, list):
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                nm=str(it.get('name') or it.get('displayName') or it.get('shortDisplayName') or it.get('abbreviation') or '').lower()
+                if nm in targets or any(t in nm for t in targets if len(t)>2):
+                    out=_v38f_int(it.get('value') or it.get('displayValue') or it.get('total') or it.get('stat'))
+                    if out is not None:
+                        return out
+                out=_v38f_stat(it, targets)
+                if out is not None:
+                    return out
+    return None
+
+
+def _v38f_extract_from_json(data):
+    found={}
+
+    # شكل ESPN common statistics/byathlete غالبًا فيه athletes/entries ومع كل لاعب stats.
+    for node in _v38f_walk(data):
+        if not isinstance(node, dict):
+            continue
+        if not any(isinstance(node.get(k), dict) for k in ('athlete','player','participant')):
+            continue
+        name=_v38f_name(node)
+        if not name or len(name)>70:
+            continue
+        goals=_v38f_stat(node, ('goals','goal','g'))
+        if goals is None:
+            goals=_v38f_int(node.get('value') or node.get('displayValue') or node.get('total'))
+        if goals is None or goals <= 0:
+            continue
+        played=_v38f_stat(node, ('appearances','appearance','gamesplayed','games','played','gp','p'))
+        team=_v38f_team(node) or '-'
+        key=(name.lower(), team.lower())
+        old=found.get(key)
+        if not old or int(goals) > int(old.get('goals') or 0):
+            found[key]={'name':name,'team':team,'played': played if played is not None else '', 'goals': int(goals)}
+
+    # ESPN leaders endpoint أحيانًا يعطي category.leaders بدون statistics واضحة.
+    for node in _v38f_walk(data):
+        if not isinstance(node, dict):
+            continue
+        leaders=node.get('leaders')
+        if not isinstance(leaders, list):
+            continue
+        cat=str(node.get('name') or node.get('displayName') or node.get('shortDisplayName') or '').lower()
+        if cat and 'goal' not in cat and 'scoring' not in cat:
+            continue
+        for it in leaders:
+            if not isinstance(it, dict):
+                continue
+            name=_v38f_name(it)
+            goals=_v38f_int(it.get('value') or it.get('displayValue') or it.get('total'))
+            if not name or goals is None or goals <= 0:
+                continue
+            team=_v38f_team(it) or '-'
+            played=_v38f_stat(it, ('appearances','games','played','gp','p'))
+            key=(name.lower(), team.lower())
+            old=found.get(key)
+            if not old or int(goals) > int(old.get('goals') or 0):
+                found[key]={'name':name,'team':team,'played': played if played is not None else '', 'goals': int(goals)}
+
+    items=list(found.values())
+    items.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
+    return items[:25]
+
+
+def _v38f_extract_next_json(html):
+    try:
+        m=re.search(r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', html or '', flags=re.S)
+        if not m:
+            return []
+        data=json.loads(m.group(1))
+        return _v38f_extract_from_json(data)
+    except Exception:
+        return []
+
+
+def fetch_espn_top_scorers(force_refresh=True):
+    """FINAL: هدافين البطولة من ESPN فقط. لا كاش ولا fallback داخلي."""
+    global _V38_TOP_SCORERS_LAST_ERROR, _V38F_ESPN_SCORERS_LAST_ERROR
+    _V38_TOP_SCORERS_LAST_ERROR = ''
+    _V38F_ESPN_SCORERS_LAST_ERROR = ''
+    errors=[]
+
+    # امسح أي كاش قديم من النسخ السابقة.
+    for cache_name in ('TOP_SCORERS_CACHE','_TOP_SCORERS_CACHE','ESPN_TOP_SCORERS_CACHE'):
+        try:
+            obj=globals().get(cache_name)
+            if hasattr(obj,'clear'):
+                obj.clear()
+        except Exception:
+            pass
+
+    for url in _v38f_espn_scorers_urls():
+        try:
+            r=_v38f_get(url, timeout=22)
+            status=int(getattr(r,'status_code',200) or 200)
+            if status >= 400:
+                errors.append(f'{url.split("?")[0]} HTTP {status}')
+                continue
+            ctype=str((getattr(r,'headers',{}) or {}).get('content-type','')).lower()
+            text=getattr(r,'text','') or ''
+            items=[]
+            if 'json' in ctype or '/api' in url:
+                try:
+                    data=r.json()
+                    items=_v38f_extract_from_json(data)
+                except Exception as e:
+                    errors.append(f'JSON {str(e)[:80]}')
+            if not items:
+                items=_v38f_extract_next_json(text)
+            if items:
+                return items
+            errors.append('ESPN returned no scorer rows')
+        except Exception as e:
+            errors.append(str(e)[:100])
+    msg=' | '.join(errors[-6:])[:500]
+    _V38_TOP_SCORERS_LAST_ERROR=msg
+    _V38F_ESPN_SCORERS_LAST_ERROR=msg
+    return []
+
+
+def _v38f_render_unique_top_scorers(items):
+    # استخدم نفس التصميم الحالي لكن باسم ملف جديد كل مرة حتى تيليجرام ما يعيد الصورة القديمة.
+    base_path = render_top_scorers_v29(items)
+    try:
+        base, ext = os.path.splitext(base_path)
+        new_path = f"{base}_espn_live_{int(time.time()*1000)}{ext or '.png'}"
+        shutil.copy2(base_path, new_path)
+        return new_path
+    except Exception:
+        return base_path
+
+
+async def _v38f_send_espn_top_scorers(message):
+    wait = await message.reply_text('⏳ جاري سحب هدافين البطولة من ESPN مباشرة...')
+    try:
+        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=45)
+        if not items:
+            err = _V38F_ESPN_SCORERS_LAST_ERROR or _V38_TOP_SCORERS_LAST_ERROR or 'لم يرجع ESPN بيانات هدافين صالحة الآن.'
+            await wait.edit_text(f'⚠️ تعذر سحب هدافين البطولة من ESPN حاليًا.\n{err}')
+            return
+        path = _v38f_render_unique_top_scorers(items)
+        cap = 'هدافين البطولة ✅\nالمصدر: ESPN — سحب مباشر بدون كاش'
+        await send_photo_path(message, path, cap)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await wait.edit_text(f'تعذر جلب هدافين البطولة من ESPN ❌\n{str(e)[:300]}')
+
+
+async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _v38f_send_espn_top_scorers(update.message)
+
+
+# آخر Router overrides قبل تشغيل البوت — عشان ما تطغى دوال قديمة.
+try:
+    _V38F_PREV_PUBLIC_REPLY_MENU_ROUTER = public_reply_menu_router
+except Exception:
+    _V38F_PREV_PUBLIC_REPLY_MENU_ROUTER = None
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v38e_track_user(update)
+    except Exception:
+        pass
+    txt = normalize_name(update.message.text or '').strip()
+    if txt == '🏆 هدافين البطولة':
+        await _v38f_send_espn_top_scorers(update.message)
+        return
+    if _V38F_PREV_PUBLIC_REPLY_MENU_ROUTER:
+        return await _V38F_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+try:
+    _V38F_PREV_PUBLIC_MENU_CALLBACK = public_menu_callback
+except Exception:
+    _V38F_PREV_PUBLIC_MENU_CALLBACK = None
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    try:
+        _v38e_track_user(update)
+    except Exception:
+        pass
+    data = q.data or ''
+    if data == 'mainmenu|scorers':
+        try:
+            await q.answer('🔄 ESPN مباشر...', show_alert=False)
+        except Exception:
+            pass
+        await _v38f_send_espn_top_scorers(q.message)
+        return
+    if _V38F_PREV_PUBLIC_MENU_CALLBACK:
+        return await _V38F_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+try:
+    _V38F_PREV_GROUPS_MENU_CALLBACK = groups_menu_callback
+except Exception:
+    _V38F_PREV_GROUPS_MENU_CALLBACK = None
+async def groups_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'grp|scorers':
+        try:
+            await q.answer('🔄 ESPN مباشر...', show_alert=False)
+        except Exception:
+            pass
+        await _v38f_send_espn_top_scorers(q.message)
+        return
+    if _V38F_PREV_GROUPS_MENU_CALLBACK:
+        return await _V38F_PREV_GROUPS_MENU_CALLBACK(update, context)
+
+# ==================== END V38F FINAL ESPN TOP SCORERS ROUTE OVERRIDE ====================
+
 if __name__ == "__main__":
     main()
