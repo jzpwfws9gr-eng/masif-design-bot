@@ -45327,968 +45327,1103 @@ async def groups_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # ==================== END V38F FINAL ESPN TOP SCORERS ROUTE OVERRIDE ====================
 
-# ==================== V38H FINAL AGREEMENT PATCH ====================
-# آخر تعديلات فهد: مهلة 90 ثانية، هدافين من ESPN Match Summary/scoringPlays،
-# أفضل الثوالث بتنسيق مختصر، فانتزي تسجيل ذاتي محفوظ، تحديث بطولة إداري شامل.
+# -*- coding: utf-8 -*-
+"""
+V39 ALL AGREED FIXES — Fahad
+- لا يعتمد على أكواد تجريبية قديمة إلا كمرجع.
+- يضيف overrides نهائية قبل main() بدون لمس أجزاء شغالة إلا عند الحاجة.
+"""
 
-V38H_PATCH_NAME = "V38H_FINAL_AGREEMENT_PATCH"
-V38H_HOW_TIMEOUT = 90
-FANTASY_SUBMISSIONS_FILE = "fantasy_submissions.json"
-FANTASY_SUBMISSION_DAYS = [13, 14, 15, 16, 17, 18]
-_V38H_TOP_SCORERS_LAST_ERROR = ""
+import os, re, json, time, asyncio, shutil
+from datetime import datetime, timedelta
+
+# ---------- V39: ESPN Top Scorers from statistics/byathlete only ----------
+_V39_TOP_SCORERS_LAST_ERROR = ""
 
 
-def _v38h_now_dt():
+def _v39_no_cache_url(url):
     try:
-        return datetime.utcnow() + timedelta(hours=3)
+        sep = '&' if '?' in url else '?'
+        return f"{url}{sep}nocache={int(time.time()*1000)}"
     except Exception:
-        return datetime.now()
+        return url
 
 
-def _v38h_now_text():
-    try:
-        return _v38h_now_dt().strftime("%Y-%m-%d %H:%M") + " بتوقيت مكة"
-    except Exception:
-        return str(datetime.now())
-
-
-def _v38h_safe_json_load(path, default):
-    try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, type(default)) else default
-    except Exception:
-        pass
-    return default
-
-
-def _v38h_safe_json_save(path, data):
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
-
-
-# ---------- مستخدمين ----------
-def _v38h_track_user(update):
-    try:
-        user = getattr(update, 'effective_user', None)
-        chat = getattr(update, 'effective_chat', None)
-        if not user:
-            return
-        data = _v38h_safe_json_load(V32_USERS_FILE if 'V32_USERS_FILE' in globals() else 'users.json', {"users": {}})
-        users = data.setdefault("users", {})
-        uid = str(user.id)
-        display = normalize_name(" ".join([x for x in [getattr(user, 'first_name', '') or '', getattr(user, 'last_name', '') or ''] if x]).strip() or getattr(user, 'username', '') or uid)
-        old = users.get(uid, {}) if isinstance(users.get(uid), dict) else {}
-        old.update({
-            "user_id": int(user.id),
-            "chat_id": int(getattr(chat, 'id', user.id) or user.id),
-            "username": getattr(user, 'username', None) or old.get('username') or '',
-            "display_name": display,
-            "last_seen": _v38h_now_text(),
-            "interactions": int(old.get("interactions", 0) or 0) + 1,
-        })
-        users[uid] = old
-        data["updated_at"] = _v38h_now_text()
-        _v38h_safe_json_save(V32_USERS_FILE if 'V32_USERS_FILE' in globals() else 'users.json', data)
-    except Exception:
-        pass
-
-
-def _v38h_users_count_text():
-    data = _v38h_safe_json_load(V32_USERS_FILE if 'V32_USERS_FILE' in globals() else 'users.json', {"users": {}})
-    return f"👥 عدد المستخدمين: {len((data.get('users') or {}))}"
-
-
-def _v38h_last_users_text(limit=12):
-    data = _v38h_safe_json_load(V32_USERS_FILE if 'V32_USERS_FILE' in globals() else 'users.json', {"users": {}})
-    users = list((data.get('users') or {}).values())
-    users.sort(key=lambda x: str(x.get('last_seen') or ''), reverse=True)
-    lines = ["🆕 آخر المستخدمين", ""]
-    for u in users[:limit]:
-        nm = u.get('display_name') or u.get('username') or str(u.get('user_id') or '-')
-        lines.append(f"- {nm} — {u.get('last_seen','-')}")
-    if len(lines) == 2:
-        lines.append("لا يوجد مستخدمين محفوظين حتى الآن.")
-    return "\n".join(lines)
-
-
-# ---------- مهلة كيف يتأهل ----------
-def _v38h_team_info_wait_text():
-    return (
-        "⏳ جاري تجهيز حسابات التأهل…\n\n"
-        "قد يستغرق الحساب حتى دقيقة بسبب تحديث أفضل الثوالث والمباريات المؤثرة."
-    )
-
-
-async def _v38h_send_how_for_team(message, team, force=False):
-    wait = await message.reply_text(_v38h_team_info_wait_text(), reply_markup=_public_main_reply_keyboard())
-    try:
-        text = await asyncio.wait_for(asyncio.to_thread(_v33_how_qualify_text, team, force), timeout=V38H_HOW_TIMEOUT)
-        kb = _v33_how_qualify_keyboard(team)
-    except Exception as e:
-        import traceback
-        err = str(e) or e.__class__.__name__ or "خطأ غير معروف"
-        try:
-            print("V38H how error:", traceback.format_exc())
-        except Exception:
-            pass
-        text = (
-            "⚠️ تعذر تجهيز معلومات المنتخب.\n"
-            "جرّب مرة ثانية أو اضغط 🔄 تحديث بيانات البطولة من الإدارة.\n\n"
-            f"السبب: {err[:300]}"
-        )
-        kb = _public_main_keyboard()
-    try:
-        await wait.edit_text(text, reply_markup=kb)
-    except Exception:
-        await message.reply_text(text, reply_markup=kb)
-
-
-# ---------- أفضل الثوالث: تنسيق مختصر ----------
-def _v38h_third_item_short(x):
-    team = x.get('team') or '-'
-    group = x.get('group') or x.get('code') or ''
-    try:
-        group_label = _v33_group_label(group) if group else ''
-    except Exception:
-        group_label = f"المجموعة {group}" if group else ''
-    pts = x.get('pts', x.get('points', 0))
-    played = x.get('played', x.get('p', ''))
-    diff = x.get('diff', x.get('gd', 0))
-    goals = x.get('gf', x.get('goals', x.get('for', 0)))
-    try:
-        diff_txt = f"{int(diff):+d}"
-    except Exception:
-        diff_txt = str(diff or '0')
-        if diff_txt and not diff_txt.startswith(('+','-')):
-            diff_txt = '+' + diff_txt
-    return f"- {team} — {group_label}\n  النقاط: {pts} | لعب: {played}/3 | الفارق: {diff_txt} | الأهداف: {goals}"
-
-
-def _v38h_third_mode(x, target_pts):
-    try:
-        pts = int(x.get('pts', x.get('points', 0)) or 0)
-        played = int(x.get('played', x.get('p', 0)) or 0)
-    except Exception:
-        pts, played = 0, 0
-    remaining = max(0, 3 - played)
-    max_pts = pts + remaining * 3
-    can_equal = pts <= target_pts <= max_pts
-    can_pass = max_pts > target_pts
-    if max_pts < target_pts:
-        return 'safe'
-    if can_pass and can_equal:
-        return 'both'
-    if can_pass:
-        return 'danger'
-    if can_equal:
-        return 'compare'
-    return 'safe'
-
-
-def _v38h_third_path_summary_block(team, target_pts, snap=None):
-    try:
-        danger, compare, safe = _v37_third_categories(team, target_pts, snap)
-    except Exception:
-        danger, compare, safe = [], [], []
-    buckets = {'safe': [], 'compare': [], 'danger': [], 'both': []}
-    for arr in (danger or []) + (compare or []) + (safe or []):
-        if not isinstance(arr, dict):
-            continue
-        buckets[_v38h_third_mode(arr, int(target_pts or 0))].append(arr)
-    guaranteed = len(buckets['safe'])
-    lines = [f"✅ عدد الثوالث المضمون وجودهم خلف {team}: {min(guaranteed,4)}/4"]
-    if guaranteed >= 4:
-        lines.append("الحالة: ✅ تأهل رسمي ضمن أفضل الثوالث إذا أنهى المنتخب مجموعته ثالثًا بهذا الرصيد.")
-    else:
-        lines.append(f"الحالة: يحتاج {max(0,4-guaranteed)} منتخبات ثالثة إضافية تبقى خلفه لضمان التأهل.")
-    lines.append("")
-    sections = [
-        ('🔥 قد يتجاوز ' + team + ':', buckets['danger']),
-        ('⚠️ قد يتجاوز أو يدخل مقارنة الفارق:', buckets['both']),
-        ('⚖️ يدخل مقارنة الفارق فقط:', buckets['compare']),
-        ('✅ خلف ' + team + ' مضمون:', buckets['safe']),
-    ]
-    for title, arr in sections:
-        if not arr:
-            continue
-        lines.append(title)
-        for x in arr[:8]:
-            lines.append(_v38h_third_item_short(x))
-        lines.append("")
-    return lines
-
-_v37_third_path_summary_block = _v38h_third_path_summary_block
-
-
-# ---------- هدافين البطولة من ESPN Match Summary/scoringPlays ----------
-def _v38h_http_get(url, timeout=18):
+def _v39_http_get(url, timeout=22):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
-        "Cache-Control": "no-cache, no-store, max-age=0",
-        "Pragma": "no-cache",
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+        'Accept': 'application/json,text/html;q=0.9,*/*;q=0.8',
+        'Cache-Control': 'no-cache, no-store, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0',
     }
-    sep = '&' if '?' in url else '?'
-    url = f"{url}{sep}_={int(_v38h_now_dt().timestamp()*1000)}"
-    if requests is not None:
-        return requests.get(url, timeout=timeout, headers=headers)
-    return _requests_get(url, timeout=timeout)
+    url = _v39_no_cache_url(url)
+    if globals().get('requests') is not None:
+        return requests.get(url, headers=headers, timeout=timeout)
+    import urllib.request
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+        enc = resp.headers.get_content_charset() or 'utf-8'
+        txt = raw.decode(enc, errors='replace')
+        return _SimpleHTTPResponse(txt, getattr(resp, 'status', 200), dict(resp.headers))
 
 
-def _v38h_event_dates():
-    dates = set()
-    try:
-        for m in globals().get('TOURNAMENT_FIXTURES', []) or []:
-            d = str(m.get('date') or '').strip()
-            nd = _normalize_date_arg(d) if '_normalize_date_arg' in globals() else None
-            if nd:
-                dates.add(nd)
-            else:
-                mm = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})', d)
-                if mm:
-                    dd, mo, yy = mm.groups(); dates.add(f"{yy}{int(mo):02d}{int(dd):02d}")
-    except Exception:
-        pass
-    for off in range(0, 24):
-        try:
-            d = datetime(2026, 6, 11) + timedelta(days=off)
-            dates.add(d.strftime('%Y%m%d'))
-        except Exception:
-            pass
-    return sorted(dates)
-
-
-def _v38h_fetch_scoreboard_events_all():
-    events = []
-    seen = set()
-    for d in _v38h_event_dates():
-        try:
-            evs = _fetch_espn_events_by_date(d) if '_fetch_espn_events_by_date' in globals() else []
-        except Exception:
-            evs = []
-        for ev in evs or []:
-            eid = str((ev or {}).get('id') or '')
-            if not eid or eid in seen:
-                continue
-            seen.add(eid); events.append(ev)
-    return events
-
-
-def _v38h_fetch_summary_json(event_id):
-    event_id = str(event_id or '').replace('espn_', '').strip()
-    if not event_id:
-        return None
-    urls = [
-        f'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}',
-        f'https://site.web.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}',
-        f'https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event={event_id}',
-        f'https://site.web.api.espn.com/apis/site/v2/sports/soccer/all/summary?event={event_id}',
+def _v39_espn_byathlete_urls():
+    # المصدر المعتمد فقط لجدول هدافين البطولة — بدون Leaders وبدون أوصاف أحداث.
+    return [
+        'https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&season=2026&limit=100&sort=goals:desc',
+        'https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&limit=100&sort=goals:desc',
+        'https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&season=2026&limit=100&sort=goals%3Adesc',
     ]
-    for url in urls:
-        try:
-            r = _v38h_http_get(url, timeout=16)
-            if int(getattr(r, 'status_code', 200) or 200) >= 400:
-                continue
-            return r.json()
-        except Exception:
-            continue
+
+
+def _v39_walk(obj, max_nodes=20000):
+    stack = [obj]
+    seen = 0
+    while stack and seen < max_nodes:
+        cur = stack.pop()
+        seen += 1
+        yield cur
+        if isinstance(cur, dict):
+            stack.extend(cur.values())
+        elif isinstance(cur, list):
+            stack.extend(cur)
+
+
+def _v39_int(v):
+    if isinstance(v, dict):
+        for k in ('value', 'displayValue', 'display', 'total', 'stat'):
+            if k in v:
+                out = _v39_int(v.get(k))
+                if out is not None:
+                    return out
+        return None
+    try:
+        s = str(v).replace(',', '').strip()
+        if not s:
+            return None
+        return int(float(s))
+    except Exception:
+        return None
+
+
+def _v39_clean_player_name(name):
+    name = normalize_name(name or '').strip()
+    if not name:
+        return ''
+    low = name.lower()
+    bad = [
+        'free-kick', 'corner', 'shot', 'saved', 'assist', 'assisted', 'header', 'volley', 'penalty area',
+        'centre of the box', 'right footed', 'left footed', 'match', 'fifa', 'world cup', 'goal scorers',
+        'became the', 'highest', 'late ', 'own goal', 'statistics', 'leaders', 'goals', 'goal', 'team',
+        'ملخص', 'أهداف', 'اهداف', 'هدف', 'مباراة', 'نتيجة'
+    ]
+    if any(b in low for b in bad):
+        return ''
+    # اسم اللاعب الطبيعي لا يكون جملة طويلة.
+    if len(name) > 55 or len(name.split()) > 6:
+        return ''
+    # ارفض النصوص التي فيها وصف طويل بعلامات ترقيم كثيرة.
+    if len(re.findall(r'[,:؛؛()\[\]{}]', name)) >= 2:
+        return ''
+    return name
+
+
+def _v39_player_from_node(node):
+    if not isinstance(node, dict):
+        return ''
+    for k in ('athlete', 'player', 'participant'):
+        a = node.get(k)
+        if isinstance(a, dict):
+            for nk in ('displayName', 'fullName', 'shortName', 'name'):
+                nm = _v39_clean_player_name(a.get(nk))
+                if nm:
+                    return nm
+    for nk in ('displayName', 'fullName', 'shortName', 'name'):
+        nm = _v39_clean_player_name(node.get(nk))
+        if nm:
+            return nm
+    return ''
+
+
+def _v39_team_from_node(node):
+    if not isinstance(node, dict):
+        return ''
+    for k in ('team', 'club', 'competitor'):
+        t = node.get(k)
+        if isinstance(t, dict):
+            nm = t.get('displayName') or t.get('shortDisplayName') or t.get('abbreviation') or t.get('name') or ''
+            if nm:
+                return canonical_team_name(nm) or normalize_name(nm)
+    for k in ('athlete', 'player', 'participant'):
+        a = node.get(k)
+        if isinstance(a, dict):
+            tm = _v39_team_from_node(a)
+            if tm:
+                return tm
+    return ''
+
+
+def _v39_stat_from_node(node, wanted):
+    if not isinstance(node, dict):
+        return None
+    wanted = {str(x).lower() for x in wanted}
+    # مفاتيح مباشرة.
+    for k, v in node.items():
+        lk = str(k).lower()
+        if lk in wanted:
+            out = _v39_int(v)
+            if out is not None:
+                return out
+    # قوائم إحصائية ESPN.
+    for key in ('statistics', 'stats', 'splits', 'categories'):
+        arr = node.get(key)
+        if isinstance(arr, list):
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                nm = str(it.get('name') or it.get('displayName') or it.get('shortDisplayName') or it.get('abbreviation') or '').lower().strip()
+                if nm in wanted:
+                    out = _v39_int(it.get('value') or it.get('displayValue') or it.get('total') or it.get('stat'))
+                    if out is not None:
+                        return out
+                out = _v39_stat_from_node(it, wanted)
+                if out is not None:
+                    return out
     return None
 
 
-def _v38h_walk(obj):
-    if isinstance(obj, dict):
-        yield obj
-        for v in obj.values():
-            yield from _v38h_walk(v)
-    elif isinstance(obj, list):
-        for it in obj:
-            yield from _v38h_walk(it)
-
-
-def _v38h_blob(node):
-    vals = []
-    if isinstance(node, dict):
-        for k in ['text','description','detail','displayText','shortText','headline','summary','title','name','type','playType']:
-            v = node.get(k)
-            if isinstance(v, dict):
-                vals.extend(str(v.get(x,'')) for x in ['text','description','displayName','name','shortName','abbreviation'])
-            elif v is not None:
-                vals.append(str(v))
-        typ = node.get('type')
-        if isinstance(typ, dict):
-            vals.extend(str(typ.get(x,'')) for x in ['text','description','displayName','name','shortName','abbreviation','id'])
-    return ' '.join([x for x in vals if x])
-
-
-def _v38h_player_name_from_goal(node):
-    if not isinstance(node, dict):
-        return ''
-    for k in ['athlete','player','scorer','participant']:
-        v = node.get(k)
-        if isinstance(v, dict):
-            nm = v.get('displayName') or v.get('fullName') or v.get('shortName') or v.get('name')
-            nm = _v43_clean_person_name(nm) if '_v43_clean_person_name' in globals() else normalize_name(nm)
-            if nm:
-                return nm
-    for k in ['athletes','players','participants']:
-        arr = node.get(k)
-        if isinstance(arr, list):
-            for it in arr:
-                if isinstance(it, dict):
-                    a = it.get('athlete') if isinstance(it.get('athlete'), dict) else it
-                    nm = a.get('displayName') or a.get('fullName') or a.get('shortName') or a.get('name')
-                    nm = _v43_clean_person_name(nm) if '_v43_clean_person_name' in globals() else normalize_name(nm)
-                    if nm:
-                        return nm
-    blob = _v38h_blob(node)
-    try:
-        nm = _v43_extract_goal_name_from_text(blob)
-        return _v43_clean_person_name(nm)
-    except Exception:
-        pass
-    return ''
-
-
-def _v38h_team_from_goal(node):
-    if not isinstance(node, dict):
-        return ''
-    for k in ['team','club','competitor']:
-        t = node.get(k)
-        if isinstance(t, dict):
-            nm = t.get('displayName') or t.get('shortDisplayName') or t.get('abbreviation') or t.get('name')
-            if nm:
-                return canonical_team_name(nm) or normalize_name(nm)
-    return ''
-
-
-def _v38h_goal_nodes_from_summary(data):
-    nodes = []
-    # المصدر الرسمي إذا موجود: scoringPlays فقط.
-    for n in _v38h_walk(data):
-        if isinstance(n, dict):
-            sp = n.get('scoringPlays') or n.get('scoringplays')
-            if isinstance(sp, list) and sp:
-                nodes.extend([x for x in sp if isinstance(x, dict)])
-    if nodes:
-        return nodes
-    # fallback من summary فقط، لا من جدول إحصاءات.
-    for n in _v38h_walk(data):
-        if not isinstance(n, dict):
+def _v39_extract_byathlete_json(data):
+    found = {}
+    for node in _v39_walk(data):
+        if not isinstance(node, dict):
             continue
-        blob = _v38h_blob(n)
-        if n.get('scoringPlay') is True or str(n.get('scoreValue','')) == '1' or re.search(r'\b(goal|penalty goal|own goal)\b', blob, re.I):
-            if not re.search(r'shots on goal|goals against|goals for|expected goals|goal difference|standings|statistics|stats|total goals', blob, re.I):
-                nodes.append(n)
-    return nodes
-
-
-def _v38h_team_played_map(snap=None):
-    mp = {}
-    try:
-        snap = snap or _v33_snapshot(False)
-        for _code, g in ((snap.get('groups') or {}).items()):
-            for r in (g.get('rows') or []):
-                if isinstance(r, dict):
-                    t = r.get('team') or r.get('name') or ''
-                    p = r.get('played') or r.get('p') or r.get('gp') or ''
-                else:
-                    t = r[0] if len(r) > 0 else ''
-                    p = r[1] if len(r) > 1 else ''
-                t = canonical_team_name(t) or normalize_name(t)
-                if t:
-                    mp[t] = p
-    except Exception:
-        pass
-    return mp
+        # لازم يكون فيه athlete/player/participant حتى لا نقرأ وصف أو category.
+        if not any(isinstance(node.get(k), dict) for k in ('athlete', 'player', 'participant')):
+            continue
+        name = _v39_player_from_node(node)
+        if not name:
+            continue
+        goals = _v39_stat_from_node(node, ('goals',))
+        if goals is None or goals <= 0 or goals > 20:
+            continue
+        played = _v39_stat_from_node(node, ('appearances', 'appearance', 'gamesplayed', 'games', 'played', 'gp', 'p'))
+        team = _v39_team_from_node(node) or '-'
+        key = (simple_key(name), simple_key(team))
+        old = found.get(key)
+        row = {'name': name, 'team': team, 'played': played if played is not None else '', 'goals': int(goals)}
+        if not old or int(row['goals']) > int(old.get('goals') or 0):
+            found[key] = row
+    items = list(found.values())
+    items.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
+    # تأكد أن القائمة منطقية: على الأقل لاعب، وكل عنصر فيه اسم قصير وهدف.
+    return [x for x in items if x.get('name') and int(x.get('goals') or 0) > 0][:25]
 
 
 def fetch_espn_top_scorers(force_refresh=True):
-    """هدافين البطولة من ESPN Match Summary/scoringPlays لكل مباريات البطولة."""
-    global _V38H_TOP_SCORERS_LAST_ERROR, _V38_TOP_SCORERS_LAST_ERROR, _V38F_ESPN_SCORERS_LAST_ERROR
-    _V38H_TOP_SCORERS_LAST_ERROR = ''
-    errors = []
-    counts = {}
-    teams = {}
-    orig_names = {}
-    events = []
+    """V39: هدافين البطولة من ESPN statistics/byathlete فقط."""
+    global _V39_TOP_SCORERS_LAST_ERROR, _V38_TOP_SCORERS_LAST_ERROR, _V38F_ESPN_SCORERS_LAST_ERROR
+    _V39_TOP_SCORERS_LAST_ERROR = ''
     try:
-        events = _v38h_fetch_scoreboard_events_all()
-    except Exception as e:
-        errors.append(f'فشل جلب مباريات ESPN: {str(e)[:80]}')
-    if not events:
-        _V38H_TOP_SCORERS_LAST_ERROR = 'لم يتم العثور على مباريات من ESPN Scoreboard.'
-        _V38_TOP_SCORERS_LAST_ERROR = _V38H_TOP_SCORERS_LAST_ERROR
-        _V38F_ESPN_SCORERS_LAST_ERROR = _V38H_TOP_SCORERS_LAST_ERROR
-        return []
-    for ev in events:
-        eid = str((ev or {}).get('id') or '')
-        data = None
-        # جرب event نفسه أولاً ثم summary
+        _V38_TOP_SCORERS_LAST_ERROR = ''
+    except Exception:
+        pass
+    try:
+        _V38F_ESPN_SCORERS_LAST_ERROR = ''
+    except Exception:
+        pass
+    errors = []
+    for cache_name in ('TOP_SCORERS_CACHE', '_TOP_SCORERS_CACHE', 'ESPN_TOP_SCORERS_CACHE'):
         try:
-            data = ev
-            nodes = _v38h_goal_nodes_from_summary(data)
-        except Exception:
-            nodes = []
-        if not nodes and eid:
-            data = _v38h_fetch_summary_json(eid)
-            if data:
-                nodes = _v38h_goal_nodes_from_summary(data)
-        if not nodes:
-            continue
-        seen_goal_keys = set()
-        for node in nodes:
-            blob = _v38h_blob(node)
-            if re.search(r'own goal', blob, re.I):
-                continue
-            name = _v38h_player_name_from_goal(node)
-            if not name or str(name).lower() in ('goal','goals','scoring'):
-                continue
-            team = _v38h_team_from_goal(node)
-            key_goal = (eid, name.lower(), str(node.get('clock') or node.get('time') or node.get('displayTime') or blob[:40]).lower())
-            if key_goal in seen_goal_keys:
-                continue
-            seen_goal_keys.add(key_goal)
-            key = re.sub(r'\s+', ' ', name.lower()).strip()
-            counts[key] = counts.get(key, 0) + 1
-            teams[key] = team or teams.get(key, '')
-            orig_names[key] = name
-    if not counts:
-        _V38H_TOP_SCORERS_LAST_ERROR = 'لم يجد ESPN Match Summary أي scoringPlays صالحة.'
-        _V38_TOP_SCORERS_LAST_ERROR = _V38H_TOP_SCORERS_LAST_ERROR
-        _V38F_ESPN_SCORERS_LAST_ERROR = _V38H_TOP_SCORERS_LAST_ERROR
-        return []
-    played_map = _v38h_team_played_map()
-    items = []
-    for key, goals in counts.items():
-        name = orig_names.get(key) or key.title()
-        team = teams.get(key, '')
-        items.append({'name': name, 'team': team or '-', 'played': played_map.get(team, ''), 'goals': int(goals)})
-    # إصلاح الاسم العربي/الإنجليزي عبر خريطة اللاعب إن وجدت
-    for it in items:
-        try:
-            it['name'] = _player_name_ar(it['name'])
+            obj = globals().get(cache_name)
+            if hasattr(obj, 'clear'):
+                obj.clear()
         except Exception:
             pass
-    items.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
-    return items[:25]
+    for url in _v39_espn_byathlete_urls():
+        try:
+            r = _v39_http_get(url, timeout=24)
+            status = int(getattr(r, 'status_code', 200) or 200)
+            if status >= 400:
+                errors.append(f'byathlete HTTP {status}')
+                continue
+            try:
+                data = r.json()
+            except Exception as e:
+                errors.append(f'JSON: {str(e)[:80]}')
+                continue
+            items = _v39_extract_byathlete_json(data)
+            if items:
+                return items
+            errors.append('byathlete رجع بدون صفوف هدافين صالحة')
+        except Exception as e:
+            errors.append(str(e)[:100])
+    msg = ' | '.join(errors[-5:])[:500] or 'لم يرجع ESPN byathlete بيانات هدافين صالحة الآن.'
+    _V39_TOP_SCORERS_LAST_ERROR = msg
+    try:
+        _V38_TOP_SCORERS_LAST_ERROR = msg
+        _V38F_ESPN_SCORERS_LAST_ERROR = msg
+    except Exception:
+        pass
+    return []
 
 
-def _v38h_render_unique_top_scorers(items):
+def _v39_render_unique_top_scorers(items):
     base_path = render_top_scorers_v29(items)
     try:
         base, ext = os.path.splitext(base_path)
-        new_path = f"{base}_summary_{int(_v38h_now_dt().timestamp()*1000)}{ext or '.png'}"
+        new_path = f"{base}_byathlete_{int(time.time()*1000)}{ext or '.png'}"
         shutil.copy2(base_path, new_path)
         return new_path
     except Exception:
         return base_path
 
 
-async def _v38h_send_top_scorers(message):
-    wait = await message.reply_text('⏳ جاري حساب هدافين البطولة من ESPN Match Summary...')
+async def _v39_send_top_scorers(message):
+    wait = await message.reply_text('⏳ جاري سحب هدافين البطولة من ESPN statistics/byathlete...')
     try:
-        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=90)
+        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=55)
         if not items:
-            err = _V38H_TOP_SCORERS_LAST_ERROR or 'تعذر حساب الهدافين من scoring plays الآن.'
-            await wait.edit_text(f'⚠️ تعذر سحب هدافين البطولة حاليًا.\n{err}')
+            err = _V39_TOP_SCORERS_LAST_ERROR or 'لم يرجع ESPN byathlete قائمة هدافين صالحة الآن.'
+            await wait.edit_text(f'⚠️ تعذر سحب هدافين البطولة من ESPN حاليًا.\n{err}')
             return
-        path = _v38h_render_unique_top_scorers(items)
-        await send_photo_path(message, path, 'هدافين البطولة ✅\nالمصدر: ESPN Match Summary — scoring plays')
+        path = _v39_render_unique_top_scorers(items)
+        await send_photo_path(message, path, 'هدافين البطولة ✅\nالمصدر: ESPN statistics/byathlete')
         try:
             await wait.delete()
         except Exception:
             pass
     except Exception as e:
-        await wait.edit_text(f'تعذر حساب هدافين البطولة ❌\n{str(e)[:300]}')
+        await wait.edit_text(f'تعذر جلب هدافين البطولة ❌\n{str(e)[:300]}')
+
 
 async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _v38h_send_top_scorers(update.message)
+    await _v39_send_top_scorers(update.message)
 
 
-# ---------- فانتزي تسجيل المشاركات ----------
-def _v38h_load_submissions():
-    data = _v38h_safe_json_load(FANTASY_SUBMISSIONS_FILE, {"submissions": {}})
-    data.setdefault("submissions", {})
-    return data
+# ---------- V39: tournament board opens correctly ----------
+def _v39_board_text(force=False):
+    if '_v32_tournament_board_text' in globals():
+        return _v32_tournament_board_text(force)
+    if '_v32_board_text' in globals():
+        return _v32_board_text()
+    return '🏆 لوحة البطولة\n\nلا توجد بيانات كافية حاليًا.'
 
 
-def _v38h_save_submissions(data):
-    data["updated_at"] = _v38h_now_text()
-    _v38h_safe_json_save(FANTASY_SUBMISSIONS_FILE, data)
-
-
-def _v38h_day_date(day):
+def _v32_board_keyboard():
+    rows = [
+        [InlineKeyboardButton('🏁 سباق التأهل', callback_data='v32|race')],
+        [InlineKeyboardButton('✅ المتأهلين', callback_data='v32|qualified'), InlineKeyboardButton('❌ المستبعدين', callback_data='v32|eliminated')],
+        [InlineKeyboardButton('🥉 أفضل الثوالث الآن', callback_data='v32|thirds'), InlineKeyboardButton('🔥 مباريات الحسم', callback_data='v32|decisive')],
+        [InlineKeyboardButton('🧮 ماذا يحتاج منتخبك؟', callback_data='v32|needs_pick')],
+        [InlineKeyboardButton('🔄 تحديث الآن', callback_data='v32|board_force')],
+    ]
     try:
-        return datetime(2026, 6, 10) + timedelta(days=int(day))
+        if _v33_round32_has_official_match():
+            rows.insert(3, [InlineKeyboardButton('🏟️ مواجهات دور الـ32', callback_data='v32|r32')])
     except Exception:
-        return None
+        pass
+    return InlineKeyboardMarkup(rows)
 
 
-def _v38h_fantasy_day_matches(day):
-    d = _v38h_day_date(day)
-    if not d:
-        return []
-    target = d.strftime('%Y%m%d')
+# ---------- V39: official statuses for best thirds / eliminated ----------
+def _v39_clean_team_list(items):
     out = []
-    for m in globals().get('TOURNAMENT_FIXTURES', []) or []:
-        raw = str(m.get('date') or '')
-        nd = _normalize_date_arg(raw) if '_normalize_date_arg' in globals() else None
-        if not nd:
-            mm = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})', raw)
-            if mm:
-                dd, mo, yy = mm.groups(); nd = f"{yy}{int(mo):02d}{int(dd):02d}"
-        if nd == target:
-            out.append(m)
+    for t in items or []:
+        t = canonical_team_name(t) or normalize_name(t)
+        if t and t not in out:
+            out.append(t)
     return out
 
 
-def _v38h_day_is_locked(day):
+def _v39_snap_with_auto_status(force=False):
+    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
+    if not isinstance(snap, dict):
+        snap = {}
+    status = snap.setdefault('status', {})
+    q = _v39_clean_team_list(snap.get('qualified') or [])
+    e = _v39_clean_team_list(snap.get('eliminated') or [])
+    # أي ثالث ضمن رسميًا كأفضل ثالث يدخل المتأهلين.
+    for tr in list(snap.get('thirds') or []):
+        team = canonical_team_name(tr.get('team')) or tr.get('team')
+        st = str(tr.get('third_status') or status.get(team, '') or '')
+        if team and ('متأهل' in st and 'رسمي' in st):
+            status[team] = '✅ ضمن رسميًا كأفضل ثالث'
+            if team not in q:
+                q.append(team)
+    for team, st in list(status.items()):
+        s = str(st or '')
+        if team and ('متأهل' in s and 'رسمي' in s):
+            if team not in q:
+                q.append(team)
+        if team and (('مستبعد' in s or 'غادر' in s or 'خارج' in s) and 'رسمي' in s):
+            if team not in e:
+                e.append(team)
+    snap['qualified'] = q[:32]
+    snap['eliminated'] = e[:32]
+    return snap
+
+
+_V39_PREV_V33_SNAPSHOT = globals().get('_v33_snapshot')
+def _v33_snapshot(force=False):
+    snap = _V39_PREV_V33_SNAPSHOT(force) if _V39_PREV_V33_SNAPSHOT else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
     try:
-        if str(day) in load_locked_days():
+        # طبّق المنطق القديم أولًا إن وجد.
+        if '_v37_apply_official_best_thirds' in globals():
+            snap = _v37_apply_official_best_thirds(snap)
+    except Exception:
+        pass
+    try:
+        status = snap.setdefault('status', {})
+        q = _v39_clean_team_list(snap.get('qualified') or [])
+        e = _v39_clean_team_list(snap.get('eliminated') or [])
+        for tr in list(snap.get('thirds') or []):
+            team = canonical_team_name(tr.get('team')) or tr.get('team')
+            st = str(tr.get('third_status') or status.get(team, '') or '')
+            if team and ('متأهل' in st and 'رسمي' in st):
+                tr['third_status'] = '✅ ضمن رسميًا كأفضل ثالث'
+                status[team] = '✅ ضمن رسميًا كأفضل ثالث'
+                if team not in q:
+                    q.append(team)
+        for team, st in list(status.items()):
+            s = str(st or '')
+            if team and ('متأهل' in s and 'رسمي' in s) and team not in q:
+                q.append(team)
+            if team and (('مستبعد' in s or 'غادر' in s or 'خارج' in s) and 'رسمي' in s) and team not in e:
+                e.append(team)
+        snap['qualified'] = q[:32]
+        snap['eliminated'] = e[:32]
+    except Exception:
+        pass
+    return snap
+
+
+def _v32_calculated_qualified():
+    try:
+        return list((_v33_snapshot(False) or {}).get('qualified') or [])[:32]
+    except Exception:
+        return []
+
+
+def _v32_calculated_eliminated():
+    try:
+        return list((_v33_snapshot(False) or {}).get('eliminated') or [])[:32]
+    except Exception:
+        return []
+
+
+def _v39_status_label_for_team(team):
+    try:
+        snap = _v33_snapshot(False)
+        st = str((snap.get('status') or {}).get(team, '') or '')
+        if 'أفضل الثوالث' in st or 'أفضل ثالث' in st or 'كأفضل ثالث' in st:
+            return '✅ ضمن رسميًا كأفضل ثالث'
+        if 'متأهل' in st and 'رسمي' in st:
+            return '✅ متأهل رسميًا'
+        if ('مستبعد' in st or 'غادر' in st) and 'رسمي' in st:
+            return '❌ مستبعد رسميًا'
+    except Exception:
+        pass
+    return ''
+
+
+def _v32_best_thirds_text(force=False):
+    snap = _v33_snapshot(force)
+    thirds = snap.get('thirds') or []
+    lines = ['🥉 أفضل الثوالث الآن', f"آخر تحديث: {snap.get('updated_at','-')}", '']
+    if not thirds:
+        return '🥉 أفضل الثوالث الآن\nلا توجد بيانات كافية حتى الآن.'
+    inside = list(enumerate(thirds[:8], start=1))
+    outside = list(enumerate(thirds[8:], start=9))
+    lines.append('✅ داخلين حاليًا')
+    if not inside:
+        lines.append('لا يوجد.')
+    for i, r in inside:
+        team = r.get('team') or '-'
+        st = str(r.get('third_status') or (snap.get('status') or {}).get(team, '') or '✅ داخل حاليًا')
+        if 'متأهل' in st and 'رسمي' in st:
+            st = '✅ ضمن رسميًا كأفضل ثالث'
+        lines.append(f"{i}. {team} — {_v32_group_name(r.get('group'))}")
+        lines.append(f"   النقاط: {r.get('Pts')} | لعب: {r.get('P')}/3")
+        lines.append(f"   الفارق: {int(r.get('GD') or 0):+d} | الأهداف: {r.get('GF')}")
+        lines.append(f"   الحالة: {st}")
+        lines.append('')
+    lines.append('❌ خارجين حاليًا')
+    if not outside:
+        lines.append('لا يوجد.')
+    for i, r in outside:
+        team = r.get('team') or '-'
+        st = str(r.get('third_status') or '❌ خارج حاليًا')
+        lines.append(f"{i}. {team} — {_v32_group_name(r.get('group'))}")
+        lines.append(f"   النقاط: {r.get('Pts')} | لعب: {r.get('P')}/3")
+        lines.append(f"   الفارق: {int(r.get('GD') or 0):+d} | الأهداف: {r.get('GF')}")
+        lines.append(f"   الحالة: {st}")
+        lines.append('')
+    lines.append('أفضل 8 ثوالث يتأهلون لدور الـ32. قبل نهاية كل المجموعات تظهر الحالة حسب الحسبة الحالية، ولا يُضاف للمغادرين إلا المستحيل رسميًا.')
+    return '\n'.join(lines).strip()
+
+
+# ---------- V39: official qualified text format ----------
+def _v39_rank_word(pos):
+    try:
+        pos = int(pos)
+    except Exception:
+        return '-'
+    return {1: 'أول المجموعة', 2: 'ثاني المجموعة', 3: 'ثالث المجموعة'}.get(pos, f'المركز {pos}')
+
+
+def _v39_next_group_match_line(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    rem = _v33_remaining_for_team(team, snap) if '_v33_remaining_for_team' in globals() else []
+    if not rem:
+        return 'لا توجد — أنهى مبارياته في دور المجموعات.'
+    m = rem[0]
+    t1 = canonical_team_name(m.get('team1')) or m.get('team1') or '-'
+    t2 = canonical_team_name(m.get('team2')) or m.get('team2') or '-'
+    when = ' '.join([str(m.get('day') or '').strip(), str(m.get('date') or '').strip()]).strip()
+    tm = str(m.get('time') or '').strip()
+    line = f'{t1} × {t2}'
+    if when or tm:
+        line += '\n' + (when + (f' — {tm}' if tm else '')).strip()
+    return line
+
+
+def _v39_official_qualified_text(team, snap=None):
+    team = _v33_find_team(team) or team
+    snap = snap or _v33_snapshot(False)
+    code, pos, row, rows = _v33_group_row(team, snap)
+    rank = _v39_rank_word(pos)
+    status = str((snap.get('status') or {}).get(team, '') or '')
+    if 'أفضل' in status and 'ثالث' in status:
+        rank = 'أفضل ثالث'
+    pts = row.get('Pts') if row else '-'
+    gd = int((row or {}).get('GD') or 0)
+    played = (row or {}).get('P') or '-'
+    info = _v38e_round32_fixture_info_for_team(team, snap) if '_v38e_round32_fixture_info_for_team' in globals() else {}
+    note = info.get('note') or 'يتحدد حسب جدول دور الـ32'
+    opponent = info.get('opponent') or 'يتحدد لاحقًا'
+    fixture = info.get('fixture') or {}
+    date_line = _v38e_match_datetime_line(fixture) if '_v38e_match_datetime_line' in globals() else 'يتحدد لاحقًا'
+    opp_group = info.get('opponent_group')
+    lines = [
+        f'✅ {team} متأهل رسميًا ك{rank}',
+        '',
+        f'📊 المجموعة: {_v33_group_label(code)}',
+        f'🏆 الترتيب: {rank}',
+        f'📌 النقاط: {pts} | الفارق: {gd:+d}',
+        f'🎮 لعب: {played}/3',
+        '',
+        '📅 المباراة القادمة في دور المجموعات:',
+        _v39_next_group_match_line(team, snap),
+        '',
+        '🏟️ الخصم القادم في دور الـ32 حسب الترتيب الحالي:',
+        str(note),
+        f'      {team}      ×      {opponent}',
+        '',
+        '🗓️ موعد المباراة:',
+        date_line,
+    ]
+    if opp_group:
+        lines += ['', f'⚠️ قد يتغير الخصم إذا تغيّر ترتيب {_v33_group_label(opp_group)}.']
+    return '\n'.join(lines).strip()
+
+
+# ---------- V39: third-place analysis before best-third opponent ----------
+def _v39_why_third(team, rows_case):
+    try:
+        idx = next((i for i, r in enumerate(rows_case) if r.get('team') == team), None)
+        if idx is None or idx != 2:
+            return f'{team} ينتهي في المركز الثالث حسب ترتيب النقاط وفواصل الترتيب في هذا السيناريو.'
+        me = rows_case[idx]
+        second = rows_case[idx-1]
+        pts_me = int(me.get('Pts') or 0)
+        pts_sec = int(second.get('Pts') or 0)
+        if pts_me == pts_sec:
+            return f'{team} يتساوى مع {second.get("team")} بالنقاط، لكن {second.get("team")} يتقدم عليه بكسر التعادل مثل فارق الأهداف أو الأهداف المسجلة.'
+        return f'{team} يصبح ثالثًا لأنه يبقى خلف {second.get("team")} بفارق النقاط في هذا السيناريو.'
+    except Exception:
+        return f'{team} يصبح ثالثًا حسب ترتيب المجموعة في هذا السيناريو.'
+
+
+def _v33_how_thirds_text(team):
+    team = _v33_find_team(team) or team
+    if not team:
+        return 'ما عرفت المنتخب.'
+    snap = _v33_snapshot(False)
+    code = _v33_team_group(team)
+    case = _v37_third_case_info(team, snap) if '_v37_third_case_info' in globals() else None
+    target_pts = None
+    if case:
+        target_pts = case.get('pts')
+    else:
+        try:
+            target_pts, case = _v37_target_third_points(team, snap)
+        except Exception:
+            target_pts, case = None, None
+    lines = [f'🥉 احتمالات المركز الثالث — {team}', '']
+    if target_pts is None:
+        lines.append(f'لا يوجد مسار واضح حاليًا يجعل {team} ثالث {_v33_group_label(code)} ببيانات كافية.')
+        lines.append('إذا تغيّرت النتائج وظهر مسار ثالث، سيحسبه البوت تلقائيًا.')
+        return '\n'.join(lines).strip()
+    lines.append(f'{team} يستطيع حسابيًا إنهاء {_v33_group_label(code)} في المركز الثالث.')
+    lines.append('')
+    if case:
+        reqs = _v38_scenario_required_lines(team, case.get('scenario') or {}, snap, max_lines=6) if '_v38_scenario_required_lines' in globals() else []
+        if reqs:
+            lines.append('مثال مسار ممكن:')
+            for i, r in enumerate(reqs, start=1):
+                lines.append(f'{i}. {r}')
+            lines.append('')
+        rows_case = ((case.get('case') or {}).get('rows') or (case.get('scenario') or {}).get('rows') or [])[:4]
+        if rows_case:
+            lines.append('الترتيب في هذا المثال:')
+            for i, rr in enumerate(rows_case, start=1):
+                lines.append(f"{i}. {rr.get('team')} — {rr.get('Pts')} نقاط")
+            lines.append('')
+            lines.append(f'📌 لماذا أصبح {team} ثالثًا؟')
+            lines.append(_v39_why_third(team, rows_case))
+            lines.append('')
+    lines.append(f'بعدها يدخل {team} حسابات أفضل الثوالث إذا كان رصيده يسمح بالمنافسة.')
+    lines.append('')
+    try:
+        lines.extend(_v37_third_path_summary_block(team, target_pts, snap))
+    except Exception:
+        lines.append('⚠️ تفاصيل مقارنة أفضل الثوالث غير متوفرة حاليًا.')
+    return '\n'.join(lines).strip()
+
+
+def _v33_how_qualify_keyboard(team):
+    team = _v33_find_team(team) or team
+    snap = _v33_snapshot(False)
+    code, pos, row, rows = _v33_group_row(team, snap)
+    status_txt = (snap.get('status') or {}).get(team, '')
+    key = _v33_team_button_key(team)
+    is_q = ('متأهل' in str(status_txt) and 'رسمي' in str(status_txt)) or ('ضمن رسمي' in str(status_txt))
+    is_out = (('مستبعد' in str(status_txt) or 'غادر' in str(status_txt)) and 'رسمي' in str(status_txt))
+    if is_q or is_out:
+        btns = []
+        if is_q and '_v38e_has_opponent_group' in globals() and _v38e_has_opponent_group(team):
+            btns.append([InlineKeyboardButton('📊 تفاصيل مجموعة الخصم', callback_data=f'v32|opp_group|{key}')])
+        btns.append([InlineKeyboardButton('📊 تفاصيل المجموعة', callback_data=f'v32|how_group|{key}')])
+        btns.append([InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')])
+        return InlineKeyboardMarkup(btns)
+    possible = set()
+    try:
+        possible, _examples = _v38d_possible_positions(team, snap)
+        possible = set(possible or [])
+    except Exception:
+        if pos: possible.add(int(pos))
+        if _v37_third_case_info(team, snap): possible.add(3)
+    rows_btn = []
+    row_btn = []
+    if 1 in possible:
+        row_btn.append(InlineKeyboardButton('🥇 احتمالات المركز الأول', callback_data=f'v32|how_first|{key}'))
+    if 2 in possible:
+        row_btn.append(InlineKeyboardButton('🥈 احتمالات المركز الثاني', callback_data=f'v32|how_second|{key}'))
+    if row_btn:
+        rows_btn.append(row_btn[:2])
+    if 3 in possible:
+        rows_btn.append([InlineKeyboardButton('🥉 احتمالات المركز الثالث وتحليله', callback_data=f'v32|how_thirds|{key}')])
+        rows_btn.append([InlineKeyboardButton('🏟️ الخصوم المحتملين', callback_data=f'v32|opp_all|{key}')])
+    rows_btn.append([InlineKeyboardButton('📊 تفاصيل المجموعة', callback_data=f'v32|how_group|{key}')])
+    rows_btn.append([InlineKeyboardButton('🧮 جرّب سيناريو', callback_data='v32|calc_start'), InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')])
+    return InlineKeyboardMarkup(rows_btn)
+
+
+_V39_PREV_HOW_QUALIFY_TEXT = globals().get('_v33_how_qualify_text')
+def _v33_how_qualify_text(team, force=False):
+    team = _v33_find_team(team)
+    if not team:
+        return 'ما عرفت المنتخب. اكتب اسم منتخب مثل: السعودية أو مصر أو العراق.'
+    snap = _v33_snapshot(force)
+    status_txt = str((snap.get('status') or {}).get(team, '') or '')
+    if ('متأهل' in status_txt and 'رسمي' in status_txt) or ('ضمن رسمي' in status_txt):
+        return _v39_official_qualified_text(team, snap)
+    if _V39_PREV_HOW_QUALIFY_TEXT:
+        return _V39_PREV_HOW_QUALIFY_TEXT(team, force)
+    return f'✅ كيف يتأهل {team}؟\n\nلا توجد بيانات كافية حاليًا.'
+
+
+def _v33_all_opponents_text(team, snap=None):
+    snap = snap or _v33_snapshot(False)
+    team = _v33_find_team(team) or team
+    code = _v33_team_group(team)
+    slots, excluded, weak = _v33_possible_slots_for_third_group(code, snap)
+    lines = [f'📊 الاحتمالات المؤثرة على خصم {team}', '']
+    lines.append(f'إذا تأهل {team} كثالث {_v33_group_label(code)}، فالخصم لا يكون من منتخبات مجموعته، بل من خانات دور الـ32 الخاصة بأفضل الثوالث.')
+    lines.append('')
+    if excluded:
+        lines.append('🚫 خانات/مجموعات حُذفت من الحساب لأنها مستحيلة حسابيًا:')
+        for c, reason in excluded[:8]:
+            lines.append(f'❌ {_v33_group_label(c)} — {reason}')
+        lines.append('')
+    if not slots:
+        lines.append('لا توجد خانة محتملة واضحة الآن.')
+    else:
+        lines.append('🏟️ الخانات الممكنة حاليًا بعد حذف المستحيل:')
+        for slot in slots:
+            leader = _v33_group_leader(slot, snap) or f'متصدر {_v33_group_label(slot)}'
+            lines.append(f'- ثالث {_v33_group_label(code)} × متصدر {_v33_group_label(slot)}')
+            lines.append(f'  الخصم المحتمل حسب الترتيب الحالي: {leader}')
+            lines.append('')
+    if weak:
+        lines.append('⚠️ ملاحظة: بعض المجموعات وضعها صعب لكنها لم تُحذف لأنها ما زالت ممكنة حسابيًا.')
+    return '\n'.join(lines).strip()
+
+
+# ---------- V39: timeout 90s for how qualify ----------
+def _v36_team_info_wait_text():
+    return '⏳ جاري تجهيز حسابات التأهل…\n\nقد يستغرق الحساب حتى دقيقة بسبب تحديث أفضل الثوالث والمباريات المؤثرة.'
+
+
+async def _v36_send_how_for_team(message, team, force=False):
+    wait = await message.reply_text(_v36_team_info_wait_text(), reply_markup=_public_main_reply_keyboard())
+    try:
+        text = await asyncio.wait_for(asyncio.to_thread(_v33_how_qualify_text, team, force), timeout=90)
+    except Exception as e:
+        text = f'⚠️ تعذر تجهيز معلومات المنتخب.\nجرّب مرة ثانية أو اختر المنتخب من القائمة.\n\nالسبب: {type(e).__name__}: {str(e)[:180]}'
+        kb = _public_main_keyboard()
+    else:
+        kb = _v33_how_qualify_keyboard(team)
+    try:
+        await wait.edit_text(text, reply_markup=kb)
+    except Exception:
+        await message.reply_text(text, reply_markup=kb)
+
+
+# ---------- V39: fantasy self submissions ----------
+FANTASY_SUBMISSIONS_FILE = 'fantasy_submissions.json'
+
+
+def _v39_load_submissions():
+    try:
+        return _v32_load_json(FANTASY_SUBMISSIONS_FILE, {'submissions': []}) if '_v32_load_json' in globals() else _v33_safe_load_json(FANTASY_SUBMISSIONS_FILE, {'submissions': []})
+    except Exception:
+        try:
+            if os.path.exists(FANTASY_SUBMISSIONS_FILE):
+                with open(FANTASY_SUBMISSIONS_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+        except Exception:
+            pass
+    return {'submissions': []}
+
+
+def _v39_save_submissions(data):
+    try:
+        return _v32_save_json(FANTASY_SUBMISSIONS_FILE, data) if '_v32_save_json' in globals() else _v33_safe_save_json(FANTASY_SUBMISSIONS_FILE, data)
+    except Exception:
+        tmp = FANTASY_SUBMISSIONS_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f: json.dump(data or {'submissions': []}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, FANTASY_SUBMISSIONS_FILE)
+
+
+def _v39_fantasy_keyboard(update=None):
+    rows = [[InlineKeyboardButton('➕ تسجيل تشكيلة اليوم', callback_data='fantasy|submit')],
+            [InlineKeyboardButton('🏆 الترتيب العام', callback_data='fantasy|ranking'), InlineKeyboardButton('🔥 نقاط اليوم', callback_data='fantasy|today_points')],
+            [InlineKeyboardButton('👥 اختيارات المشاركين', callback_data='fantasy|participants'), InlineKeyboardButton('🪪 بطاقة فانتزي', callback_data='fantasy|card')],
+            [InlineKeyboardButton('⭐ أساطير الفانتزي', callback_data='fantasy|legends'), InlineKeyboardButton('📋 نموذج المشاركة', callback_data='fantasy|template')]]
+    try:
+        if update is not None and is_admin_user(update):
+            rows += [[InlineKeyboardButton('📋 مشاركات اليوم', callback_data='fantasy|admin_today'), InlineKeyboardButton('❌ الناقصين', callback_data='fantasy|admin_missing')],
+                     [InlineKeyboardButton('📤 تصدير المشاركات Excel', callback_data='fantasy|admin_export'), InlineKeyboardButton('🔒 حالة التسجيل', callback_data='fantasy|admin_status')]]
+    except Exception:
+        pass
+    rows.append([InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fantasy_public_keyboard():
+    return _v39_fantasy_keyboard(None)
+
+
+def _v39_fantasy_day_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('اليوم 13', callback_data='fantasy|submit_day|13'), InlineKeyboardButton('اليوم 14', callback_data='fantasy|submit_day|14')],
+        [InlineKeyboardButton('اليوم 15', callback_data='fantasy|submit_day|15'), InlineKeyboardButton('اليوم 16', callback_data='fantasy|submit_day|16')],
+        [InlineKeyboardButton('اليوم 17', callback_data='fantasy|submit_day|17'), InlineKeyboardButton('اليوم 18', callback_data='fantasy|submit_day|18')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='fantasy|menu')],
+    ])
+
+
+def _v39_fantasy_date_for_day(day):
+    try:
+        d = datetime(2026, 6, 11) + timedelta(days=int(day)-1)
+        return d.strftime('%d/%m/%Y')
+    except Exception:
+        return ''
+
+
+def _v39_fantasy_matches_for_day(day):
+    d = _v39_fantasy_date_for_day(day)
+    rows = []
+    try:
+        for m in (globals().get('TOURNAMENT_FIXTURES') or []):
+            if str(m.get('date') or '') == d:
+                rows.append(f"- {m.get('team1')} × {m.get('team2')} — {m.get('time','')}")
+    except Exception:
+        pass
+    return rows
+
+
+def _v39_fantasy_day_locked(day):
+    # إذا موجود قفل قديم نحترمه. القفل التلقائي يعتمد على وقت السيرفر إن أمكن.
+    try:
+        locked = load_locked_days()
+        if str(day) in {str(x) for x in locked}:
             return True
     except Exception:
         pass
-    d = _v38h_day_date(day)
-    if d and _v38h_now_dt().date() > d.date():
-        return True
+    # لا نقفل تلقائيًا بدون timezone موثوق حتى لا نقفل يوم غلط؛ المنطق الأساسي موجود للتطوير اللاحق.
     return False
 
 
-def _v38h_fantasy_days_keyboard():
-    rows = []
-    ds = FANTASY_SUBMISSION_DAYS
-    for i in range(0, len(ds), 2):
-        row = []
-        for d in ds[i:i+2]:
-            lock = '🔒 ' if _v38h_day_is_locked(d) else ''
-            row.append(InlineKeyboardButton(f"{lock}اليوم {d}", callback_data=f"fantasy|subday|{d}"))
-        rows.append(row)
-    rows.append([InlineKeyboardButton("⬅️ رجوع لفانتزي", callback_data="fantasy|menu")])
-    return InlineKeyboardMarkup(rows)
-
-
-def _v38h_format_day_matches(day):
-    matches = _v38h_fantasy_day_matches(day)
-    lines = [f"✅ تم اختيار فانتزي اليوم {day}", ""]
-    if matches:
-        lines.append(f"📅 مباريات اليوم {day}:")
-        for i, m in enumerate(matches[:8], start=1):
-            lines.append(f"{i}. {m.get('team1')} × {m.get('team2')} — {m.get('time') or ''}")
-    else:
-        lines.append(f"📅 مباريات اليوم {day}: لم يتم العثور على مباريات في الجدول الحالي.")
-    lines += ["", "أرسل تشكيلتك حسب الصيغة المعتمدة:", "", "الاسم:", "🧤 الحارس:", "اللاعب 1:", "اللاعب 2:", "اللاعب 3:", "👑 الكابتن:"]
-    return "\n".join(lines)
-
-
-def _v38h_parse_lineup_text(text):
-    fields = {'name':'', 'gk':'', 'p1':'', 'p2':'', 'p3':'', 'cap':''}
-    aliases = {
-        'name': [r'^(?:الاسم|اسم|المشارك|👤)\s*[:：-]?\s*(.+)$'],
-        'gk': [r'^(?:🧤\s*)?(?:الحارس|حارس)\s*[:：-]?\s*(.+)$'],
-        'p1': [r'^(?:اللاعب\s*1|لاعب\s*1|اللاعب1|لاعب1|اللاعب\s*١|لاعب\s*١)\s*[:：-]?\s*(.+)$'],
-        'p2': [r'^(?:اللاعب\s*2|لاعب\s*2|اللاعب2|لاعب2|اللاعب\s*٢|لاعب\s*٢)\s*[:：-]?\s*(.+)$'],
-        'p3': [r'^(?:اللاعب\s*3|لاعب\s*3|اللاعب3|لاعب3|اللاعب\s*٣|لاعب\s*٣)\s*[:：-]?\s*(.+)$'],
-        'cap': [r'^(?:👑\s*)?(?:الكابتن|كابتن|الكابتن\s*:|كابتن\s*:)\s*[:：-]?\s*(.+)$'],
-    }
-    for line in (text or '').splitlines():
-        line = normalize_name(line).strip()
-        if not line:
-            continue
-        for key, pats in aliases.items():
-            if fields.get(key):
-                continue
-            for pat in pats:
-                m = re.match(pat, line, re.I)
-                if m:
-                    val = normalize_name(m.group(1)).strip(' -:')
-                    if val:
-                        fields[key] = val
-                    break
+def _v39_parse_lineup_text(text):
+    raw = str(text or '').strip()
+    fields = {'name':'', 'keeper':'', 'p1':'', 'p2':'', 'p3':'', 'captain':''}
+    patterns = [
+        ('name', r'^(?:الاسم|اسمي|اسم)\s*[:：\-]\s*(.+)$'),
+        ('keeper', r'^(?:🧤\s*)?(?:الحارس|حارس)\s*[:：\-]\s*(.+)$'),
+        ('p1', r'^(?:اللاعب\s*1|لاعب\s*1|اللاعب\s*١|لاعب\s*١|player\s*1)\s*[:：\-]\s*(.+)$'),
+        ('p2', r'^(?:اللاعب\s*2|لاعب\s*2|اللاعب\s*٢|لاعب\s*٢|player\s*2)\s*[:：\-]\s*(.+)$'),
+        ('p3', r'^(?:اللاعب\s*3|لاعب\s*3|اللاعب\s*٣|لاعب\s*٣|player\s*3)\s*[:：\-]\s*(.+)$'),
+        ('captain', r'^(?:👑\s*)?(?:الكابتن|كابتن|الكابتن\s*👑|captain)\s*[:：\-]\s*(.+)$'),
+    ]
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line: continue
+        for key, pat in patterns:
+            m = re.match(pat, line, flags=re.I)
+            if m:
+                fields[key] = normalize_name(m.group(1)).strip()
+                break
     return fields
 
 
-def _v38h_missing_fields(fields):
-    order = [('name','الاسم'),('gk','الحارس'),('p1','اللاعب 1'),('p2','اللاعب 2'),('p3','اللاعب 3'),('cap','الكابتن')]
-    return [(k, label) for k, label in order if not normalize_name(fields.get(k,''))]
+def _v39_missing_field(fields):
+    order = [('name','اسم المشارك'),('keeper','اسم الحارس'),('p1','اللاعب 1'),('p2','اللاعب 2'),('p3','اللاعب 3'),('captain','اسم الكابتن')]
+    for k, label in order:
+        if not fields.get(k):
+            return k, label
+    return None, None
 
 
-def _v38h_confirm_text(day, fields):
-    return (
-        f"📋 تأكيد تشكيلة اليوم {day}\n\n"
-        f"الاسم: {fields.get('name','')}\n"
-        f"🧤 الحارس: {fields.get('gk','')}\n"
-        f"اللاعب 1: {fields.get('p1','')}\n"
-        f"اللاعب 2: {fields.get('p2','')}\n"
-        f"اللاعب 3: {fields.get('p3','')}\n"
-        f"👑 الكابتن: {fields.get('cap','')}\n\n"
-        "هل تعتمد التسجيل؟"
-    )
+def _v39_lineup_confirm_text(day, fields):
+    return (f'📋 تأكيد تشكيلة اليوم {day}\n\n'
+            f"الاسم: {fields.get('name')}\n"
+            f"🧤 الحارس: {fields.get('keeper')}\n"
+            f"اللاعب 1: {fields.get('p1')}\n"
+            f"اللاعب 2: {fields.get('p2')}\n"
+            f"اللاعب 3: {fields.get('p3')}\n"
+            f"👑 الكابتن: {fields.get('captain')}\n\n"
+            'هل تعتمد التسجيل؟')
 
 
-def _v38h_confirm_kb(day):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ إرسال التشكيلة", callback_data=f"fantasy|submit_ok|{day}"), InlineKeyboardButton("✏️ تعديل", callback_data=f"fantasy|subday|{day}")],
-        [InlineKeyboardButton("⬅️ إلغاء", callback_data="fantasy|menu")],
-    ])
+def _v39_lineup_confirm_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton('✅ إرسال التشكيلة', callback_data='fantasy|confirm_submit'), InlineKeyboardButton('✏️ تعديل', callback_data='fantasy|edit_submit')], [InlineKeyboardButton('⬅️ إلغاء', callback_data='fantasy|cancel_submit')]])
 
 
-def _v38h_store_submission(user, day, fields):
-    data = _v38h_load_submissions()
-    subs = data.setdefault('submissions', {})
-    day_key = str(day)
-    subs.setdefault(day_key, {})
-    uid = str(getattr(user, 'id', '') or fields.get('name'))
-    rec = {
-        'day': int(day),
-        'name': fields.get('name',''),
-        'gk': fields.get('gk',''),
-        'p1': fields.get('p1',''),
-        'p2': fields.get('p2',''),
-        'p3': fields.get('p3',''),
-        'cap': fields.get('cap',''),
-        'user_id': uid,
-        'username': getattr(user, 'username', '') or '',
-        'submitted_at': _v38h_now_text(),
-    }
-    subs[day_key][uid] = rec
-    _v38h_save_submissions(data)
-    return rec
-
-
-def _v38h_admin_id():
-    for key in ('ADMIN_ID','ADMIN_IDS'):
-        val = os.getenv(key) or globals().get(key)
-        if not val:
-            continue
-        if isinstance(val, (list, tuple, set)):
-            val = list(val)[0] if val else ''
-        m = re.search(r'\d+', str(val))
-        if m:
-            return int(m.group(0))
+async def _v39_notify_admins(context, text):
     try:
-        ids = globals().get('ADMIN_IDS') or []
-        if ids:
-            return int(list(ids)[0])
-    except Exception:
-        pass
-    return None
-
-
-async def _v38h_notify_admin(context, rec):
-    aid = _v38h_admin_id()
-    if not aid:
-        return
-    txt = (
-        "✅ تسجيل فانتزي جديد\n\n"
-        f"📅 اليوم: {rec.get('day')}\n"
-        f"👤 المشارك: {rec.get('name')}\n\n"
-        f"🧤 الحارس: {rec.get('gk')}\n"
-        f"اللاعب 1: {rec.get('p1')}\n"
-        f"اللاعب 2: {rec.get('p2')}\n"
-        f"اللاعب 3: {rec.get('p3')}\n"
-        f"👑 الكابتن: {rec.get('cap')}\n\n"
-        f"⏰ وقت التسجيل: {rec.get('submitted_at')}"
-    )
-    try:
-        await context.bot.send_message(chat_id=aid, text=txt)
-    except Exception:
-        pass
-
-
-def _v38h_submissions_list_text(day):
-    data = _v38h_load_submissions()
-    rows = list(((data.get('submissions') or {}).get(str(day)) or {}).values())
-    lines = [f"📋 مشاركات فانتزي اليوم {day}", ""]
-    if not rows:
-        lines.append("لا توجد مشاركات محفوظة لهذا اليوم.")
-    for i, r in enumerate(rows, start=1):
-        lines.append(f"{i}. {r.get('name')} ✅")
-    lines.append("")
-    lines.append(f"📊 المسجلين: {len(rows)}")
-    return "\n".join(lines)
-
-
-def _v38h_missing_text(day):
-    data = _v38h_load_submissions()
-    rows = list(((data.get('submissions') or {}).get(str(day)) or {}).values())
-    submitted = {normalize_name(r.get('name')) for r in rows}
-    missing = [p for p in PARTICIPANTS if normalize_name(p) not in submitted]
-    lines = [f"❌ لم يسجلوا فانتزي اليوم {day}:", ""]
-    lines += [f"{i}. {n}" for i, n in enumerate(missing, start=1)] or ["لا يوجد ناقصين ✅"]
-    return "\n".join(lines)
-
-
-def _v38h_submissions_days_kb(action):
-    rows=[]
-    for i in range(0, len(FANTASY_SUBMISSION_DAYS), 2):
-        rows.append([InlineKeyboardButton(f"اليوم {d}", callback_data=f"fantasy|{action}|{d}") for d in FANTASY_SUBMISSION_DAYS[i:i+2]])
-    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="fantasy|menu")])
-    return InlineKeyboardMarkup(rows)
-
-
-def _v38h_export_excel(day):
-    data = _v38h_load_submissions()
-    rows = list(((data.get('submissions') or {}).get(str(day)) or {}).values())
-    wb = Workbook()
-    ws = wb.active
-    ws.title = f"اليوم {day}"
-    headers = ["اليوم", "الاسم", "الحارس", "اللاعب 1", "اللاعب 2", "اللاعب 3", "الكابتن", "وقت التسجيل", "آيدي المستخدم"]
-    ws.append(headers)
-    for r in rows:
-        ws.append([r.get('day'), r.get('name'), r.get('gk'), r.get('p1'), r.get('p2'), r.get('p3'), r.get('cap'), r.get('submitted_at'), r.get('user_id')])
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center")
-    path = f"fantasy_submissions_day_{day}.xlsx"
-    wb.save(path)
-    return path
-
-
-# ---------- كيبورد الفانتزي ----------
-def _fantasy_public_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ تسجيل تشكيلة اليوم", callback_data="fantasy|submit_start")],
-        [InlineKeyboardButton("🏆 الترتيب العام", callback_data="fantasy|ranking"), InlineKeyboardButton("🔥 نقاط اليوم", callback_data="fantasy|today_points")],
-        [InlineKeyboardButton("🪪 بطاقة فانتزي", callback_data="fantasy|card"), InlineKeyboardButton("👥 اختيارات المشاركين", callback_data="fantasy|participants")],
-        [InlineKeyboardButton("⭐ أساطير الفانتزي", callback_data="fantasy|legends"), InlineKeyboardButton("📋 نموذج المشاركة", callback_data="fantasy|template")],
-        [InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")],
-    ])
-
-
-# ---------- تحديث البطولة إداري ----------
-async def _v38h_admin_refresh(q):
-    await q.edit_message_text("🔄 جاري تحديث بيانات البطولة...\n\nيرجى الانتظار.")
-    report=[]
-    # امسح كاشات معروفة
-    for name, obj in list(globals().items()):
-        if 'CACHE' in name.upper() and hasattr(obj, 'clear'):
+        ids = admin_id_set()
+        for aid in ids:
             try:
-                obj.clear()
+                await context.bot.send_message(chat_id=aid, text=text)
             except Exception:
                 pass
-    try:
-        _v33_snapshot(True)
-        report.append("📊 ترتيب المجموعات: تم")
-    except Exception as e:
-        report.append(f"📊 ترتيب المجموعات: فشل — {str(e)[:60]}")
-    try:
-        fetch_espn_top_scorers(True)
-        report.append("🏆 الهدافين: تم من ESPN Match Summary")
-    except Exception as e:
-        report.append(f"🏆 الهدافين: فشل — {str(e)[:60]}")
-    try:
-        _v34_stats_text()
-        report.append("📈 إحصائيات البطولة: تم")
-    except Exception as e:
-        report.append(f"📈 إحصائيات البطولة: فشل — {str(e)[:60]}")
-    report.append("🥉 أفضل الثوالث: تم تحديثها من الترتيب الجديد")
-    report.append("📺 مباشر الآن: سيتم سحبه مباشرة من مصدره عند الضغط")
-    await q.edit_message_text("✅ تم تحديث بيانات البطولة\n\n" + "\n".join(report) + f"\n\nآخر تحديث: {_v38h_now_text()}", reply_markup=_v38e_admin_keyboard() if '_v38e_admin_keyboard' in globals() else None)
+    except Exception:
+        pass
 
 
-# ---------- Router overrides نهائية ----------
+def _v39_current_submission_day():
+    data = _v39_load_submissions(); subs = data.get('submissions') or []
+    days = [int(s.get('day')) for s in subs if str(s.get('day','')).isdigit()]
+    return max(days) if days else 13
+
+
+def _v39_subs_for_day(day):
+    data = _v39_load_submissions()
+    return [s for s in (data.get('submissions') or []) if str(s.get('day')) == str(day)]
+
+
+# ---------- Router overrides ----------
 try:
-    _V38H_PREV_FANTASY_CALLBACK = fantasy_menu_callback
+    _V39_PREV_PUBLIC_REPLY_MENU_ROUTER = public_reply_menu_router
 except Exception:
-    _V38H_PREV_FANTASY_CALLBACK = None
+    _V39_PREV_PUBLIC_REPLY_MENU_ROUTER = None
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v38e_track_user(update)
+    except Exception:
+        pass
+    txt = normalize_name(update.message.text or '').strip()
+    if txt == '🏆 هدافين البطولة':
+        await _v39_send_top_scorers(update.message); return
+    if txt == '🏆 لوحة البطولة':
+        await update.message.reply_text(_v39_board_text(False), reply_markup=_v32_board_keyboard()); return
+    if txt in ('🎮 فانتزي', '🎮 فانتزي المصيف'):
+        await update.message.reply_text('🎮 فانتزي المصيف', reply_markup=_v39_fantasy_keyboard(update)); return
+    if _V39_PREV_PUBLIC_REPLY_MENU_ROUTER:
+        return await _V39_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+try:
+    _V39_PREV_TEXT_STATE_ROUTER = text_state_router
+except Exception:
+    _V39_PREV_TEXT_STATE_ROUTER = None
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v38e_track_user(update)
+    except Exception:
+        pass
+    if context.user_data.get('v39_fantasy_pending_day'):
+        day = context.user_data.get('v39_fantasy_pending_day')
+        draft = context.user_data.get('v39_fantasy_draft') or {}
+        missing_key = context.user_data.pop('v39_fantasy_missing_key', None)
+        if missing_key:
+            draft[missing_key] = normalize_name(update.message.text or '').strip()
+        else:
+            draft.update(_v39_parse_lineup_text(update.message.text or ''))
+        context.user_data['v39_fantasy_draft'] = draft
+        key, label = _v39_missing_field(draft)
+        if key:
+            context.user_data['v39_fantasy_missing_key'] = key
+            await update.message.reply_text(f'⚠️ ناقص {label}\nاكتب {label}:')
+            return
+        await update.message.reply_text(_v39_lineup_confirm_text(day, draft), reply_markup=_v39_lineup_confirm_keyboard())
+        return
+    if _V39_PREV_TEXT_STATE_ROUTER:
+        return await _V39_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+try:
+    _V39_PREV_FANTASY_MENU_CALLBACK = fantasy_menu_callback
+except Exception:
+    _V39_PREV_FANTASY_MENU_CALLBACK = None
 async def fantasy_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    if not q:
-        return
+    if not q: return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
     try: await q.answer()
     except Exception: pass
-    parts = (q.data or '').split('|')
-    action = parts[1] if len(parts)>1 else 'menu'
     if action == 'menu':
-        await q.edit_message_text("🎮 فانتزي", reply_markup=_fantasy_public_keyboard()); return
-    if action == 'submit_start':
-        await q.edit_message_text("📅 اختر يوم الفانتزي المتاح للتسجيل:", reply_markup=_v38h_fantasy_days_keyboard()); return
-    if action == 'subday' and len(parts)>=3:
-        day = int(parts[2])
-        if _v38h_day_is_locked(day):
-            await q.edit_message_text(f"🔒 فانتزي اليوم {day} مقفل\n\nتم إغلاق التسجيل لأن أول مباراة بدأت أو اليوم انتهى.", reply_markup=_v38h_fantasy_days_keyboard()); return
-        context.user_data['fantasy_submit_day'] = day
-        context.user_data['fantasy_submit_fields'] = {}
-        context.user_data['fantasy_waiting_lineup'] = True
-        await q.edit_message_text(_v38h_format_day_matches(day), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ إلغاء", callback_data="fantasy|menu")]])); return
-    if action == 'submit_ok' and len(parts)>=3:
-        day = int(parts[2]); fields = context.user_data.get('fantasy_submit_fields') or {}
-        missing = _v38h_missing_fields(fields)
-        if missing:
-            await q.edit_message_text("⚠️ ناقص: " + missing[0][1] + "\nاكتبها من جديد أو أرسل التشكيلة كاملة.", reply_markup=_v38h_fantasy_days_keyboard()); return
-        rec = _v38h_store_submission(update.effective_user, day, fields)
-        await _v38h_notify_admin(context, rec)
-        context.user_data.pop('fantasy_submit_fields', None); context.user_data.pop('fantasy_waiting_lineup', None); context.user_data.pop('fantasy_submit_day', None)
-        await q.edit_message_text("✅ تم تسجيل تشكيلتك بنجاح\n\n📌 تم حفظ المشاركة، وسيتم اعتمادها بعد مراجعة الإدارة.", reply_markup=_fantasy_public_keyboard()); return
-    if action in ('subs_menu','missing_menu','export_menu'):
-        if not is_admin_user(update):
-            await q.message.reply_text("هذا الخيار للمشرف فقط 🔒"); return
-        map_action={'subs_menu':'subs_list','missing_menu':'subs_missing','export_menu':'subs_export'}[action]
-        await q.edit_message_text("اختر اليوم:", reply_markup=_v38h_submissions_days_kb(map_action)); return
-    if action == 'subs_list' and len(parts)>=3:
-        if not is_admin_user(update): await q.message.reply_text("هذا الخيار للمشرف فقط 🔒"); return
-        await q.edit_message_text(_v38h_submissions_list_text(int(parts[2])), reply_markup=_v38h_submissions_days_kb('subs_list')); return
-    if action == 'subs_missing' and len(parts)>=3:
-        if not is_admin_user(update): await q.message.reply_text("هذا الخيار للمشرف فقط 🔒"); return
-        await q.edit_message_text(_v38h_missing_text(int(parts[2])), reply_markup=_v38h_submissions_days_kb('subs_missing')); return
-    if action == 'subs_export' and len(parts)>=3:
-        if not is_admin_user(update): await q.message.reply_text("هذا الخيار للمشرف فقط 🔒"); return
-        day=int(parts[2]); path=_v38h_export_excel(day)
-        with open(path,'rb') as f:
-            await q.message.reply_document(document=f, filename=path, caption=f"📤 مشاركات فانتزي اليوم {day}")
+        await q.edit_message_text('🎮 فانتزي المصيف', reply_markup=_v39_fantasy_keyboard(update)); return
+    if action == 'submit':
+        await q.edit_message_text('اختر يوم التسجيل:', reply_markup=_v39_fantasy_day_keyboard()); return
+    if action == 'submit_day' and len(parts) >= 3:
+        day = parts[2]
+        if _v39_fantasy_day_locked(day):
+            await q.edit_message_text(f'🔒 فانتزي اليوم {day} مقفل\n\nتم إغلاق التسجيل لأن أول مباراة بدأت.\n\nاختر يومًا آخر متاحًا للتسجيل.', reply_markup=_v39_fantasy_day_keyboard()); return
+        context.user_data['v39_fantasy_pending_day'] = str(day)
+        context.user_data['v39_fantasy_draft'] = {}
+        matches = _v39_fantasy_matches_for_day(day)
+        match_text = '\n'.join(matches) if matches else 'لا توجد مباريات مسجلة لهذا اليوم في الجدول الحالي.'
+        await q.edit_message_text(f'📋 تسجيل تشكيلة اليوم {day}\n\nمباريات اليوم:\n{match_text}\n\nارسل تشكيلتك بهذه الصيغة:\n\nالاسم:\n🧤 الحارس:\nاللاعب 1:\nاللاعب 2:\nاللاعب 3:\n👑 الكابتن:', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ إلغاء', callback_data='fantasy|cancel_submit')]])); return
+    if action == 'cancel_submit':
+        for k in ['v39_fantasy_pending_day','v39_fantasy_draft','v39_fantasy_missing_key']:
+            context.user_data.pop(k, None)
+        await q.edit_message_text('تم إلغاء التسجيل.', reply_markup=_v39_fantasy_keyboard(update)); return
+    if action == 'edit_submit':
+        day = context.user_data.get('v39_fantasy_pending_day') or '؟'
+        context.user_data['v39_fantasy_draft'] = {}
+        await q.edit_message_text(f'✏️ ارسل تشكيلة اليوم {day} من جديد بنفس الصيغة.'); return
+    if action == 'confirm_submit':
+        day = context.user_data.get('v39_fantasy_pending_day')
+        draft = context.user_data.get('v39_fantasy_draft') or {}
+        key, label = _v39_missing_field(draft)
+        if not day or key:
+            await q.edit_message_text('⚠️ التشكيلة ناقصة أو انتهت الجلسة. ابدأ التسجيل من جديد.', reply_markup=_v39_fantasy_keyboard(update)); return
+        data = _v39_load_submissions()
+        subs = data.setdefault('submissions', [])
+        uid = getattr(q.from_user, 'id', '')
+        # استبدل مشاركة نفس المستخدم/نفس اليوم إذا كرر الإرسال.
+        subs[:] = [s for s in subs if not (str(s.get('day')) == str(day) and str(s.get('user_id')) == str(uid))]
+        item = {'day': str(day), 'name': draft.get('name'), 'keeper': draft.get('keeper'), 'player1': draft.get('p1'), 'player2': draft.get('p2'), 'player3': draft.get('p3'), 'captain': draft.get('captain'), 'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'user_id': uid, 'username': getattr(q.from_user, 'username', '') or '', 'chat_id': q.message.chat_id}
+        subs.append(item); _v39_save_submissions(data)
+        for k in ['v39_fantasy_pending_day','v39_fantasy_draft','v39_fantasy_missing_key']:
+            context.user_data.pop(k, None)
+        await q.edit_message_text('✅ تم إرسال التشكيلة واعتمادها.\nبالتوفيق 🔥', reply_markup=_v39_fantasy_keyboard(update))
+        admin_txt = (f"✅ تسجيل فانتزي جديد\n\n📅 اليوم: {day}\n👤 المشارك: {item['name']}\n\n🧤 الحارس: {item['keeper']}\nاللاعب 1: {item['player1']}\nاللاعب 2: {item['player2']}\nاللاعب 3: {item['player3']}\n👑 الكابتن: {item['captain']}\n\n⏰ وقت التسجيل: {item['time']}")
+        await _v39_notify_admins(context, admin_txt)
         return
-    if _V38H_PREV_FANTASY_CALLBACK:
-        return await _V38H_PREV_FANTASY_CALLBACK(update, context)
-
-
-try:
-    _V38H_PREV_PUBLIC_REPLY = public_reply_menu_router
-except Exception:
-    _V38H_PREV_PUBLIC_REPLY = None
-async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _v38h_track_user(update)
-    txt = normalize_name(update.message.text or '').strip()
-    # استقبال تشكيلة الفانتزي دفعة واحدة
-    if context.user_data.get('fantasy_waiting_lineup'):
-        day = context.user_data.get('fantasy_submit_day')
-        fields = _v38h_parse_lineup_text(txt)
-        old = context.user_data.get('fantasy_submit_fields') or {}
-        for k,v in fields.items():
-            if v: old[k]=v
-        context.user_data['fantasy_submit_fields'] = old
-        missing = _v38h_missing_fields(old)
-        if missing:
-            await update.message.reply_text(f"⚠️ ناقص {missing[0][1]}\n\nاكتبه الآن أو أرسل التشكيلة كاملة من جديد:")
+    if action == 'admin_today' and is_admin_user(update):
+        day = _v39_current_submission_day(); subs = _v39_subs_for_day(day)
+        lines = [f'📋 مشاركات اليوم {day}', '']
+        if not subs: lines.append('لا توجد مشاركات محفوظة.')
+        for s in subs:
+            lines.append(f"- {s.get('name')} | {s.get('keeper')} | {s.get('player1')} | {s.get('player2')} | {s.get('player3')} | كابتن: {s.get('captain')}")
+        await q.edit_message_text('\n'.join(lines), reply_markup=_v39_fantasy_keyboard(update)); return
+    if action == 'admin_missing' and is_admin_user(update):
+        day = _v39_current_submission_day(); got = {normalize_name(s.get('name')) for s in _v39_subs_for_day(day)}
+        missing = [p for p in PARTICIPANTS if normalize_name(p) not in got]
+        await q.edit_message_text(f"❌ الناقصين — اليوم {day}\n" + ('\n'.join([f'- {x}' for x in missing]) if missing else 'لا يوجد ناقصين ✅'), reply_markup=_v39_fantasy_keyboard(update)); return
+    if action == 'admin_status' and is_admin_user(update):
+        await q.edit_message_text('🔒 حالة التسجيل\n\nالأيام المتاحة للتسجيل من البوت: 13 إلى 18\nالقفل اليدوي يبقى عبر أوامر قفل/فتح اليوم الموجودة.', reply_markup=_v39_fantasy_keyboard(update)); return
+    if action == 'admin_export' and is_admin_user(update):
+        try:
+            from openpyxl import Workbook
+            wb = Workbook(); ws = wb.active; ws.title = 'Fantasy Submissions'
+            headers = ['اليوم','الاسم','الحارس','اللاعب 1','اللاعب 2','اللاعب 3','الكابتن','وقت التسجيل','user_id']
+            ws.append(headers)
+            for s in _v39_load_submissions().get('submissions') or []:
+                ws.append([s.get('day'),s.get('name'),s.get('keeper'),s.get('player1'),s.get('player2'),s.get('player3'),s.get('captain'),s.get('time'),s.get('user_id')])
+            path = os.path.join(GENERATED_DIR if 'GENERATED_DIR' in globals() else '.', f'fantasy_submissions_{int(time.time())}.xlsx')
+            wb.save(path)
+            await q.message.reply_document(document=open(path, 'rb'), filename=os.path.basename(path), caption='📤 تصدير مشاركات الفانتزي')
             return
-        context.user_data['fantasy_waiting_lineup'] = False
-        await update.message.reply_text(_v38h_confirm_text(day, old), reply_markup=_v38h_confirm_kb(day))
-        return
-    if txt == '🏆 هدافين البطولة':
-        await _v38h_send_top_scorers(update.message); return
-    if txt == '✅ كيف تتأهل؟':
-        _v33_set_waiting_state(context, 'how')
-        await update.message.reply_text(_v33_how_start_text(), reply_markup=_public_main_reply_keyboard()); return
-    waiting_state = _v33_get_waiting_state(context) if '_v33_get_waiting_state' in globals() else ((context.user_data or {}).get('v33_state') or (context.user_data or {}).get('state'))
-    if waiting_state == 'how':
-        team = _v33_find_team(txt) or (_v32_find_team(txt) if '_v32_find_team' in globals() else None)
-        if team:
-            try:
-                _v33_clear_waiting_state(context)
-            except Exception:
-                try: context.user_data.pop('v33_waiting', None); context.user_data.pop('v33_state', None); context.user_data.pop('state', None)
-                except Exception: pass
-            await _v38h_send_how_for_team(update.message, team); return
-    if _V38H_PREV_PUBLIC_REPLY:
-        return await _V38H_PREV_PUBLIC_REPLY(update, context)
+        except Exception as e:
+            await q.edit_message_text(f'تعذر التصدير ❌\n{str(e)[:200]}', reply_markup=_v39_fantasy_keyboard(update)); return
+    if _V39_PREV_FANTASY_MENU_CALLBACK:
+        return await _V39_PREV_FANTASY_MENU_CALLBACK(update, context)
 
 
 try:
-    _V38H_PREV_PUBLIC_MENU = public_menu_callback
+    _V39_PREV_PUBLIC_MENU_CALLBACK = public_menu_callback
 except Exception:
-    _V38H_PREV_PUBLIC_MENU = None
+    _V39_PREV_PUBLIC_MENU_CALLBACK = None
 async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if not q: return
-    _v38h_track_user(update)
+    try: _v38e_track_user(update)
+    except Exception: pass
     data = q.data or ''
     if data == 'mainmenu|scorers':
-        try: await q.answer('🔄 ESPN Match Summary...', show_alert=False)
+        try: await q.answer('🔄 ESPN byathlete...', show_alert=False)
         except Exception: pass
-        await _v38h_send_top_scorers(q.message); return
-    if _V38H_PREV_PUBLIC_MENU:
-        return await _V38H_PREV_PUBLIC_MENU(update, context)
+        await _v39_send_top_scorers(q.message); return
+    if data in ('v32|board', 'mainmenu|board'):
+        try: await q.answer()
+        except Exception: pass
+        await q.edit_message_text(_v39_board_text(False), reply_markup=_v32_board_keyboard()); return
+    if data == 'mainmenu|fantasy':
+        try: await q.answer()
+        except Exception: pass
+        await q.edit_message_text('🎮 فانتزي المصيف', reply_markup=_v39_fantasy_keyboard(update)); return
+    if _V39_PREV_PUBLIC_MENU_CALLBACK:
+        return await _V39_PREV_PUBLIC_MENU_CALLBACK(update, context)
 
 
 try:
-    _V38H_PREV_GROUPS_MENU = groups_menu_callback
+    _V39_PREV_V32_CALLBACK = v32_callback
 except Exception:
-    _V38H_PREV_GROUPS_MENU = None
-async def groups_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q: return
-    if (q.data or '') == 'grp|scorers':
-        try: await q.answer('🔄 ESPN Match Summary...', show_alert=False)
-        except Exception: pass
-        await _v38h_send_top_scorers(q.message); return
-    if _V38H_PREV_GROUPS_MENU:
-        return await _V38H_PREV_GROUPS_MENU(update, context)
-
-
-try:
-    _V38H_PREV_V32_CALLBACK = v32_callback
-except Exception:
-    _V38H_PREV_V32_CALLBACK = None
+    _V39_PREV_V32_CALLBACK = None
 async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if not q: return
-    _v38h_track_user(update)
-    parts = (q.data or '').split('|')
-    action = parts[1] if len(parts)>1 else ''
-    if action == 'needs_team' and len(parts)>=3:
-        try: await q.answer()
-        except Exception: pass
-        team = _v33_team_from_button_key(parts[2]) or _v33_find_team(parts[2])
-        await q.message.reply_text(_v38h_team_info_wait_text())
-        await _v38h_send_how_for_team(q.message, team); return
-    if _V38H_PREV_V32_CALLBACK:
-        return await _V38H_PREV_V32_CALLBACK(update, context)
-
-
-try:
-    _V38H_PREV_ADMIN_KEYBOARD = _v38e_admin_keyboard
-except Exception:
-    _V38H_PREV_ADMIN_KEYBOARD = None
-def _v38e_admin_keyboard():
-    rows = []
-    if _V38H_PREV_ADMIN_KEYBOARD:
+    try: _v38e_track_user(update)
+    except Exception: pass
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    try: await q.answer()
+    except Exception: pass
+    if action == 'board':
+        await q.edit_message_text(_v39_board_text(False), reply_markup=_v32_board_keyboard()); return
+    if action == 'board_force':
+        await q.edit_message_text('🔄 جاري تحديث بيانات البطولة...')
+        parts_report = []
         try:
-            # لا يمكن استخراج rows بسهولة من InlineKeyboardMarkup في كل النسخ، نبني الموثوق.
-            pass
-        except Exception:
-            pass
-    try:
-        auth_count = len((_v32_load_fantasy_access().get('users') or {})) if '_v32_load_fantasy_access' in globals() else 0
-    except Exception:
-        auth_count = 0
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👥 عدد المستخدمين", callback_data="v32adm|count"), InlineKeyboardButton("🆕 آخر المستخدمين", callback_data="v32adm|last_users")],
-        [InlineKeyboardButton("📢 رسالة جماعية", callback_data="v32adm|broadcast"), InlineKeyboardButton("⚠️ مركز التنبيهات", callback_data="v32adm|alerts")],
-        [InlineKeyboardButton(f"👥 مصرحين الفانتزي: {auth_count}", callback_data="v32adm|fantasy_auth_count"), InlineKeyboardButton("🔑 رمز الفانتزي", callback_data="v32adm|fantasy_code")],
-        [InlineKeyboardButton("📋 مشاركات اليوم", callback_data="fantasy|subs_menu"), InlineKeyboardButton("❌ الناقصين", callback_data="fantasy|missing_menu")],
-        [InlineKeyboardButton("📤 تصدير المشاركات Excel", callback_data="fantasy|export_menu"), InlineKeyboardButton("🔒 حالة التسجيل", callback_data="fantasy|submit_start")],
-        [InlineKeyboardButton("🔄 تحديث بيانات البطولة", callback_data="v32adm|refresh")],
-    ])
+            txt = await asyncio.wait_for(asyncio.to_thread(_v39_board_text, True), timeout=90)
+            parts_report.append('✅ لوحة البطولة: تم')
+        except Exception as e:
+            txt = f'تعذر تحديث لوحة البطولة مؤقتًا.\n{str(e)[:180]}'
+            parts_report.append('❌ لوحة البطولة: تعذر')
+        try: fetch_espn_top_scorers(True); parts_report.append('✅ الهدافين: تم')
+        except Exception: parts_report.append('❌ الهدافين: تعذر')
+        report = '\n'.join(parts_report)
+        await q.edit_message_text(f'{txt}\n\n{report}', reply_markup=_v32_board_keyboard()); return
+    if action == 'thirds':
+        await q.edit_message_text(_v32_best_thirds_text(False), reply_markup=_v32_board_keyboard()); return
+    if action == 'qualified':
+        teams = _v32_calculated_qualified()
+        lines = ['✅ المتأهلون رسميًا', '']
+        if not teams: lines.append('لا يوجد حتى الآن.')
+        for t in teams:
+            lab = _v39_status_label_for_team(t)
+            lines.append(f'- {t}' + (f' — {lab}' if lab else ''))
+        await q.edit_message_text('\n'.join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]])); return
+    if action == 'eliminated':
+        teams = _v32_calculated_eliminated()
+        lines = ['❌ المستبعدون رسميًا', '']
+        if not teams: lines.append('لا يوجد حتى الآن.')
+        for t in teams:
+            lines.append(f'- {t} — ❌ مستبعد رسميًا')
+        await q.edit_message_text('\n'.join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]])); return
+    if action == 'how_thirds' and len(parts) >= 3:
+        team = _v33_team_from_button_key(parts[2])
+        await q.edit_message_text(_v33_how_thirds_text(team), reply_markup=_v33_how_qualify_keyboard(team)); return
+    if action == 'opp_all' and len(parts) >= 3:
+        team = _v33_team_from_button_key(parts[2])
+        await q.edit_message_text(_v33_all_opponents_text(team), reply_markup=_v33_how_qualify_keyboard(team)); return
+    if action == 'opp_group' and len(parts) >= 3:
+        team = _v33_team_from_button_key(parts[2])
+        await q.edit_message_text(_v38e_opponent_group_details_text(team), reply_markup=_v33_how_qualify_keyboard(team)); return
+    if action == 'fantasy_gate':
+        await q.edit_message_text('🎮 فانتزي المصيف', reply_markup=_v39_fantasy_keyboard(update)); return
+    if _V39_PREV_V32_CALLBACK:
+        return await _V39_PREV_V32_CALLBACK(update, context)
 
 
 try:
-    _V38H_PREV_ADMIN_CALLBACK = v32_admin_callback
+    _V39_PREV_GROUPS_MENU_CALLBACK = groups_menu_callback
 except Exception:
-    _V38H_PREV_ADMIN_CALLBACK = None
+    _V39_PREV_GROUPS_MENU_CALLBACK = None
+async def groups_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q: return
+    data = q.data or ''
+    if data == 'grp|scorers':
+        try: await q.answer('🔄 ESPN byathlete...', show_alert=False)
+        except Exception: pass
+        await _v39_send_top_scorers(q.message); return
+    if _V39_PREV_GROUPS_MENU_CALLBACK:
+        return await _V39_PREV_GROUPS_MENU_CALLBACK(update, context)
+
+
+try:
+    _V39_PREV_ADMIN_CALLBACK = v32_admin_callback
+except Exception:
+    _V39_PREV_ADMIN_CALLBACK = None
 async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if not q: return
-    _v38h_track_user(update)
     try: await q.answer()
     except Exception: pass
     if not is_admin_user(update):
-        await q.message.reply_text("هذا الخيار للمشرفين فقط 🔒"); return
-    parts=(q.data or '').split('|'); action=parts[1] if len(parts)>1 else ''
+        await q.message.reply_text('هذا الخيار للمشرفين فقط 🔒'); return
+    parts = (q.data or '').split('|')
+    action = parts[1] if len(parts) > 1 else ''
     if action == 'refresh':
-        await _v38h_admin_refresh(q); return
-    if action == 'panel':
-        await q.edit_message_text(f"🧑‍💻 لوحة المشرف\n\n{_v38h_users_count_text()}\nاختر العملية:", reply_markup=_v38e_admin_keyboard()); return
-    if action == 'count':
-        await q.edit_message_text(_v38h_users_count_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="v32adm|panel")]])); return
-    if action == 'last_users':
-        await q.edit_message_text(_v38h_last_users_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="v32adm|panel")]])); return
-    if _V38H_PREV_ADMIN_CALLBACK:
-        return await _V38H_PREV_ADMIN_CALLBACK(update, context)
+        await q.edit_message_text('🔄 جاري تحديث بيانات البطولة...')
+        report = []
+        try:
+            await asyncio.wait_for(asyncio.to_thread(_v33_snapshot, True), timeout=90)
+            report.append('✅ ترتيب المجموعات/سباق التأهل: تم')
+        except Exception as e:
+            report.append(f'❌ ترتيب المجموعات/سباق التأهل: تعذر ({str(e)[:60]})')
+        try:
+            await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=60)
+            report.append('✅ الهدافين: تم')
+        except Exception as e:
+            report.append(f'❌ الهدافين: تعذر ({str(e)[:60]})')
+        try:
+            await asyncio.wait_for(asyncio.to_thread(_v32_best_thirds_text, True), timeout=90)
+            report.append('✅ أفضل الثوالث: تم')
+        except Exception as e:
+            report.append(f'❌ أفضل الثوالث: تعذر ({str(e)[:60]})')
+        try:
+            board = await asyncio.wait_for(asyncio.to_thread(_v39_board_text, True), timeout=90)
+            report.append('✅ لوحة البطولة: تم')
+        except Exception:
+            board = '🏆 لوحة البطولة'
+            report.append('❌ لوحة البطولة: تعذر')
+        await q.edit_message_text(board + '\n\n' + '\n'.join(report), reply_markup=_v38e_admin_keyboard() if '_v38e_admin_keyboard' in globals() else None)
+        return
+    if _V39_PREV_ADMIN_CALLBACK:
+        return await _V39_PREV_ADMIN_CALLBACK(update, context)
 
-# ==================== END V38H FINAL AGREEMENT PATCH ====================
+# ==================== END V39 ALL AGREED FIXES — FAHAD ====================
 
 
 if __name__ == "__main__":
