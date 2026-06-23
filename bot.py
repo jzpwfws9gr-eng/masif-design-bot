@@ -13822,6 +13822,12 @@ def main():
     except Exception:
         pass
 
+    # V59 — حالة التحديث للأدمن فقط
+    try:
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:حالة_التحديث|حالة\s+التحديث|update_status)(?:\s|$)"), admin_only(v59_update_status_command)))
+    except Exception:
+        pass
+
     app.run_polling()
 
 
@@ -53852,6 +53858,511 @@ async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return await _V58_PREV_LIVE_TODAY_CALLBACK(update, context)
 
 # ==================== END V58 FINAL CACHE/UPDATES + WATCH-TIME PATCH — FAHAD ====================
+
+
+# ==================== V59 AUTOMATION SAFE STARTUP + ADMIN PROGRESS — FAHAD ====================
+# اعتماد فهد:
+# - لا نوقف التحديثات التلقائية.
+# - لا نلمس ترتيب المجموعات ولا الفانتزي.
+# - البوت يرد من الكاش فورًا، والتحديث يشتغل بالخلفية.
+# - ممنوع تداخل تحديث فوق تحديث.
+# - رسائل حالة التحديث والنسبة للأدمن فقط.
+
+V59_PATCH_NAME = "V59_AUTOMATION_SAFE_STARTUP_ADMIN_PROGRESS"
+V59_UPDATE_STATE = {
+    'running': False,
+    'started_ts': 0.0,
+    'started_at': '',
+    'last_success_ts': 0.0,
+    'last_success_at': '',
+    'phase': 'جاهز',
+    'percent': 0,
+    'reason': '',
+    'error': '',
+    'skipped': 0,
+    'next_expected_ts': 0.0,
+}
+V59_UPDATE_TASK = None
+V59_ADMIN_PROGRESS_MESSAGE = {'chat_id': None, 'message_id': None}
+V59_ADMIN_CHATS = set()
+
+
+def _v59_now():
+    try:
+        return _v58_now_makkah()
+    except Exception:
+        try:
+            return _v49_now_makkah_str()
+        except Exception:
+            return datetime.now().strftime('%Y-%m-%d %H:%M')
+
+
+def _v59_fmt_elapsed(seconds):
+    try:
+        seconds = int(max(0, seconds))
+        m, s = divmod(seconds, 60)
+        h, m = divmod(m, 60)
+        if h:
+            return f'{h}س {m}د'
+        if m:
+            return f'{m}د {s}ث'
+        return f'{s}ث'
+    except Exception:
+        return '-'
+
+
+def _v59_user_id_is_admin(user_id):
+    try:
+        ids = admin_id_set() if 'admin_id_set' in globals() else set()
+        if ids:
+            return int(user_id) in ids
+    except Exception:
+        pass
+    return False
+
+
+def _v59_update_is_admin(update):
+    try:
+        if 'is_admin_user' in globals() and is_admin_user(update):
+            return True
+    except Exception:
+        pass
+    try:
+        u = getattr(update, 'effective_user', None)
+        return bool(u and _v59_user_id_is_admin(u.id))
+    except Exception:
+        return False
+
+
+def _v59_register_admin_chat(update=None, chat_id=None):
+    try:
+        if chat_id:
+            V59_ADMIN_CHATS.add(int(chat_id))
+    except Exception:
+        pass
+    try:
+        if update is not None and _v59_update_is_admin(update):
+            ch = getattr(update, 'effective_chat', None)
+            if ch and ch.id:
+                V59_ADMIN_CHATS.add(int(ch.id))
+    except Exception:
+        pass
+
+
+def _v59_admin_chat_ids(extra_chat_id=None):
+    ids = set()
+    for env_name in ('V51_ADMIN_NOTIFY_CHAT_ID', 'ADMIN_NOTIFY_CHAT_ID'):
+        try:
+            raw = os.environ.get(env_name) or ''
+            if raw.strip():
+                ids.add(int(raw.strip()))
+        except Exception:
+            pass
+    try:
+        for x in (admin_id_set() if 'admin_id_set' in globals() else set()):
+            ids.add(int(x))
+    except Exception:
+        pass
+    try:
+        for x in list(V59_ADMIN_CHATS):
+            ids.add(int(x))
+    except Exception:
+        pass
+    try:
+        if extra_chat_id:
+            ids.add(int(extra_chat_id))
+    except Exception:
+        pass
+    return [x for x in ids if x]
+
+
+def _v59_progress_text(extra=''):
+    running = bool(V59_UPDATE_STATE.get('running'))
+    pct = int(V59_UPDATE_STATE.get('percent') or 0)
+    phase = str(V59_UPDATE_STATE.get('phase') or '-')
+    started_ts = float(V59_UPDATE_STATE.get('started_ts') or 0)
+    elapsed = _v59_fmt_elapsed(time.time() - started_ts) if started_ts else '-'
+    last_success = V59_UPDATE_STATE.get('last_success_at') or '-'
+    next_ts = float(V59_UPDATE_STATE.get('next_expected_ts') or 0)
+    nxt = '-'
+    try:
+        if next_ts:
+            nxt = datetime.fromtimestamp(next_ts).strftime('%H:%M:%S')
+    except Exception:
+        pass
+    status = 'يعمل بالخلفية' if running else 'جاهز'
+    skipped = int(V59_UPDATE_STATE.get('skipped') or 0)
+    err = V59_UPDATE_STATE.get('error') or ''
+    remaining = []
+    if pct < 25: remaining.append('تحديث كاش المباريات')
+    if pct < 40: remaining.append('بناء لوحة البطولة')
+    if pct < 55: remaining.append('حفظ الكاش')
+    if pct < 70: remaining.append('تحديث الرسائل الحية')
+    if pct < 85: remaining.append('مراجعة احتمالات المغادرة إن كانت تعمل')
+    body = [
+        '⏱️ حالة تحديث البوت',
+        '',
+        f'الحالة: {status}',
+        f'النسبة التقريبية: {pct}%',
+        f'المرحلة الحالية: {phase}',
+        f'بدأ منذ: {elapsed}',
+        f'آخر تحديث ناجح: {last_success}',
+        f'التحديث القادم المتوقع: {nxt}',
+    ]
+    if running and remaining:
+        body += ['', 'المتبقي تقريبًا:', *[f'- {x}' for x in remaining[:4]]]
+    if skipped:
+        body += ['', f'⏳ تم تخطي {skipped} تحديث/تحديثات بسبب وجود تحديث شغال.']
+    if err:
+        body += ['', f'⚠️ آخر ملاحظة: {err[:180]}']
+    if extra:
+        body += ['', str(extra)]
+    return '\n'.join(body).strip()
+
+
+async def _v59_admin_progress(context, extra_chat_id=None, extra_text=''):
+    ids = _v59_admin_chat_ids(extra_chat_id)
+    if not ids:
+        return
+    text = _v59_progress_text(extra_text)
+    # رسالة واحدة للأدمن يتم تعديلها بدل إرسال رسائل كثيرة.
+    for chat_id in ids[:5]:
+        try:
+            if (V59_ADMIN_PROGRESS_MESSAGE.get('chat_id') == chat_id and V59_ADMIN_PROGRESS_MESSAGE.get('message_id')):
+                try:
+                    await context.bot.edit_message_text(chat_id=chat_id, message_id=V59_ADMIN_PROGRESS_MESSAGE['message_id'], text=text)
+                    continue
+                except Exception:
+                    pass
+            msg = await context.bot.send_message(chat_id=chat_id, text=text)
+            V59_ADMIN_PROGRESS_MESSAGE.update({'chat_id': chat_id, 'message_id': msg.message_id})
+        except Exception:
+            pass
+
+
+async def _v59_set_progress(context, percent, phase, extra_chat_id=None, extra_text=''):
+    V59_UPDATE_STATE['percent'] = int(percent)
+    V59_UPDATE_STATE['phase'] = str(phase)
+    try:
+        await _v59_admin_progress(context, extra_chat_id=extra_chat_id, extra_text=extra_text)
+    except Exception:
+        pass
+
+
+def _v59_is_update_running():
+    try:
+        return bool(V59_UPDATE_STATE.get('running')) or bool(V59_UPDATE_TASK and not V59_UPDATE_TASK.done())
+    except Exception:
+        return bool(V59_UPDATE_STATE.get('running'))
+
+
+async def _v59_master_refresh_task(context, chat_id=None, notify=False, reason='auto'):
+    global V59_UPDATE_TASK
+    V59_UPDATE_STATE.update({
+        'running': True,
+        'started_ts': time.time(),
+        'started_at': _v59_now(),
+        'phase': 'بدء التحديث',
+        'percent': 3,
+        'reason': str(reason or ''),
+        'error': '',
+        'next_expected_ts': time.time() + 120,
+    })
+    _v59_register_admin_chat(chat_id=chat_id if notify else None)
+    try:
+        await _v59_set_progress(context, 5, 'تشغيل التحديث بالخلفية', extra_chat_id=chat_id if notify else None)
+        active = _v58_safe_active_live_date() if '_v58_safe_active_live_date' in globals() else (_v32_today_key() if '_v32_today_key' in globals() else '')
+
+        await _v59_set_progress(context, 10, 'سحب النتائج المباشرة', extra_chat_id=chat_id if notify else None)
+        updated, dbg = 0, []
+        try:
+            if '_v58_update_live_day_async' in globals():
+                updated, dbg = await _v58_update_live_day_async(active, force=True, timeout=45)
+        except Exception as e:
+            V59_UPDATE_STATE['error'] = f'تحديث مباشر الآن: {type(e).__name__}'
+
+        await _v59_set_progress(context, 25, 'تحديث كاش المباريات والمباشر', extra_chat_id=chat_id if notify else None)
+        await asyncio.sleep(0)
+
+        await _v59_set_progress(context, 40, 'بناء لوحة البطولة من الكاش', extra_chat_id=chat_id if notify else None)
+        txt = ''
+        try:
+            if '_v58_board_text_from_current_cache' in globals():
+                txt = await asyncio.wait_for(asyncio.to_thread(_v58_board_text_from_current_cache), timeout=18)
+            elif '_v55_board_cached_text_or_pending' in globals():
+                txt = _v55_board_cached_text_or_pending()
+        except Exception as e:
+            V59_UPDATE_STATE['error'] = f'بناء لوحة البطولة: {type(e).__name__}'
+
+        await _v59_set_progress(context, 55, 'حفظ كاش لوحة البطولة', extra_chat_id=chat_id if notify else None)
+        if str(txt or '').strip() and '_v55_save_board_cache' in globals():
+            try:
+                _v55_save_board_cache(txt, {'source': 'v59_master_refresh', 'live_updated': int(updated or 0), 'live_date': active, 'debug': list(dbg or [])[-5:]})
+            except Exception as e:
+                V59_UPDATE_STATE['error'] = f'حفظ كاش اللوحة: {type(e).__name__}'
+
+        await _v59_set_progress(context, 70, 'تحديث رسائل مباشر الآن من نفس الكاش', extra_chat_id=chat_id if notify else None)
+        try:
+            tracked = globals().get('V49_LIVE_TRACKED_MESSAGES') or {}
+            if active and tracked and '_v29_live_today_text' in globals() and '_v29_live_today_keyboard' in globals():
+                text = _v29_live_today_text(active)
+                kb = _v29_live_today_keyboard(active)
+                now_ts = time.time()
+                for key, info in list(tracked.items()):
+                    try:
+                        c_id, m_id = key
+                        if now_ts - float(info.get('ts') or 0) > 14 * 3600:
+                            tracked.pop(key, None); continue
+                        await context.bot.edit_message_text(chat_id=c_id, message_id=m_id, text=text, reply_markup=kb)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        await _v59_set_progress(context, 85, 'احتمالات المغادرة مستقلة ولا تعطل الباقي', extra_chat_id=chat_id if notify else None)
+        try:
+            # لا نبدأ حساب احتمالات المغادرة هنا. تحديثها التلقائي/اليدوي يبقى مستقل كما هو.
+            if globals().get('V48_EXIT_UPDATE_TASK') and not V48_EXIT_UPDATE_TASK.done():
+                V59_UPDATE_STATE['error'] = 'احتمالات المغادرة تعمل بالخلفية بشكل مستقل'
+        except Exception:
+            pass
+
+        V59_UPDATE_STATE.update({'last_success_ts': time.time(), 'last_success_at': _v59_now(), 'error': ''})
+        await _v59_set_progress(context, 100, 'اكتمل التحديث وحُفظ الكاش', extra_chat_id=chat_id if notify else None)
+        if notify and chat_id:
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=f'✅ اكتمل تحديث بيانات البطولة.\nآخر تحديث ناجح: {V59_UPDATE_STATE.get("last_success_at") or _v59_now()}')
+            except Exception:
+                pass
+    except Exception as e:
+        V59_UPDATE_STATE['error'] = f'{type(e).__name__}: {str(e)[:160]}'
+        try:
+            await _v59_admin_progress(context, extra_chat_id=chat_id if notify else None, extra_text='تم الإبقاء على آخر كاش محفوظ.')
+        except Exception:
+            pass
+    finally:
+        V59_UPDATE_STATE['running'] = False
+        V59_UPDATE_STATE['next_expected_ts'] = time.time() + 120
+        try:
+            await _v59_admin_progress(context, extra_chat_id=chat_id if notify else None)
+        except Exception:
+            pass
+        V59_UPDATE_TASK = None
+        try:
+            globals()['V55_BOARD_REFRESH_TASK'] = None
+            globals()['V55_BOARD_REFRESH_STARTED_AT'] = ''
+        except Exception:
+            pass
+
+
+def _v59_schedule_master_refresh(context, chat_id=None, notify=False, reason='auto'):
+    global V59_UPDATE_TASK
+    if _v59_is_update_running():
+        V59_UPDATE_STATE['skipped'] = int(V59_UPDATE_STATE.get('skipped') or 0) + 1
+        try:
+            if notify and chat_id:
+                context.application.create_task(_v59_admin_progress(context, extra_chat_id=chat_id, extra_text='⏳ لم يبدأ تحديث جديد لأن تحديثًا آخر يعمل حاليًا.'))
+        except Exception:
+            pass
+        return False
+    try:
+        V59_UPDATE_TASK = context.application.create_task(_v59_master_refresh_task(context, chat_id=chat_id, notify=notify, reason=reason))
+    except Exception:
+        V59_UPDATE_TASK = asyncio.create_task(_v59_master_refresh_task(context, chat_id=chat_id, notify=notify, reason=reason))
+    return True
+
+
+# اجعل جدولة لوحة البطولة تستخدم أوتوميشن V59 الآمن.
+def _v55_schedule_board_refresh(context, chat_id=None, notify=False):
+    try:
+        if notify:
+            _v59_register_admin_chat(chat_id=chat_id)
+    except Exception:
+        pass
+    return _v59_schedule_master_refresh(context, chat_id=chat_id, notify=notify, reason='board')
+
+
+# مباشر الآن: لا ينتظر التحديث قبل الرد. يعرض الكاش فورًا ويشغل تحديثًا بالخلفية.
+async def v49_live_auto_refresh_job(context):
+    try:
+        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
+            return
+    except Exception:
+        pass
+    _v59_schedule_master_refresh(context, notify=False, reason='auto_2min')
+    # تحديث الرسائل المتتبعة من آخر كاش فورًا، بدون انتظار التحديث الجديد.
+    try:
+        active = _v58_safe_active_live_date() if '_v58_safe_active_live_date' in globals() else ''
+        tracked = globals().get('V49_LIVE_TRACKED_MESSAGES') or {}
+        if active and tracked and '_v29_live_today_text' in globals() and '_v29_live_today_keyboard' in globals():
+            text = _v29_live_today_text(active)
+            kb = _v29_live_today_keyboard(active)
+            now_ts = time.time()
+            for key, info in list(tracked.items()):
+                try:
+                    c_id, m_id = key
+                    if now_ts - float(info.get('ts') or 0) > 14 * 3600:
+                        tracked.pop(key, None); continue
+                    await context.bot.edit_message_text(chat_id=c_id, message_id=m_id, text=text, reply_markup=kb)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+async def v59_update_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _v59_register_admin_chat(update)
+    try:
+        await update.effective_message.reply_text(_v59_progress_text())
+    except Exception:
+        pass
+
+
+_V59_PREV_START = globals().get('start')
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v59_register_admin_chat(update)
+    except Exception:
+        pass
+    if callable(_V59_PREV_START):
+        return await _V59_PREV_START(update, context)
+
+
+_V59_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _v561_raw_text(update) if '_v561_raw_text' in globals() else str((update.effective_message.text if update.effective_message else '') or '').strip()
+    try:
+        if _v59_update_is_admin(update):
+            _v59_register_admin_chat(update)
+    except Exception:
+        pass
+    if str(raw).strip() == '📺 مباشر الآن':
+        active = _v58_safe_active_live_date() if '_v58_safe_active_live_date' in globals() else ''
+        # عرض فوري من الكاش ثم جدولة تحديث بالخلفية إذا كان الكاش قديمًا.
+        msg = await update.effective_message.reply_text(_v29_live_today_text(active), reply_markup=_v29_live_today_keyboard(active))
+        try:
+            _v49_track_live_message(msg, active)
+        except Exception:
+            pass
+        try:
+            if active and ('_v58_live_snapshot_is_fresh' not in globals() or not _v58_live_snapshot_is_fresh(active, max_age=110)):
+                _v59_schedule_master_refresh(context, chat_id=update.effective_chat.id if _v59_update_is_admin(update) else None, notify=_v59_update_is_admin(update), reason='live_button')
+        except Exception:
+            pass
+        return
+    if '_v561_is_board_text' in globals() and _v561_is_board_text(raw):
+        await update.effective_message.reply_text(_v562_board_text_for_user() if '_v562_board_text_for_user' in globals() else _v55_board_cached_text_or_pending(), reply_markup=_v32_board_keyboard())
+        try:
+            _v59_schedule_master_refresh(context, chat_id=update.effective_chat.id if _v59_update_is_admin(update) else None, notify=False, reason='board_open')
+        except Exception:
+            pass
+        return
+    if callable(_V59_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V59_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V59_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    try:
+        if _v59_update_is_admin(update):
+            _v59_register_admin_chat(update)
+    except Exception:
+        pass
+    if data == 'mainmenu|live':
+        try: await q.answer()
+        except Exception: pass
+        active = _v58_safe_active_live_date() if '_v58_safe_active_live_date' in globals() else ''
+        try:
+            await q.edit_message_text(_v29_live_today_text(active), reply_markup=_v29_live_today_keyboard(active))
+            try: _v49_track_live_message(q.message, active)
+            except Exception: pass
+        except Exception:
+            msg = await q.message.reply_text(_v29_live_today_text(active), reply_markup=_v29_live_today_keyboard(active))
+            try: _v49_track_live_message(msg, active)
+            except Exception: pass
+        try:
+            if active and ('_v58_live_snapshot_is_fresh' not in globals() or not _v58_live_snapshot_is_fresh(active, max_age=110)):
+                _v59_schedule_master_refresh(context, chat_id=q.message.chat_id if (_v59_update_is_admin(update) and q.message) else None, notify=_v59_update_is_admin(update), reason='live_callback')
+        except Exception:
+            pass
+        return
+    if data in ('mainmenu|board', 'v32|board'):
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v562_board_text_for_user() if '_v562_board_text_for_user' in globals() else _v55_board_cached_text_or_pending(), reply_markup=_v32_board_keyboard())
+        except Exception:
+            await q.message.reply_text(_v562_board_text_for_user() if '_v562_board_text_for_user' in globals() else _v55_board_cached_text_or_pending(), reply_markup=_v32_board_keyboard())
+        try:
+            _v59_schedule_master_refresh(context, chat_id=q.message.chat_id if q.message else None, notify=False, reason='board_open')
+        except Exception:
+            pass
+        return
+    if callable(_V59_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V59_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+_V59_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'board_force':
+        try: await q.answer()
+        except Exception: pass
+        try:
+            if _v59_update_is_admin(update):
+                _v59_register_admin_chat(update)
+        except Exception:
+            pass
+        if _v59_schedule_master_refresh(context, chat_id=q.message.chat_id if q.message else None, notify=_v59_update_is_admin(update), reason='manual_board_force'):
+            await q.message.reply_text('🔄 بدأ تحديث بيانات البطولة بالخلفية.\nتقدر تستخدم البوت طبيعي، وسيتم عرض التقدم لك أنت فقط إذا كنت مشرفًا.')
+        else:
+            await q.message.reply_text('⏳ يوجد تحديث شغال حاليًا.\nتم عرض آخر كاش محفوظ، وسيتم تخطي التحديث الجديد حتى لا تتداخل التحديثات.')
+        return
+    if callable(_V59_PREV_V32_CALLBACK):
+        return await _V59_PREV_V32_CALLBACK(update, context)
+
+
+_V59_PREV_LIVE_TODAY_CALLBACK = globals().get('live_today_callback')
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    try: await q.answer()
+    except Exception: pass
+    try:
+        if _v59_update_is_admin(update):
+            _v59_register_admin_chat(update)
+    except Exception:
+        pass
+    if data == 'noop':
+        return
+    if len(parts) >= 3 and parts[0] == 'livefx' and parts[1] == 'refreshday':
+        d = _normalize_date_arg(parts[2]) if '_normalize_date_arg' in globals() else parts[2]
+        try:
+            await q.message.edit_text('🔄 بدأ تحديث مباشر الآن بالخلفية.\nتم عرض آخر نسخة محفوظة، وستتحدث الرسالة بعد اكتمال التحديث.', reply_markup=None)
+        except Exception:
+            pass
+        _v59_schedule_master_refresh(context, chat_id=q.message.chat_id if q.message else None, notify=_v59_update_is_admin(update), reason='manual_live_refresh')
+        try:
+            await q.message.reply_text(_v29_live_today_text(d), reply_markup=_v29_live_today_keyboard(d))
+        except Exception:
+            pass
+        return
+    if callable(_V59_PREV_LIVE_TODAY_CALLBACK):
+        return await _V59_PREV_LIVE_TODAY_CALLBACK(update, context)
+
+# ==================== END V59 AUTOMATION SAFE STARTUP + ADMIN PROGRESS — FAHAD ====================
 
 if __name__ == "__main__":
     main()
