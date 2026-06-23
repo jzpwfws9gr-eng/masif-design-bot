@@ -32,7 +32,6 @@ def main():
         fn = getattr(mod, "_v48_update_exit_probabilities_all", None)
         if not callable(fn):
             raise RuntimeError("_v48_update_exit_probabilities_all not found in bot module")
-        # ensure cache path inside bot module points to requested path
         try:
             setattr(mod, "V48_EXIT_PROB_CACHE_FILE", args.cache)
         except Exception:
