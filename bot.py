@@ -52196,5 +52196,198 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V56.1 HOTFIX — FAHAD ====================
 
+
+
+# ==================== V56.2 HOTFIX — FAHAD ====================
+# إرجاع التحديث التلقائي للوحة البطولة:
+# - عند فتح لوحة البطولة: يعرض الكاش فورًا + يشغل تحديث بالخلفية بدون تعليق.
+# - زر تحديث الآن: تحديث إجباري بالخلفية مع إشعار عند الانتهاء.
+# - الجوب القديم كل دقيقتين يبقى كما هو داخل نافذة المتابعة.
+# - باقي إصلاح V56.1 للأزرار يبقى موجود.
+
+def _v562_chat_id(update):
+    try:
+        return update.effective_chat.id if update.effective_chat else None
+    except Exception:
+        try:
+            return update.callback_query.message.chat_id
+        except Exception:
+            return None
+
+def _v562_board_text_for_user():
+    if '_v55_board_cached_text_or_pending' in globals():
+        return _v55_board_cached_text_or_pending()
+    if '_v50_board_text' in globals():
+        try:
+            return _v50_board_text(False)
+        except Exception:
+            pass
+    return '🏆 لوحة البطولة\nجاري تجهيز لوحة البطولة لأول مرة...\n\n⏳ التحديث يعمل بالخلفية، جرّب بعد قليل.'
+
+def _v562_schedule_board_auto(context, chat_id=None):
+    # يرجع التحديث التلقائي، لكن بدون إرسال رسائل كثيرة للمستخدم.
+    try:
+        return _v55_schedule_board_refresh(context, chat_id=chat_id, notify=False)
+    except Exception:
+        return False
+
+_V562_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _v561_raw_text(update) if '_v561_raw_text' in globals() else str((update.effective_message.text if update.effective_message else '') or '').strip()
+    try:
+        _v54_clear_manual_top_scorers_waiting(context)
+    except Exception:
+        pass
+
+    if '_v561_is_board_text' in globals() and _v561_is_board_text(raw):
+        await update.effective_message.reply_text(_v562_board_text_for_user(), reply_markup=_v32_board_keyboard())
+        _v562_schedule_board_auto(context, chat_id=_v562_chat_id(update))
+        return
+
+    if '_v561_is_r32_text' in globals() and _v561_is_r32_text(raw):
+        await update.effective_message.reply_text(_v56_round32_text(), reply_markup=_v56_round32_keyboard())
+        return
+
+    if '_v561_is_watch_text' in globals() and _v561_is_watch_text(raw):
+        await update.effective_message.reply_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        return
+
+    if '_v561_is_stats_text' in globals() and _v561_is_stats_text(raw):
+        txt = _v55_stats_home_text() if '_v55_stats_home_text' in globals() else '📊 إحصائيات البطولة\nاختر القسم اللي تبيه:'
+        await update.effective_message.reply_text(txt, reply_markup=_v55_stats_keyboard())
+        return
+
+    if '_v561_is_qualified_text' in globals() and _v561_is_qualified_text(raw):
+        await update.effective_message.reply_text(_v56_qualified_text(), reply_markup=_v56_qualified_keyboard())
+        return
+
+    if '_v561_is_thirds_text' in globals() and _v561_is_thirds_text(raw):
+        await update.effective_message.reply_text(
+            _v32_best_thirds_text(),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔄 تحديث', callback_data='v32|thirds_force'), InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]])
+        )
+        return
+
+    if callable(_V562_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V562_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+_V562_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _v561_raw_text(update) if '_v561_raw_text' in globals() else str((update.effective_message.text if update.effective_message else '') or '').strip()
+    try:
+        _v54_clear_manual_top_scorers_waiting(context)
+    except Exception:
+        pass
+
+    if '_v561_is_board_text' in globals() and _v561_is_board_text(raw):
+        await update.effective_message.reply_text(_v562_board_text_for_user(), reply_markup=_v32_board_keyboard())
+        _v562_schedule_board_auto(context, chat_id=_v562_chat_id(update))
+        return
+
+    if '_v561_is_r32_text' in globals() and _v561_is_r32_text(raw):
+        await update.effective_message.reply_text(_v56_round32_text(), reply_markup=_v56_round32_keyboard())
+        return
+
+    if '_v561_is_watch_text' in globals() and _v561_is_watch_text(raw):
+        await update.effective_message.reply_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        return
+
+    if callable(_V562_PREV_TEXT_STATE_ROUTER):
+        return await _V562_PREV_TEXT_STATE_ROUTER(update, context)
+
+_V562_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    try: await q.answer()
+    except Exception: pass
+
+    if data in ('mainmenu|board', 'v32|board'):
+        try:
+            await q.edit_message_text(_v562_board_text_for_user(), reply_markup=_v32_board_keyboard())
+        except Exception:
+            await q.message.reply_text(_v562_board_text_for_user(), reply_markup=_v32_board_keyboard())
+        _v562_schedule_board_auto(context, chat_id=q.message.chat_id if q.message else None)
+        return
+
+    if data == 'mainmenu|r32matches':
+        try:
+            await q.edit_message_text(_v56_round32_text(), reply_markup=_v56_round32_keyboard())
+        except Exception:
+            await q.message.reply_text(_v56_round32_text(), reply_markup=_v56_round32_keyboard())
+        return
+
+    if data == 'mainmenu|watch_last_round':
+        try:
+            await q.edit_message_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        except Exception:
+            await q.message.reply_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        return
+
+    if callable(_V562_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V562_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+_V562_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+
+    if action == 'board':
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v562_board_text_for_user(), reply_markup=_v32_board_keyboard())
+        except Exception:
+            await q.message.reply_text(_v562_board_text_for_user(), reply_markup=_v32_board_keyboard())
+        _v562_schedule_board_auto(context, chat_id=q.message.chat_id if q.message else None)
+        return
+
+    if action == 'board_force':
+        try: await q.answer()
+        except Exception: pass
+        if _v55_schedule_board_refresh(context, chat_id=q.message.chat_id if q.message else None, notify=True):
+            await q.message.reply_text('🔄 بدأ تحديث لوحة البطولة بالخلفية.\nالبوت يعمل طبيعي، وسيصلك تأكيد عند الانتهاء.')
+        else:
+            await q.message.reply_text(f'⏳ تحديث لوحة البطولة شغال بالفعل من: {V55_BOARD_REFRESH_STARTED_AT or "-"}')
+        return
+
+    if action == 'qualified':
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v56_qualified_text(), reply_markup=_v56_qualified_keyboard())
+        except Exception:
+            await q.message.reply_text(_v56_qualified_text(), reply_markup=_v56_qualified_keyboard())
+        return
+
+    if action == 'r32matches':
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v56_round32_text(), reply_markup=_v56_round32_keyboard())
+        except Exception:
+            await q.message.reply_text(_v56_round32_text(), reply_markup=_v56_round32_keyboard())
+        return
+
+    if action == 'watch_last_round':
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        except Exception:
+            await q.message.reply_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        return
+
+    if callable(_V562_PREV_V32_CALLBACK):
+        return await _V562_PREV_V32_CALLBACK(update, context)
+
+# ==================== END V56.2 HOTFIX — FAHAD ====================
+
 if __name__ == "__main__":
     main()
