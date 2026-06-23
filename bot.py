@@ -13814,6 +13814,14 @@ def main():
     except Exception:
         pass
 
+    # V53 — إدارة تحديث هدافين البطولة يدويًا ومصدر الهدافين
+    try:
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:مصدر_الهدافين|تبديل_مصدر_الهدافين)(?:\s|$)"), admin_only(v51_top_scorers_source_command)))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تحديث_هدافين_يدوي|تحديث_الهدافين_يدوي|تعديل_الهدافين|تعديل_هدافين)(?:\s|$)"), admin_only(v53_manual_top_scorers_command)))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:مسح_تحديث_الهدافين|مسح_الهدافين_اليدوي|حذف_تحديث_الهدافين)(?:\s|$)"), admin_only(v53_clear_manual_top_scorers_command)))
+    except Exception:
+        pass
+
     app.run_polling()
 
 
@@ -50449,6 +50457,412 @@ async def _v41_send_working_top_scorers(message):
         await wait.edit_text('⚠️ تعذر تحديث هدافي البطولة الآن. حاول لاحقًا.')
 
 # ==================== END V52 TOP SCORERS OFFICIAL SOURCES PATCH — FAHAD ====================
+
+
+# ==================== V53 MANUAL TOP SCORERS ADMIN PATCH — FAHAD ====================
+# - إدارة الهدافين: 3 مصادر رسمية فقط + تحديث يدوي متعدد اللاعبين + مسح التحديث اليدوي.
+# - إذا التحديث اليدوي موجود، يكون هو المعروض مؤقتًا حتى يتم مسحه.
+# - إذا المصدر الرسمي فشل، يعرض آخر كاش محفوظ لنفس المصدر فقط بدون روابط أو أخطاء للمستخدم.
+
+V53_PATCH_NAME = "V53_MANUAL_TOP_SCORERS_ADMIN"
+try:
+    V53_MANUAL_TOP_SCORERS_FILE = os.path.join(_v51_data_dir(), 'top_scorers_manual_override.json')
+except Exception:
+    V53_MANUAL_TOP_SCORERS_FILE = 'top_scorers_manual_override.json'
+
+
+def _v53_now_str():
+    try:
+        return _v52_now_str()
+    except Exception:
+        try:
+            return _v49_now_makkah_str()
+        except Exception:
+            return datetime.now().strftime('%Y-%m-%d %H:%M')
+
+
+def _v53_load_manual_top_scorers():
+    try:
+        data = _v51_json_load(V53_MANUAL_TOP_SCORERS_FILE, {})
+        if not isinstance(data, dict):
+            return {}
+        items = data.get('items') or data.get('players') or []
+        if not isinstance(items, list) or not items:
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def _v53_save_manual_top_scorers(items, admin_id=None):
+    data = {
+        'active': True,
+        'source': 'manual',
+        'source_label': 'تحديث إداري يدوي',
+        'updated_at': _v53_now_str(),
+        'admin_id': str(admin_id or ''),
+        'items': list(items or [])[:40],
+    }
+    _v51_json_save_atomic(V53_MANUAL_TOP_SCORERS_FILE, data)
+    return data
+
+
+def _v53_clear_manual_top_scorers():
+    try:
+        if os.path.exists(V53_MANUAL_TOP_SCORERS_FILE):
+            os.remove(V53_MANUAL_TOP_SCORERS_FILE)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _v53_to_int(v):
+    try:
+        if v is None:
+            return None
+        s = str(v).strip()
+        s = s.translate(str.maketrans('٠١٢٣٤٥٦٧٨٩', '0123456789'))
+        m = re.search(r'\d+', s)
+        if not m:
+            return None
+        return int(m.group(0))
+    except Exception:
+        return None
+
+
+def _v53_parse_manual_top_scorers_text(text):
+    """يقبل أكثر من صيغة:
+    ميسي | الأرجنتين | 5
+    ميسي - الأرجنتين - 5
+    ميسي، الأرجنتين، 5
+    ميسي * الأرجنتين * 5
+    """
+    raw = text or ''
+    raw = re.sub(r'^/(?:تحديث_هدافين_يدوي|تحديث_الهدافين_يدوي|تعديل_الهدافين|تعديل_هدافين)(?:@\w+)?\s*', '', raw, flags=re.I).strip()
+    items = []
+    bad_lines = []
+    for line in raw.splitlines():
+        line = (line or '').strip()
+        if not line:
+            continue
+        if line.startswith('/'):
+            continue
+        # حذف الترقيم أو النقاط من بداية السطر
+        line = re.sub(r'^\s*[\-•*]*\s*\d+[\)\.-]?\s*', '', line).strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in re.split(r'\s*(?:\||،|,|؛|;|\*|–|—| - )\s*', line) if p.strip()]
+        if len(parts) < 3:
+            # صيغة احتياطية: آخر رقم هو الأهداف، والكلمة/الجزء الذي قبله الدولة إن أمكن
+            g = _v53_to_int(line)
+            if g is None:
+                bad_lines.append(line); continue
+            line_no_num = re.sub(r'\d+', '', line).strip(' -|،,*')
+            rough = [p.strip() for p in re.split(r'\s{2,}|\s+-\s+|\s+\|\s+|،|,', line_no_num) if p.strip()]
+            if len(rough) >= 2:
+                name, team = rough[0], rough[1]
+            else:
+                bad_lines.append(line); continue
+        else:
+            # غالبًا: الاسم | المنتخب | الأهداف. لو الرقم في الوسط، نتعامل معه.
+            nums = [(i, _v53_to_int(p)) for i, p in enumerate(parts)]
+            nums = [(i, n) for i, n in nums if n is not None]
+            if not nums:
+                bad_lines.append(line); continue
+            # خذ آخر رقم كأهداف
+            idx, g = nums[-1]
+            rem = [p for i, p in enumerate(parts) if i != idx]
+            if len(rem) < 2:
+                bad_lines.append(line); continue
+            name, team = rem[0], rem[1]
+        name = re.sub(r'\s+', ' ', str(name or '').strip())
+        team = re.sub(r'\s+', ' ', str(team or '').strip())
+        goals = int(g or 0)
+        if not name or not team or goals <= 0:
+            bad_lines.append(line); continue
+        items.append({'name': name, 'team': team, 'goals': goals, 'played': ''})
+    # إزالة التكرار: آخر سطر لنفس اللاعب يكسب
+    out_map = {}
+    for it in items:
+        key = (str(it['name']).strip().lower(), str(it['team']).strip().lower())
+        out_map[key] = it
+    out = list(out_map.values())
+    # ترتيب حسب الأهداف فقط، ومع التساوي يحافظ على ترتيب الإدخال قدر الإمكان
+    order = { (str(it['name']).strip().lower(), str(it['team']).strip().lower()): i for i, it in enumerate(items) }
+    out.sort(key=lambda it: (-int(it.get('goals') or 0), order.get((str(it['name']).lower(), str(it['team']).lower()), 999)))
+    return out, bad_lines
+
+
+_V53_PREV_CHOOSE_TOP_SCORERS = globals().get('_v49_choose_top_scorers')
+def _v49_choose_top_scorers():
+    """التحديث اليدوي له الأولوية حتى يتم مسحه."""
+    global _V49_TOP_SCORERS_LAST_META
+    manual = _v53_load_manual_top_scorers()
+    if manual and manual.get('items'):
+        _V49_TOP_SCORERS_LAST_META = {
+            'source': 'تحديث إداري يدوي',
+            'fetched_at': manual.get('updated_at') or _v53_now_str(),
+            'cached': False,
+            'manual': True,
+            'error': '',
+        }
+        return list(manual.get('items') or [])[:30]
+    if callable(_V53_PREV_CHOOSE_TOP_SCORERS):
+        return _V53_PREV_CHOOSE_TOP_SCORERS()
+    return []
+
+
+# حافظ على اسم الدالة القديم الذي تستدعيه بقية دوال الهدافين.
+def fetch_espn_top_scorers(force_refresh=True):
+    return _v49_choose_top_scorers()
+
+
+async def v53_manual_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    text = msg.text or ''
+    payload = re.sub(r'^/(?:تحديث_هدافين_يدوي|تحديث_الهدافين_يدوي|تعديل_الهدافين|تعديل_هدافين)(?:@\w+)?\s*', '', text, flags=re.I).strip()
+    if not payload:
+        await msg.reply_text(
+            "✏️ أرسل الهدافين يدويًا بهذه الصيغة:\n\n"
+            "/تحديث_هدافين_يدوي\n"
+            "ميسي | الأرجنتين | 5\n"
+            "مبابي | فرنسا | 4\n"
+            "هالاند | النرويج | 4\n\n"
+            "ويقبل أيضًا: ميسي - الأرجنتين - 5"
+        )
+        return
+    items, bad = _v53_parse_manual_top_scorers_text(text)
+    if not items:
+        await msg.reply_text("❌ ما قدرت أقرأ أي لاعب. أرسلها مثل:\nميسي | الأرجنتين | 5")
+        return
+    data = _v53_save_manual_top_scorers(items, getattr(update.effective_user, 'id', None))
+    preview = "\n".join([f"{i+1}. {it['name']} — {it['team']} — {it['goals']}" for i, it in enumerate(items[:12])])
+    extra = f"\n\n⚠️ أسطر لم تُقرأ: {len(bad)}" if bad else ""
+    await msg.reply_text(
+        f"✅ تم حفظ تحديث الهدافين اليدوي.\n"
+        f"عدد اللاعبين: {len(items)}\n"
+        f"آخر تحديث: {data.get('updated_at')}\n\n"
+        f"{preview}{extra}\n\n"
+        "لعرضها اضغط: 🏆 هدافين البطولة\n"
+        "وللرجوع للمصدر الرسمي استخدم: /مسح_تحديث_الهدافين"
+    )
+
+
+async def v53_clear_manual_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ok = _v53_clear_manual_top_scorers()
+    await update.effective_message.reply_text(
+        "✅ تم مسح التحديث اليدوي للهدافين.\nسيعود البوت للمصدر الرسمي المختار من الإدارة."
+        if ok else
+        "ℹ️ لا يوجد تحديث يدوي محفوظ للهدافين."
+    )
+
+
+async def v53_manual_top_scorers_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_user(update):
+        return False
+    state = context.user_data.get('v53_waiting_manual_top_scorers')
+    if not state:
+        return False
+    text = update.effective_message.text or ''
+    if text.strip() in ('إلغاء', 'الغاء', 'رجوع', '⬅️ رجوع'):
+        context.user_data.pop('v53_waiting_manual_top_scorers', None)
+        await update.effective_message.reply_text('تم إلغاء تحديث الهدافين اليدوي.')
+        return True
+    items, bad = _v53_parse_manual_top_scorers_text(text)
+    if not items:
+        await update.effective_message.reply_text('❌ ما قدرت أقرأ الصيغة. أرسل مثل:\nميسي | الأرجنتين | 5')
+        return True
+    data = _v53_save_manual_top_scorers(items, getattr(update.effective_user, 'id', None))
+    context.user_data.pop('v53_waiting_manual_top_scorers', None)
+    preview = "\n".join([f"{i+1}. {it['name']} — {it['team']} — {it['goals']}" for i, it in enumerate(items[:12])])
+    extra = f"\n\n⚠️ أسطر لم تُقرأ: {len(bad)}" if bad else ""
+    await update.effective_message.reply_text(
+        f"✅ تم حفظ تحديث الهدافين اليدوي.\n"
+        f"عدد اللاعبين: {len(items)}\n"
+        f"آخر تحديث: {data.get('updated_at')}\n\n{preview}{extra}"
+    )
+    return True
+
+
+# لف text_state_router حتى يلتقط إدخال الهدافين اليدوي قبل أي حالة أخرى.
+_V53_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if await v53_manual_top_scorers_text_router(update, context):
+            return
+    except Exception as e:
+        try:
+            await update.effective_message.reply_text(f"تعذر قراءة تحديث الهدافين اليدوي: {str(e)[:120]}")
+            return
+        except Exception:
+            pass
+    if callable(_V53_PREV_TEXT_STATE_ROUTER):
+        return await _V53_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+# تحديث لوحة إدارة مصدر الهدافين: 3 مصادر + تحديث يدوي + مسح.
+_V53_PREV_ADMIN_KEYBOARD = globals().get('_v38e_admin_keyboard')
+def _v38e_admin_keyboard():
+    try:
+        kb = _V53_PREV_ADMIN_KEYBOARD() if callable(_V53_PREV_ADMIN_KEYBOARD) else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    clean = []
+    for row in rows:
+        keep = []
+        for btn in row:
+            cb = str(getattr(btn, 'callback_data', '') or '')
+            txt = str(getattr(btn, 'text', '') or '')
+            if cb.startswith('v32adm|top_scorers_source') or cb.startswith('v32adm|top_scorers_manual') or cb == 'v32adm|toggle_top_scorers_source' or 'مصدر الهدافين' in txt or 'تحديث يدوي للهدافين' in txt or 'مسح التحديث اليدوي' in txt:
+                continue
+            keep.append(btn)
+        if keep:
+            clean.append(keep)
+    current = v51_get_top_scorers_source() if 'v51_get_top_scorers_source' in globals() else 'espn'
+    manual_active = bool(_v53_load_manual_top_scorers())
+    suffix = ' + يدوي' if manual_active else ''
+    try:
+        label = V52_SOURCE_ADMIN_LABELS.get(current, v51_top_source_label(current))
+    except Exception:
+        label = current
+    clean.append([InlineKeyboardButton(f"🏆 مصدر الهدافين: {label}{suffix}", callback_data='v32adm|top_scorers_source_menu')])
+    clean.append([InlineKeyboardButton('✏️ تحديث يدوي للهدافين', callback_data='v32adm|top_scorers_manual_start'), InlineKeyboardButton('🧹 مسح التحديث اليدوي', callback_data='v32adm|top_scorers_manual_clear')])
+    return InlineKeyboardMarkup(clean)
+
+
+# إعادة تعريف أمر مصدر الهدافين لعرض أزرار اليدوي أيضًا.
+async def v51_top_scorers_source_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    args = [str(a).strip().lower() for a in (getattr(context, 'args', None) or [])]
+    if args:
+        a = args[0]
+        aliases = {'esbn':'espn', 'espn':'espn', '365':'365', '365scores':'365', 'fotmob':'fotmob', 'fot':'fotmob'}
+        if a in aliases:
+            new_src = v51_set_top_scorers_source(aliases[a])
+            await msg.reply_text(f"✅ تم اعتماد {V52_SOURCE_ADMIN_LABELS.get(new_src, v51_top_source_label(new_src))} كمصدر رسمي لهدافين البطولة.\nإذا فشل المصدر، سيتم عرض آخر تحديث محفوظ لنفس المصدر.")
+            return
+    current = v51_get_top_scorers_source()
+    rows = []
+    for src in V52_SOURCE_CHOICES:
+        mark = '✅ ' if current == src else ''
+        rows.append([InlineKeyboardButton(mark + V52_SOURCE_ADMIN_LABELS.get(src, src), callback_data=f'v32adm|top_scorers_source|{src}')])
+    rows.append([InlineKeyboardButton('✏️ تحديث يدوي للهدافين', callback_data='v32adm|top_scorers_manual_start'), InlineKeyboardButton('🧹 مسح التحديث اليدوي', callback_data='v32adm|top_scorers_manual_clear')])
+    manual = _v53_load_manual_top_scorers()
+    manual_txt = f"\n\n✏️ يوجد تحديث يدوي محفوظ — آخر تحديث: {manual.get('updated_at')}" if manual else ""
+    await msg.reply_text(
+        f"🏆 مصدر هدافين البطولة الحالي: {V52_SOURCE_ADMIN_LABELS.get(current, v51_top_source_label(current))}{manual_txt}\n\n"
+        "اختر مصدرًا رسميًا واحدًا فقط.\n"
+        "إذا فشل المصدر المختار، سيعرض البوت آخر تحديث محفوظ لنفس المصدر بدون التحويل لمصدر آخر.\n\n"
+        "التحديث اليدوي إذا وُجد يكون هو المعروض مؤقتًا حتى يتم مسحه.",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+
+_V53_PREV_ADMIN_CALLBACK = globals().get('v32_admin_callback')
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in ('top_scorers_source_menu', 'top_scorers_source', 'top_scorers_manual_start', 'top_scorers_manual_clear'):
+        try: await q.answer()
+        except Exception: pass
+        if not is_admin_user(update):
+            await q.message.reply_text('هذا الخيار للمشرفين فقط 🔒')
+            return
+        if action == 'top_scorers_manual_start':
+            context.user_data['v53_waiting_manual_top_scorers'] = True
+            await q.message.reply_text(
+                "✏️ أرسل قائمة الهدافين الآن بصيغة بسيطة، مثال:\n\n"
+                "ميسي | الأرجنتين | 5\n"
+                "مبابي | فرنسا | 4\n"
+                "هالاند | النرويج | 4\n\n"
+                "أو: ميسي - الأرجنتين - 5\n"
+                "للإلغاء اكتب: إلغاء"
+            )
+            return
+        if action == 'top_scorers_manual_clear':
+            ok = _v53_clear_manual_top_scorers()
+            await q.message.reply_text(
+                "✅ تم مسح التحديث اليدوي للهدافين.\nسيعود البوت للمصدر الرسمي المختار من الإدارة."
+                if ok else "ℹ️ لا يوجد تحديث يدوي محفوظ للهدافين."
+            )
+            return
+        if action == 'top_scorers_source_menu':
+            current = v51_get_top_scorers_source()
+            rows = []
+            for src in V52_SOURCE_CHOICES:
+                mark = '✅ ' if current == src else ''
+                rows.append([InlineKeyboardButton(mark + V52_SOURCE_ADMIN_LABELS.get(src, src), callback_data=f'v32adm|top_scorers_source|{src}')])
+            rows.append([InlineKeyboardButton('✏️ تحديث يدوي للهدافين', callback_data='v32adm|top_scorers_manual_start'), InlineKeyboardButton('🧹 مسح التحديث اليدوي', callback_data='v32adm|top_scorers_manual_clear')])
+            manual = _v53_load_manual_top_scorers()
+            manual_txt = f"\n\n✏️ يوجد تحديث يدوي محفوظ — آخر تحديث: {manual.get('updated_at')}" if manual else ""
+            await q.message.reply_text(
+                f"🏆 مصدر هدافين البطولة الحالي: {V52_SOURCE_ADMIN_LABELS.get(current, v51_top_source_label(current))}{manual_txt}\n\n"
+                "اختر مصدرًا رسميًا واحدًا فقط. إذا فشل المصدر، سيعرض آخر تحديث محفوظ لنفس المصدر.\n"
+                "التحديث اليدوي إذا وُجد يكون هو المعروض مؤقتًا حتى يتم مسحه.",
+                reply_markup=InlineKeyboardMarkup(rows)
+            )
+            return
+        new_src = parts[2] if len(parts) > 2 else 'espn'
+        new_src = v51_set_top_scorers_source(new_src)
+        await q.message.reply_text(
+            f"✅ تم اعتماد {V52_SOURCE_ADMIN_LABELS.get(new_src, v51_top_source_label(new_src))} كمصدر رسمي لهدافين البطولة.\n"
+            "إذا فشل المصدر، سيتم عرض آخر تحديث محفوظ لنفس المصدر بدون التحويل لمصدر آخر."
+        )
+        return
+    if callable(_V53_PREV_ADMIN_CALLBACK):
+        return await _V53_PREV_ADMIN_CALLBACK(update, context)
+
+
+# تحديث كابشن الهدافين بحيث يظهر المصدر اليدوي بشكل صحيح ولا يظهر روابط أو أخطاء.
+async def _v41_send_working_top_scorers(message):
+    wait = await message.reply_text('⏳ أسحب هدافي البطولة...')
+    try:
+        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=90)
+        meta = dict(globals().get('_V49_TOP_SCORERS_LAST_META') or {})
+        current_label = v51_top_source_label() if 'v51_top_source_label' in globals() else 'ESPN Top Scorers'
+        if not items:
+            await wait.edit_text(
+                f"⚠️ تعذر تحديث هدافي البطولة من المصدر الحالي: {current_label}.\n"
+                "ولا يوجد تحديث محفوظ لهذا المصدر حتى الآن."
+            )
+            return
+        items = list(items or [])[:25]
+        path = _v47_render_unique_top_scorers(items) if '_v47_render_unique_top_scorers' in globals() else render_top_scorers_v29(items)
+        cached = bool(meta.get('cached'))
+        manual = bool(meta.get('manual'))
+        if manual:
+            caption = (
+                'هدافو البطولة ✅\n'
+                'المصدر: تحديث إداري يدوي\n'
+                f"آخر تحديث: {meta.get('fetched_at') or _v53_now_str()}"
+            )
+        elif cached:
+            caption = (
+                'هدافو البطولة ✅\n'
+                f"المصدر: {meta.get('source') or current_label}\n"
+                f"آخر تحديث محفوظ: {meta.get('fetched_at') or _v53_now_str()}\n"
+                '⚠️ تعذر تحديث المصدر الحالي، تم عرض آخر تحديث محفوظ.'
+            )
+        else:
+            caption = (
+                'هدافو البطولة ✅\n'
+                f"المصدر: {meta.get('source') or current_label}\n"
+                '⚠️ قد تختلف سرعة تحديث الهدافين بين المصادر.\n'
+                f"آخر تحديث: {meta.get('fetched_at') or _v53_now_str()}"
+            )
+        await send_photo_path(message, path, caption)
+        try: await wait.delete()
+        except Exception: pass
+    except Exception:
+        await wait.edit_text('⚠️ تعذر تحديث هدافي البطولة الآن. حاول لاحقًا.')
+
+# ==================== END V53 MANUAL TOP SCORERS ADMIN PATCH — FAHAD ====================
 
 if __name__ == "__main__":
     main()
