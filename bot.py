@@ -53235,178 +53235,190 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V57 FINAL REQUESTS PATCH — FAHAD ====================
 
-# ==================== V57.1 QUALIFIED LIST HOTFIX — FAHAD ====================
-# إصلاح قائمة "✅ المتأهلون رسميًا":
-# السبب: النسخة السابقة كانت تعتمد فقط على snap['qualified']، وهذا يخلي بعض المنتخبات
-# التي ضمنت حسابيًا المركز الأول/الثاني لا تظهر إذا لم تكن مضافة في قائمة qualified القديمة.
-# الآن القائمة تُحسب من كل منتخبات البطولة عبر possible positions:
-# - إذا ممكنات المنتخب كلها داخل {1,2} => متأهل رسميًا مباشرًا.
-# - إذا {1} => ضمن المركز الأول، وإذا {2} => ضمن المركز الثاني.
-# - إذا {1,2} => تأهل رسميًا لكن المركز لم يُحسم بعد.
-# - ويبقى منطق أفضل ثالث الرسمي كما هو من الحالة/الثوالث.
-
-V571_PATCH_NAME = "V57_1_QUALIFIED_LIST_HOTFIX_FAHD"
 
 
-def _v571_all_tournament_teams(snap=None):
+# ==================== V57.2 FAST QUALIFIED SAFE HOTFIX — FAHAD ====================
+# هدف التحديث:
+# - منع زر المتأهلين رسميًا من تشغيل حسابات ثقيلة/سيناريوهات لكل المنتخبات.
+# - إصلاح توقف البوت عند الضغط على المتأهلين أو عند بقاء حالة انتظار.
+# - القائمة هنا تعتمد على الكاش الحالي + حسم حسابي سريع وآمن للمركزين الأول/الثاني.
+# - لا تلمس الفانتزي ولا ترتيب المجموعات.
+
+V572_PATCH_NAME = "V57_2_FAST_QUALIFIED_SAFE_FAHD"
+
+
+def _v572_int(x, default=0):
+    try:
+        if x is None or x == '':
+            return default
+        return int(x)
+    except Exception:
+        return default
+
+
+def _v572_group_rows(snap=None):
     snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    groups = (snap or {}).get('groups') or {}
     out = []
     try:
-        groups = (snap or {}).get('groups') or {}
+        order_codes = [c for c, _teams in (globals().get('WORLD_CUP_GROUPS') or [])]
+    except Exception:
         order_codes = []
-        try:
-            order_codes = [c for c, _teams in (globals().get('WORLD_CUP_GROUPS') or [])]
-        except Exception:
-            order_codes = []
-        for code in list(order_codes) + [c for c in groups.keys() if c not in order_codes]:
-            rows = (((groups.get(code) or {}) or {}).get('rows') or [])
-            for r in rows:
-                t = canonical_team_name((r or {}).get('team')) or (r or {}).get('team') or ''
-                if t and t not in out:
-                    out.append(t)
-        if out:
-            return out
-    except Exception:
-        pass
-    try:
-        for _code, teams in (globals().get('WORLD_CUP_GROUPS') or []):
-            for t in teams:
-                t = canonical_team_name(t) or t
-                if t and t not in out:
-                    out.append(t)
-    except Exception:
-        pass
+    for code in list(order_codes) + [c for c in groups.keys() if c not in order_codes]:
+        g = (groups.get(code) or {})
+        rows = list(g.get('rows') or [])
+        if not rows:
+            continue
+        out.append((code, g, rows))
     return out
 
 
-def _v571_exact_possible_positions(team, snap=None):
-    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
-    team = _v33_find_team(team) if '_v33_find_team' in globals() else team
-    team = team or canonical_team_name(team) or normalize_name(team)
+def _v572_team_name(row):
     try:
-        vals, _examples = _v38d_possible_positions(team, snap)
-        out = set()
-        for v in vals or []:
-            try:
-                out.add(int(v))
-            except Exception:
-                pass
-        if out:
-            return out
+        return canonical_team_name((row or {}).get('team')) or (row or {}).get('team') or ''
     except Exception:
-        pass
-    # إذا اكتملت المجموعة وما فيه سيناريوهات، المركز الحالي يصبح نهائي.
-    try:
-        code, pos, _row, _rows = _v33_group_row(team, snap)
-        g = (((snap.get('groups') or {}).get(code) or {}) if isinstance(snap, dict) else {})
-        if int(g.get('remaining') or 0) == 0 and int(pos or 0) in (1, 2, 3, 4):
-            return {int(pos)}
-    except Exception:
-        pass
-    return set()
+        return (row or {}).get('team') or ''
 
 
-def _v571_make_direct_info(team, snap=None):
-    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
-    team = _v33_find_team(team) if '_v33_find_team' in globals() else team
-    team = team or canonical_team_name(team) or normalize_name(team)
-    if not team:
-        return None
-    # أولاً حافظ على أي حالة رسمية قديمة مثل أفضل ثالث/مستبعد.
+def _v572_pts(row):
+    return _v572_int((row or {}).get('Pts') if (row or {}).get('Pts') is not None else (row or {}).get('pts'), 0)
+
+
+def _v572_played(row):
+    return _v572_int((row or {}).get('P') if (row or {}).get('P') is not None else (row or {}).get('played'), 0)
+
+
+def _v572_max_pts(row):
+    # كل منتخب في المجموعة يلعب 3 مباريات. هذا حد أعلى سريع وآمن.
+    p = _v572_pts(row)
+    played = _v572_played(row)
+    return p + max(0, 3 - played) * 3
+
+
+def _v572_status_text(team, snap=None):
     try:
-        info = _v56_team_status_info(team, snap)
-        if info and info.get('kind') in ('first', 'second', 'third', 'best_third', 'qualified_unsettled'):
-            return info
+        snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+        return str(((snap or {}).get('status') or {}).get(team, '') or '')
     except Exception:
-        info = None
-    possible = _v571_exact_possible_positions(team, snap)
-    # التأهل المباشر الرسمي: لا يمكن أن يخرج من المركزين الأول أو الثاني.
-    if possible and possible.issubset({1, 2}):
-        try:
-            code, pos, row, rows = _v33_group_row(team, snap)
-        except Exception:
-            code, pos, row, rows = '', 0, {}, []
-        out = {
+        return ''
+
+
+def _v572_fast_direct_infos(snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    infos = []
+    seen = set()
+
+    def add(team, code, kind, line, possible_line='', row=None):
+        team = canonical_team_name(team) or team
+        if not team or team in seen:
+            return
+        seen.add(team)
+        infos.append({
             'team': team,
             'group': code,
-            'pos': pos,
+            'kind': kind,
+            'line': line,
+            'possible_line': possible_line,
             'row': row or {},
-            'possible': possible,
-            'status_txt': str(((snap or {}).get('status') or {}).get(team, '') or ''),
-            'kind': 'qualified_unsettled',
-            'line': '✅ تأهل رسميًا — المركز لم يُحسم بعد',
-            'possible_line': '',
-        }
-        if possible == {1}:
-            out['kind'] = 'first'
-            out['line'] = '✅ تأهل رسميًا — المركز الأول'
-        elif possible == {2}:
-            out['kind'] = 'second'
-            out['line'] = '✅ تأهل رسميًا — المركز الثاني'
-        else:
-            out['kind'] = 'qualified_unsettled'
-            out['line'] = '✅ تأهل رسميًا — المركز لم يُحسم بعد'
-            out['possible_line'] = 'المركز المحتمل: الأول أو الثاني'
-        return out
-    return None
+        })
 
-
-def _v571_qualified_infos(force=False):
-    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
-    teams = []
-    # ابدأ بكل المنتخبات لضمان عدم سقوط أي متأهل حسابيًا.
-    for t in _v571_all_tournament_teams(snap):
-        if t and t not in teams:
-            teams.append(t)
-    # ثم أضف أي فريق موجود في قائمة qualified القديمة أو status حتى لا نخسر أفضل ثالث رسمي/إدخال يدوي.
+    # 1) أي قائمة/حالة قديمة محفوظة في الكاش نحافظ عليها بدون حساب ثقيل.
+    old_q = []
     try:
         for t in list((snap or {}).get('qualified') or []):
             t = _v33_find_team(t) if '_v33_find_team' in globals() else t
             t = t or canonical_team_name(t) or normalize_name(t)
-            if t and t not in teams:
-                teams.append(t)
-        for t, st in list(((snap or {}).get('status') or {}).items()):
-            s = str(st or '')
-            if t and (('متأهل' in s and 'رسمي' in s) or ('ضمن رسمي' in s)):
-                t = _v33_find_team(t) if '_v33_find_team' in globals() else t
-                t = t or canonical_team_name(t) or normalize_name(t)
-                if t and t not in teams:
-                    teams.append(t)
+            if t and t not in old_q:
+                old_q.append(t)
     except Exception:
         pass
-    infos = []
-    seen = set()
-    for t in teams:
-        info = _v571_make_direct_info(t, snap)
-        if not info:
-            continue
-        name = info.get('team') or t
-        if name in seen:
-            continue
-        seen.add(name)
-        infos.append(info)
+
+    for code, g, rows in _v572_group_rows(snap):
+        for r in rows:
+            team = _v572_team_name(r)
+            if not team:
+                continue
+            st = _v572_status_text(team, snap)
+            if team in old_q or (('رسمي' in st or 'رسميا' in st) and ('متأهل' in st or 'تأهل' in st or 'ضمن' in st)):
+                # لو الحالة تحدد المركز بوضوح نحترمها، وإلا نخليه لم يحسم بعد.
+                if ('أفضل' in st and 'ثالث' in st) or ('كأفضل ثالث' in st):
+                    add(team, code, 'best_third', '✅ تأهل رسميًا — كأفضل ثالث', '', r)
+                elif ('المركز الأول' in st) or ('أول' in st and 'مجموعة' in st):
+                    add(team, code, 'first', '✅ تأهل رسميًا — المركز الأول', '', r)
+                elif ('المركز الثاني' in st) or ('ثاني' in st and 'مجموعة' in st):
+                    add(team, code, 'second', '✅ تأهل رسميًا — المركز الثاني', '', r)
+                elif ('المركز الثالث' in st) or ('ثالث' in st and 'مجموعة' in st):
+                    add(team, code, 'third', '✅ تأهل رسميًا — المركز الثالث', '', r)
+                else:
+                    add(team, code, 'qualified_unsettled', '✅ تأهل رسميًا — المركز لم يُحسم بعد', 'المركز المحتمل: الأول أو الثاني', r)
+
+    # 2) حسم مباشر سريع: إذا أقل من منتخبين فقط يستطيعون الوصول/التساوي مع نقاطه الحالية، فهو لا يخرج من أول/ثاني.
+    # هذا يلتقط حالات مثل فرنسا/النرويج في المجموعة ط بدون تشغيل محاكاة ثقيلة.
+    for code, g, rows in _v572_group_rows(snap):
+        for r in rows:
+            team = _v572_team_name(r)
+            if not team or team in seen:
+                continue
+            pts = _v572_pts(r)
+            if pts <= 0:
+                continue
+            can_reach_or_pass = 0
+            can_strict_pass = 0
+            for other in rows:
+                other_team = _v572_team_name(other)
+                if other_team == team:
+                    continue
+                mx = _v572_max_pts(other)
+                if mx >= pts:
+                    can_reach_or_pass += 1
+                if mx > pts:
+                    can_strict_pass += 1
+            if can_reach_or_pass <= 1:
+                # المركز الأول فقط إذا لا أحد يستطيع حتى مساواته. غير ذلك: أول أو ثاني.
+                if can_reach_or_pass == 0:
+                    add(team, code, 'first', '✅ تأهل رسميًا — المركز الأول', '', r)
+                else:
+                    add(team, code, 'qualified_unsettled', '✅ تأهل رسميًا — المركز لم يُحسم بعد', 'المركز المحتمل: الأول أو الثاني', r)
+
+    # 3) أفضل ثالث رسمي من جدول الثوالث إذا كان مثبتًا رسميًا في الكاش.
+    try:
+        for tr in list((snap or {}).get('thirds') or []):
+            team = canonical_team_name((tr or {}).get('team')) or (tr or {}).get('team') or ''
+            if not team or team in seen:
+                continue
+            st = ' '.join([
+                str((tr or {}).get('third_status') or ''),
+                str((tr or {}).get('status') or ''),
+                _v572_status_text(team, snap),
+            ])
+            if ('رسمي' in st or 'رسميا' in st) and (('أفضل' in st) or ('ثالث' in st)) and (('ضمن' in st) or ('متأهل' in st) or ('تأهل' in st)):
+                add(team, (tr or {}).get('group') or '', 'best_third', '✅ تأهل رسميًا — كأفضل ثالث', '', tr)
+    except Exception:
+        pass
+
     return infos, snap
 
 
-# خليه مصدر القائمة المحسوبة كذلك، عشان أي مكان يعتمد على _v32_calculated_qualified يستفيد.
-def _v32_calculated_qualified():
+def _v572_sort_infos(infos):
+    order_kind = {'first': 0, 'second': 1, 'third': 2, 'best_third': 3, 'qualified_unsettled': 4}
     try:
-        infos, _snap = _v571_qualified_infos(False)
-        return [i.get('team') for i in infos if i.get('team')][:32]
+        group_order = {c: i for i, (c, _teams) in enumerate(globals().get('WORLD_CUP_GROUPS') or [])}
     except Exception:
-        try:
-            return list((_v33_snapshot(False) or {}).get('qualified') or [])[:32]
-        except Exception:
-            return []
+        group_order = {}
+    def key(info):
+        return (order_kind.get(info.get('kind'), 9), group_order.get(info.get('group'), 99), str(info.get('team') or ''))
+    return sorted(list(infos or []), key=key)
 
 
 def _v56_qualified_text(force=False):
-    infos, snap = _v571_qualified_infos(force)
+    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
+    infos, snap = _v572_fast_direct_infos(snap)
+    infos = _v572_sort_infos(infos)
     if not infos:
         return '✅ المتأهلون رسميًا\nلا توجد بيانات مؤكدة حتى الآن.'
     cats = {'first': [], 'second': [], 'third': [], 'best_third': [], 'qualified_unsettled': []}
     for info in infos:
-        k = info.get('kind') or 'other'
+        k = info.get('kind') or 'qualified_unsettled'
         if k in cats:
             cats[k].append(info)
     lines = ['✅ المتأهلون رسميًا لدور الـ32', f"آخر تحديث: {(snap or {}).get('updated_at','-')}", '']
@@ -53435,10 +53447,97 @@ def _v56_qualified_text(force=False):
             lines.append('')
     if not wrote:
         lines.append('لا توجد بيانات مؤكدة حتى الآن.')
-    lines.append('⚠️ التحديث يعتمد على الحسم الحسابي: المركزين الأول/الثاني إذا لم يعد المنتخب قادرًا على الخروج منهما، وأفضل ثالث فقط إذا ثبت رسميًا حسابيًا.')
+    lines.append('⚠️ التحديث هنا سريع وآمن ولا يشغل حسابات السيناريو الثقيلة؛ أفضل ثالث لا يظهر رسميًا إلا إذا كان مثبتًا حسابيًا في الكاش.')
     return '\n'.join(lines).strip()
 
-# ==================== END V57.1 QUALIFIED LIST HOTFIX — FAHAD ====================
+
+def _v32_calculated_qualified():
+    try:
+        infos, _snap = _v572_fast_direct_infos(_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+        return [i.get('team') for i in _v572_sort_infos(infos) if i.get('team')][:32]
+    except Exception:
+        return []
+
+
+# تأكيد أن أزرار المتأهلين/المستبعدين من الصفحة الرئيسية لا تدخل في وضع كتابة اسم منتخب.
+_V572_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = str((update.effective_message.text if update and update.effective_message else '') or '').strip()
+    n = _v57_norm_ar(raw) if '_v57_norm_ar' in globals() else normalize_name(raw)
+    try:
+        _v54_clear_manual_top_scorers_waiting(context)
+    except Exception:
+        pass
+    try:
+        # مسح حالات انتظار حاسبة التأهل لهذا المستخدم عند الضغط على أزرار عامة.
+        for k in list((context.user_data or {}).keys()):
+            if 'wait' in str(k).lower() or 'team' in str(k).lower() or 'qual' in str(k).lower():
+                if k not in ('favorite_team',):
+                    context.user_data.pop(k, None)
+    except Exception:
+        pass
+    if ('المتاهلون رسميا' in n) or ('المتأهلون رسميًا' in raw) or ('المتأهلون رسميا' in raw):
+        await update.effective_message.reply_text(_v56_qualified_text(False), reply_markup=_v56_qualified_keyboard())
+        return
+    if ('المستبعدون رسميا' in n) or ('المغادرون رسميا' in n) or ('المستبعدون رسميًا' in raw) or ('المغادرون رسميًا' in raw):
+        await update.effective_message.reply_text(_v57_eliminated_text() if '_v57_eliminated_text' in globals() else '❌ المستبعدون رسميًا\nلا توجد بيانات مؤكدة حتى الآن.', reply_markup=_v57_eliminated_keyboard() if '_v57_eliminated_keyboard' in globals() else None)
+        return
+    if callable(_V572_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V572_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V572_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = str((update.effective_message.text if update and update.effective_message else '') or '').strip()
+    n = _v57_norm_ar(raw) if '_v57_norm_ar' in globals() else normalize_name(raw)
+    if ('المتاهلون رسميا' in n) or ('المتأهلون رسميًا' in raw) or ('المتأهلون رسميا' in raw):
+        try:
+            for k in list((context.user_data or {}).keys()):
+                if 'wait' in str(k).lower() or 'team' in str(k).lower() or 'qual' in str(k).lower():
+                    if k not in ('favorite_team',):
+                        context.user_data.pop(k, None)
+        except Exception:
+            pass
+        await update.effective_message.reply_text(_v56_qualified_text(False), reply_markup=_v56_qualified_keyboard())
+        return
+    if ('المستبعدون رسميا' in n) or ('المغادرون رسميا' in n) or ('المستبعدون رسميًا' in raw) or ('المغادرون رسميًا' in raw):
+        await update.effective_message.reply_text(_v57_eliminated_text() if '_v57_eliminated_text' in globals() else '❌ المستبعدون رسميًا\nلا توجد بيانات مؤكدة حتى الآن.', reply_markup=_v57_eliminated_keyboard() if '_v57_eliminated_keyboard' in globals() else None)
+        return
+    if callable(_V572_PREV_TEXT_STATE_ROUTER):
+        return await _V572_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+_V572_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'qualified':
+        try: await q.answer()
+        except Exception: pass
+        txt = _v56_qualified_text(False)
+        try:
+            await q.edit_message_text(txt, reply_markup=_v56_qualified_keyboard())
+        except Exception:
+            await q.message.reply_text(txt, reply_markup=_v56_qualified_keyboard())
+        return
+    if action == 'eliminated':
+        try: await q.answer()
+        except Exception: pass
+        txt = _v57_eliminated_text() if '_v57_eliminated_text' in globals() else '❌ المستبعدون رسميًا\nلا توجد بيانات مؤكدة حتى الآن.'
+        kb = _v57_eliminated_keyboard() if '_v57_eliminated_keyboard' in globals() else None
+        try:
+            await q.edit_message_text(txt, reply_markup=kb)
+        except Exception:
+            await q.message.reply_text(txt, reply_markup=kb)
+        return
+    if callable(_V572_PREV_V32_CALLBACK):
+        return await _V572_PREV_V32_CALLBACK(update, context)
+
+# ==================== END V57.2 FAST QUALIFIED SAFE HOTFIX — FAHAD ====================
 
 
 if __name__ == "__main__":
