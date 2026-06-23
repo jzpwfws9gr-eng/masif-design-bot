@@ -49916,5 +49916,539 @@ async def _v41_send_working_top_scorers(message):
 # ==================== END V51B TOP SCORERS SEND OVERRIDE — FAHAD ====================
 
 
+
+# ==================== V52 TOP SCORERS OFFICIAL SOURCES PATCH — FAHAD ====================
+# اعتماد فهد:
+# - مصادر هدافي البطولة من الإدارة: ESPN رسمي / 365Scores رسمي / FotMob رسمي فقط.
+# - لا يوجد خيار تلقائي ولا خلط بين المصادر.
+# - إذا فشل المصدر الرسمي المختار لا ينتقل لمصدر آخر، بل يعرض آخر تحديث محفوظ لنفس المصدر.
+# - لا تظهر روابط ولا أخطاء تقنية للمستخدم.
+
+V52_PATCH_NAME = "V52_TOP_SCORERS_OFFICIAL_SOURCES"
+
+try:
+    V52_TOP_SCORERS_CACHE_FILE = os.path.join(_v51_data_dir(), 'top_scorers_official_cache.json')
+except Exception:
+    V52_TOP_SCORERS_CACHE_FILE = 'top_scorers_official_cache.json'
+
+V52_SOURCE_CHOICES = ('espn', '365', 'fotmob')
+V52_SOURCE_LABELS = {
+    'espn': 'ESPN Top Scorers',
+    '365': '365Scores',
+    'fotmob': 'FotMob',
+}
+V52_SOURCE_ADMIN_LABELS = {
+    'espn': 'ESPN رسمي',
+    '365': '365Scores رسمي',
+    'fotmob': 'FotMob رسمي',
+}
+
+
+def _v52_now_str():
+    try:
+        return _v49_now_makkah_str()
+    except Exception:
+        try:
+            return datetime.now().strftime('%Y-%m-%d %H:%M بتوقيت مكة')
+        except Exception:
+            return ''
+
+
+def _v52_clean_int(v):
+    try:
+        if v is None or v == '':
+            return None
+        if isinstance(v, bool):
+            return int(v)
+        s = str(v).strip()
+        s = re.sub(r'[^0-9\.-]', '', s)
+        if not s:
+            return None
+        return int(float(s))
+    except Exception:
+        return None
+
+
+def _v52_walk_json(obj):
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _v52_walk_json(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _v52_walk_json(v)
+
+
+def _v52_country_ar(name_or_code):
+    try:
+        return _v49_country_ar(name_or_code)
+    except Exception:
+        return name_or_code or ''
+
+
+def _v52_team_from_node(node, player=None):
+    team = ''
+    for key in ('team', 'club', 'squad', 'nationalTeam', 'country', 'participant'):
+        val = None
+        if isinstance(node, dict):
+            val = node.get(key)
+        if isinstance(val, dict):
+            team = val.get('name') or val.get('shortName') or val.get('code') or val.get('alpha2') or val.get('slug') or ''
+            if team:
+                return _v52_country_ar(team)
+        elif isinstance(val, str) and val.strip():
+            return _v52_country_ar(val.strip())
+    if isinstance(player, dict):
+        c = player.get('country') or player.get('nationality') or player.get('team')
+        if isinstance(c, dict):
+            team = c.get('name') or c.get('shortName') or c.get('code') or c.get('alpha2') or c.get('slug') or ''
+        elif isinstance(c, str):
+            team = c
+    return _v52_country_ar(team)
+
+
+def _v52_extract_generic_top_scorers(data, default_source=''):
+    """استخراج عام من JSON أو Next.js data لصفحات 365Scores/FotMob."""
+    items = []
+    for node in _v52_walk_json(data):
+        if not isinstance(node, dict):
+            continue
+        player = None
+        for pk in ('player', 'participant', 'athlete', 'entity', 'person', 'member'):
+            val = node.get(pk)
+            if isinstance(val, dict) and (val.get('name') or val.get('shortName') or val.get('fullName')):
+                player = val
+                break
+        # FotMob/365 أحيانًا يكون الاسم مباشرة في نفس العقدة.
+        if not isinstance(player, dict):
+            if node.get('name') and any(k.lower() in ('goals','goal','totalgoals','goals_scored','goalscorers','scored') for k in node.keys()):
+                player = node
+            else:
+                continue
+        name = player.get('name') or player.get('fullName') or player.get('shortName') or player.get('displayName') or ''
+        if not name or len(str(name).strip()) < 2:
+            continue
+        stats_candidates = []
+        for sk in ('statistics', 'statistic', 'stats', 'stat', 'values', 'ranking', 'record'):
+            if isinstance(node.get(sk), dict):
+                stats_candidates.append(node.get(sk))
+            elif isinstance(node.get(sk), list):
+                # بعض المواقع ترجع stats كقائمة key/value.
+                flat = {}
+                for it in node.get(sk) or []:
+                    if isinstance(it, dict):
+                        key = it.get('key') or it.get('name') or it.get('title') or it.get('stat')
+                        val = it.get('value') if 'value' in it else it.get('statValue')
+                        if key:
+                            flat[str(key).strip().lower()] = val
+                if flat:
+                    stats_candidates.append(flat)
+        stats_candidates.append(node)
+        goals = None
+        goal_keys = ('goals', 'goal', 'totalGoals', 'goalsTotal', 'goals_scored', 'goalsScored', 'score', 'scores')
+        for cont in stats_candidates:
+            if not isinstance(cont, dict):
+                continue
+            for k in goal_keys:
+                if k in cont:
+                    goals = _v52_clean_int(cont.get(k)); break
+            if goals is not None:
+                break
+            # support lower-case keys from flat arrays
+            for k, v in list(cont.items()):
+                ks = str(k).strip().lower()
+                if ks in ('goals', 'goal', 'goals scored', 'total goals'):
+                    goals = _v52_clean_int(v); break
+            if goals is not None:
+                break
+        if goals is None or goals <= 0:
+            continue
+        played = ''
+        for cont in stats_candidates:
+            if not isinstance(cont, dict):
+                continue
+            for k in ('played', 'appearances', 'matches', 'matchesPlayed', 'playedMatches', 'apps', 'games'):
+                if k in cont:
+                    played = _v52_clean_int(cont.get(k)) or ''
+                    break
+            if played != '':
+                break
+        team = _v52_team_from_node(node, player)
+        items.append({'name': str(name).strip(), 'team': team, 'played': played, 'goals': int(goals), 'source': default_source})
+    uniq, seen = [], set()
+    for it in items:
+        key = (str(it.get('name','')).strip().lower(), str(it.get('team','')).strip().lower())
+        if not key[0] or key in seen:
+            continue
+        seen.add(key)
+        uniq.append(it)
+    # الترتيب حسب المصدر قدر الإمكان؛ إذا البيانات غير مرتبة نرتب بالأهداف فقط بدون أبجدية قاسية.
+    uniq.sort(key=lambda x: -int(x.get('goals') or 0))
+    return uniq[:30]
+
+
+def _v52_extract_json_blobs_from_html(html):
+    blobs = []
+    if not html:
+        return blobs
+    # Next.js
+    for m in re.finditer(r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', html, re.S | re.I):
+        try:
+            blobs.append(json.loads(m.group(1)))
+        except Exception:
+            pass
+    # window state vars
+    patterns = [
+        r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;</script>',
+        r'window\.__data\s*=\s*(\{.*?\})\s*;</script>',
+        r'window\.__NUXT__\s*=\s*(\{.*?\})\s*;</script>',
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, html, re.S | re.I):
+            try:
+                blobs.append(json.loads(m.group(1)))
+            except Exception:
+                pass
+    # JSON-LD may include enough stats sometimes
+    for m in re.finditer(r'<script[^>]+type=["\']application/json["\'][^>]*>(.*?)</script>', html, re.S | re.I):
+        try:
+            blobs.append(json.loads(m.group(1)))
+        except Exception:
+            pass
+    return blobs
+
+
+def _v52_http_get(url, timeout=22, headers=None):
+    if not requests:
+        raise RuntimeError('requests غير متوفر')
+    h = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+        'Accept': 'application/json,text/html,*/*',
+        'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+    }
+    if headers:
+        h.update(headers)
+    return requests.get(url, headers=h, timeout=timeout)
+
+
+def fetch_365scores_top_scorers():
+    global _V49_TOP_SCORERS_LAST_META
+    last_error = ''
+    urls = [
+        # صفحات HTML قد تحتوي بيانات JSON مدمجة
+        'https://www.365scores.com/football/league/fifa-world-cup-5930/stats',
+        'https://www.365scores.com/football/league/fifa-world-cup-5930/top-scorers',
+        # محاولات API عامة؛ لا نعتمد عليها وحدها لأنها قد تتغير.
+        'https://webws.365scores.com/web/competitions/5930/stats?appTypeId=5&langId=1&timezoneName=Asia/Riyadh',
+        'https://webws.365scores.com/web/stats/?appTypeId=5&langId=1&timezoneName=Asia/Riyadh&competitions=5930',
+    ]
+    for url in urls:
+        try:
+            r = _v52_http_get(url, timeout=24, headers={'Referer': 'https://www.365scores.com/'})
+            code = int(getattr(r, 'status_code', 0) or 0)
+            if code >= 400:
+                last_error = f'HTTP {code}'
+                continue
+            items = []
+            ctype = str((getattr(r, 'headers', {}) or {}).get('content-type','')).lower()
+            if 'json' in ctype or 'webws.365scores.com' in url:
+                try:
+                    items = _v52_extract_generic_top_scorers(r.json(), '365Scores')
+                except Exception as e:
+                    last_error = str(e)[:120]
+            if not items:
+                txt = getattr(r, 'text', '') or ''
+                for blob in _v52_extract_json_blobs_from_html(txt):
+                    items = _v52_extract_generic_top_scorers(blob, '365Scores')
+                    if items:
+                        break
+            if items and len(items) >= 3:
+                _V49_TOP_SCORERS_LAST_META = {'source': '365Scores', 'fetched_at': _v52_now_str(), 'error': '', 'source_url': ''}
+                return items[:30]
+        except Exception as e:
+            last_error = str(e)[:160]
+    _V49_TOP_SCORERS_LAST_META = {'source': '365Scores', 'fetched_at': _v52_now_str(), 'error': last_error or 'لم يرجع 365Scores قائمة صالحة'}
+    return []
+
+
+def fetch_fotmob_top_scorers():
+    global _V49_TOP_SCORERS_LAST_META
+    last_error = ''
+    urls = [
+        # endpoint مشهور في FotMob deep stats؛ season id قد يتغير لذلك نجرّب أكثر من صيغة.
+        'https://www.fotmob.com/api/leagueseasondeepstats?id=77&season=24254&type=players&stat=goals',
+        'https://www.fotmob.com/api/leagueseasondeepstats?id=77&season=24254&type=players&stat=Goals',
+        'https://www.fotmob.com/api/leagues?id=77',
+        'https://www.fotmob.com/en-GB/leagues/77/stats/season/24254/players/goals/world-cup-players',
+        'https://www.fotmob.com/leagues/77/stats/season/24254/players/goals/world-cup-players',
+    ]
+    for url in urls:
+        try:
+            r = _v52_http_get(url, timeout=24, headers={'Referer': 'https://www.fotmob.com/'})
+            code = int(getattr(r, 'status_code', 0) or 0)
+            if code >= 400:
+                last_error = f'HTTP {code}'
+                continue
+            items = []
+            ctype = str((getattr(r, 'headers', {}) or {}).get('content-type','')).lower()
+            if 'json' in ctype or '/api/' in url:
+                try:
+                    raw = r.json()
+                    # FotMob deepstats أحيانًا يرجع list في topLevelStats أو statsData.
+                    items = _v52_extract_generic_top_scorers(raw, 'FotMob')
+                except Exception as e:
+                    last_error = str(e)[:120]
+            if not items:
+                txt = getattr(r, 'text', '') or ''
+                for blob in _v52_extract_json_blobs_from_html(txt):
+                    items = _v52_extract_generic_top_scorers(blob, 'FotMob')
+                    if items:
+                        break
+            if items and len(items) >= 3:
+                _V49_TOP_SCORERS_LAST_META = {'source': 'FotMob', 'fetched_at': _v52_now_str(), 'error': '', 'source_url': ''}
+                return items[:30]
+        except Exception as e:
+            last_error = str(e)[:160]
+    _V49_TOP_SCORERS_LAST_META = {'source': 'FotMob', 'fetched_at': _v52_now_str(), 'error': last_error or 'لم يرجع FotMob قائمة صالحة'}
+    return []
+
+
+def _v52_load_top_scorers_cache():
+    try:
+        data = _v51_json_load(V52_TOP_SCORERS_CACHE_FILE, {})
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _v52_save_top_scorers_cache(src, items, meta=None):
+    if not src or not items:
+        return
+    try:
+        data = _v52_load_top_scorers_cache()
+        data.setdefault('sources', {})[src] = {
+            'items': items[:30],
+            'source': V52_SOURCE_LABELS.get(src, src),
+            'updated_at': (meta or {}).get('fetched_at') or _v52_now_str(),
+            'saved_at': _v52_now_str(),
+        }
+        data['last_source'] = src
+        data['last_updated_at'] = data['sources'][src]['updated_at']
+        _v51_json_save_atomic(V52_TOP_SCORERS_CACHE_FILE, data)
+    except Exception:
+        pass
+
+
+def _v52_get_cached_top_scorers(src):
+    data = _v52_load_top_scorers_cache()
+    rec = ((data.get('sources') or {}).get(src) or {}) if isinstance(data, dict) else {}
+    items = rec.get('items') if isinstance(rec, dict) else None
+    if isinstance(items, list) and items:
+        return items, rec
+    return [], {}
+
+
+# إعادة تعريف دوال المصدر الرسمي لتدعم 3 مصادر فقط.
+def v51_get_top_scorers_source():
+    data = _v51_json_load(V51_SETTINGS_FILE, {})
+    src = str(data.get('source') or data.get('top_scorers_source') or 'espn').strip().lower()
+    aliases = {'365scores': '365', '365score': '365', 'fot': 'fotmob', 'sofa': 'espn', 'sofascore': 'espn'}
+    src = aliases.get(src, src)
+    if src not in V52_SOURCE_CHOICES:
+        src = 'espn'
+    return src
+
+
+def v51_set_top_scorers_source(src):
+    src = str(src or '').strip().lower()
+    aliases = {'365scores': '365', '365score': '365', 'fot': 'fotmob', 'sofa': 'espn', 'sofascore': 'espn'}
+    src = aliases.get(src, src)
+    if src not in V52_SOURCE_CHOICES:
+        src = 'espn'
+    data = {'source': src, 'updated_at': _v52_now_str()}
+    try:
+        _v51_json_save_atomic(V51_SETTINGS_FILE, data)
+    except Exception:
+        pass
+    return src
+
+
+def v51_top_source_label(src=None):
+    src = src or v51_get_top_scorers_source()
+    return V52_SOURCE_LABELS.get(src, 'ESPN Top Scorers')
+
+
+def _v52_fetch_selected_top_scorers_fresh(src):
+    if src == '365':
+        return fetch_365scores_top_scorers()
+    if src == 'fotmob':
+        return fetch_fotmob_top_scorers()
+    return _v51_fetch_espn_top_scorers_only()
+
+
+def _v49_choose_top_scorers():
+    """اختيار رسمي واحد فقط. عند الفشل يرجع آخر كاش لنفس المصدر، بدون تبديل مصدر."""
+    global _V49_TOP_SCORERS_LAST_META
+    src = v51_get_top_scorers_source()
+    label = V52_SOURCE_LABELS.get(src, src)
+    items = []
+    try:
+        items = _v52_fetch_selected_top_scorers_fresh(src) or []
+    except Exception as e:
+        _V49_TOP_SCORERS_LAST_META = {'source': label, 'fetched_at': _v52_now_str(), 'error': str(e)[:160], 'cached': False}
+        items = []
+    if items and len(items) >= 3:
+        meta = dict(globals().get('_V49_TOP_SCORERS_LAST_META') or {})
+        meta.update({'source': label, 'fetched_at': meta.get('fetched_at') or _v52_now_str(), 'cached': False})
+        _V49_TOP_SCORERS_LAST_META = meta
+        _v52_save_top_scorers_cache(src, items, meta)
+        return items[:30]
+    # المصدر الرسمي فشل: اعرض آخر تحديث محفوظ لنفس المصدر فقط.
+    cached_items, rec = _v52_get_cached_top_scorers(src)
+    err = (globals().get('_V49_TOP_SCORERS_LAST_META') or {}).get('error') or 'تعذر تحديث المصدر الحالي'
+    if cached_items:
+        _V49_TOP_SCORERS_LAST_META = {
+            'source': label,
+            'fetched_at': rec.get('updated_at') or rec.get('saved_at') or _v52_now_str(),
+            'error': err,
+            'cached': True,
+        }
+        return cached_items[:30]
+    _V49_TOP_SCORERS_LAST_META = {'source': label, 'fetched_at': _v52_now_str(), 'error': err, 'cached': False}
+    return []
+
+
+def fetch_espn_top_scorers(force_refresh=True):
+    # الاسم القديم يبقى للمحافظة على بقية الدوال، لكن المصدر الرسمي يحدد من الإدارة.
+    return _v49_choose_top_scorers()
+
+
+# أوامر إدارة مصدر الهدافين بثلاث خيارات فقط.
+async def v51_top_scorers_source_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    args = [str(a).strip().lower() for a in (getattr(context, 'args', None) or [])]
+    if args:
+        a = args[0]
+        aliases = {'esbn':'espn', 'espn':'espn', '365':'365', '365scores':'365', 'fotmob':'fotmob', 'fot':'fotmob'}
+        if a in aliases:
+            new_src = v51_set_top_scorers_source(aliases[a])
+            await msg.reply_text(f"✅ تم اعتماد {V52_SOURCE_ADMIN_LABELS.get(new_src, v51_top_source_label(new_src))} كمصدر رسمي لهدافين البطولة.\nإذا فشل المصدر، سيتم عرض آخر تحديث محفوظ لنفس المصدر.")
+            return
+    current = v51_get_top_scorers_source()
+    rows = []
+    for src in V52_SOURCE_CHOICES:
+        mark = '✅ ' if current == src else ''
+        rows.append([InlineKeyboardButton(mark + V52_SOURCE_ADMIN_LABELS.get(src, src), callback_data=f'v32adm|top_scorers_source|{src}')])
+    kb = InlineKeyboardMarkup(rows)
+    await msg.reply_text(
+        f"🏆 مصدر هدافين البطولة الحالي: {V52_SOURCE_ADMIN_LABELS.get(current, v51_top_source_label(current))}\n\n"
+        "اختر مصدرًا رسميًا واحدًا فقط.\n"
+        "إذا فشل المصدر المختار، سيعرض البوت آخر تحديث محفوظ لنفس المصدر بدون التحويل لمصدر آخر.",
+        reply_markup=kb
+    )
+
+
+# لوحة الإدارة: أضف زر المصدر الحالي، مع إزالة أزرار المصدر القديمة.
+_V52_PREV_ADMIN_KEYBOARD = globals().get('_v38e_admin_keyboard')
+def _v38e_admin_keyboard():
+    try:
+        kb = _V52_PREV_ADMIN_KEYBOARD() if callable(_V52_PREV_ADMIN_KEYBOARD) else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    clean_rows = []
+    for row in rows:
+        keep = []
+        for btn in row:
+            cb = str(getattr(btn, 'callback_data', '') or '')
+            txt = str(getattr(btn, 'text', '') or '')
+            if cb.startswith('v32adm|top_scorers_source') or cb == 'v32adm|toggle_top_scorers_source' or 'مصدر الهدافين' in txt or 'SofaScore' in txt:
+                continue
+            keep.append(btn)
+        if keep:
+            clean_rows.append(keep)
+    current = v51_get_top_scorers_source()
+    clean_rows.append([InlineKeyboardButton(f"🏆 مصدر الهدافين: {V52_SOURCE_ADMIN_LABELS.get(current, v51_top_source_label(current))}", callback_data='v32adm|top_scorers_source_menu')])
+    return InlineKeyboardMarkup(clean_rows)
+
+
+# Callback الإدارة لثلاث مصادر فقط، مع المحافظة على باقي callbacks.
+_V52_PREV_ADMIN_CALLBACK = globals().get('v32_admin_callback')
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in ('top_scorers_source_menu', 'top_scorers_source'):
+        try: await q.answer()
+        except Exception: pass
+        if not is_admin_user(update):
+            await q.message.reply_text('هذا الخيار للمشرفين فقط 🔒')
+            return
+        if action == 'top_scorers_source_menu':
+            current = v51_get_top_scorers_source()
+            rows = []
+            for src in V52_SOURCE_CHOICES:
+                mark = '✅ ' if current == src else ''
+                rows.append([InlineKeyboardButton(mark + V52_SOURCE_ADMIN_LABELS.get(src, src), callback_data=f'v32adm|top_scorers_source|{src}')])
+            await q.message.reply_text(
+                f"🏆 مصدر هدافين البطولة الحالي: {V52_SOURCE_ADMIN_LABELS.get(current, v51_top_source_label(current))}\n\n"
+                "اختر مصدرًا رسميًا واحدًا فقط. إذا فشل المصدر، سيعرض آخر تحديث محفوظ لنفس المصدر.",
+                reply_markup=InlineKeyboardMarkup(rows)
+            )
+            return
+        new_src = parts[2] if len(parts) > 2 else 'espn'
+        new_src = v51_set_top_scorers_source(new_src)
+        await q.message.reply_text(
+            f"✅ تم اعتماد {V52_SOURCE_ADMIN_LABELS.get(new_src, v51_top_source_label(new_src))} كمصدر رسمي لهدافين البطولة.\n"
+            "إذا فشل المصدر، سيتم عرض آخر تحديث محفوظ لنفس المصدر بدون التحويل لمصدر آخر."
+        )
+        return
+    if callable(_V52_PREV_ADMIN_CALLBACK):
+        return await _V52_PREV_ADMIN_CALLBACK(update, context)
+
+
+# إرسال الهدافين: لا يظهر أخطاء تقنية ولا روابط للمستخدم، ويخبره فقط إذا عرض كاش.
+async def _v41_send_working_top_scorers(message):
+    wait = await message.reply_text('⏳ أسحب هدافي البطولة...')
+    try:
+        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=90)
+        meta = dict(globals().get('_V49_TOP_SCORERS_LAST_META') or {})
+        current_label = v51_top_source_label()
+        if not items:
+            await wait.edit_text(
+                f"⚠️ تعذر تحديث هدافي البطولة من المصدر الحالي: {current_label}.\n"
+                "ولا يوجد تحديث محفوظ لهذا المصدر حتى الآن."
+            )
+            return
+        items = list(items or [])[:25]
+        path = _v47_render_unique_top_scorers(items) if '_v47_render_unique_top_scorers' in globals() else render_top_scorers_v29(items)
+        cached = bool(meta.get('cached'))
+        if cached:
+            caption = (
+                'هدافو البطولة ✅\n'
+                f"المصدر: {meta.get('source') or current_label}\n"
+                f"آخر تحديث محفوظ: {meta.get('fetched_at') or _v52_now_str()}\n"
+                '⚠️ تعذر تحديث المصدر الحالي، تم عرض آخر تحديث محفوظ.'
+            )
+        else:
+            caption = (
+                'هدافو البطولة ✅\n'
+                f"المصدر: {meta.get('source') or current_label}\n"
+                '⚠️ قد تختلف سرعة تحديث الهدافين بين المصادر.\n'
+                f"آخر تحديث: {meta.get('fetched_at') or _v52_now_str()}"
+            )
+        await send_photo_path(message, path, caption)
+        try: await wait.delete()
+        except Exception: pass
+    except Exception:
+        await wait.edit_text('⚠️ تعذر تحديث هدافي البطولة الآن. حاول لاحقًا.')
+
+# ==================== END V52 TOP SCORERS OFFICIAL SOURCES PATCH — FAHAD ====================
+
 if __name__ == "__main__":
     main()
