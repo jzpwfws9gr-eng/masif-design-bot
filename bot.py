@@ -52022,5 +52022,179 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V56 FINAL MERGED PATCH — FAHAD ====================
 
+
+
+# ==================== V56.1 HOTFIX — FAHAD ====================
+# إصلاح عدم الرد بعد أول ضغط:
+# - لا نشغل تحديث لوحة البطولة تلقائيًا عند فتحها لأول مرة؛ التحديث يصير فقط من زر "🔄 تحديث الآن".
+# - نلتقط أزرار الصفحة الرئيسية بالنص الخام حتى لو تيليجرام عكس ترتيب الإيموجي بسبب RTL.
+# - نخلي "مباريات دور الـ32" و"وش أتابع الجولة الأخيرة؟" ترد حتى لو انكتب النص بدون الإيموجي أو بدون مدّة "ـ".
+
+def _v561_raw_text(update):
+    try:
+        return str((update.effective_message.text if update.effective_message else '') or '').strip()
+    except Exception:
+        return ''
+
+def _v561_norm_text(s):
+    try:
+        s = str(s or '').strip()
+        s = s.replace('ـ', '')
+        s = s.replace('أ', 'ا').replace('إ', 'ا').replace('آ', 'ا')
+        s = s.replace('٣٢', '32').replace('٢٣', '23')
+        s = re.sub(r'\s+', ' ', s)
+        return s
+    except Exception:
+        return str(s or '').strip()
+
+def _v561_is_r32_text(s):
+    n = _v561_norm_text(s)
+    return ('مباريات' in n and ('دور ال32' in n or 'دور 32' in n or 'ال32' in n or '32' in n))
+
+def _v561_is_watch_text(s):
+    n = _v561_norm_text(s)
+    return ('وش' in n and ('اتابع' in n or 'تابع' in n) and ('الجوله الاخيره' in n or 'الجولة الاخيرة' in n or 'الجولة الاخيره' in n))
+
+def _v561_is_board_text(s):
+    n = _v561_norm_text(s)
+    return 'لوحة البطولة' in n
+
+def _v561_is_stats_text(s):
+    n = _v561_norm_text(s)
+    return 'احصائيات البطولة' in n or 'إحصائيات البطولة' in s
+
+def _v561_is_qualified_text(s):
+    n = _v561_norm_text(s)
+    return ('المتاهلون' in n or 'المتأهلون' in s) and ('رسمي' in n or 'دور 32' in n or '32' in n)
+
+def _v561_is_thirds_text(s):
+    n = _v561_norm_text(s)
+    return 'افضل الثوالث' in n or 'أفضل الثوالث' in s
+
+def _v561_is_fantasy_text(s):
+    n = _v561_norm_text(s)
+    return 'فانتزي' in n
+
+def _v561_is_how_text(s):
+    n = _v561_norm_text(s)
+    return 'كيف تتاهل' in n or 'كيف تتأهل' in s
+
+def _v561_reply_board_text():
+    txt = _v55_board_cached_text_or_pending() if '_v55_board_cached_text_or_pending' in globals() else '🏆 لوحة البطولة\nاختر من الأزرار:'
+    # لو أول مرة ما فيه كاش، لا نشغل تحديث تلقائي هنا حتى لا ينشغل البوت.
+    if 'جاري تجهيز لوحة البطولة لأول مرة' in txt:
+        txt = (
+            '🏆 لوحة البطولة\n'
+            'لا يوجد كاش جاهز للوحة حتى الآن.\n\n'
+            'اضغط زر 🔄 تحديث الآن لتجهيزها بالخلفية.\n'
+            'وتقدر تستخدم باقي أزرار البوت طبيعي.'
+        )
+    return txt
+
+_V561_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _v561_raw_text(update)
+    try:
+        _v54_clear_manual_top_scorers_waiting(context)
+    except Exception:
+        pass
+
+    if _v561_is_r32_text(raw):
+        await update.effective_message.reply_text(_v56_round32_text(), reply_markup=_v56_round32_keyboard())
+        return
+
+    if _v561_is_watch_text(raw):
+        await update.effective_message.reply_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        return
+
+    if _v561_is_board_text(raw):
+        await update.effective_message.reply_text(_v561_reply_board_text(), reply_markup=_v32_board_keyboard())
+        return
+
+    if _v561_is_stats_text(raw):
+        txt = _v55_stats_home_text() if '_v55_stats_home_text' in globals() else '📊 إحصائيات البطولة\nاختر القسم اللي تبيه:'
+        await update.effective_message.reply_text(txt, reply_markup=_v55_stats_keyboard())
+        return
+
+    if _v561_is_qualified_text(raw):
+        await update.effective_message.reply_text(_v56_qualified_text(), reply_markup=_v56_qualified_keyboard())
+        return
+
+    if _v561_is_thirds_text(raw):
+        await update.effective_message.reply_text(_v32_best_thirds_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔄 تحديث', callback_data='v32|thirds_force'), InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]]))
+        return
+
+    # خلي الفانتزي/كيف تتأهل للراوتر القديم لأن عنده بوابات وقفل.
+    if callable(_V561_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V561_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+_V561_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _v561_raw_text(update)
+    try:
+        _v54_clear_manual_top_scorers_waiting(context)
+    except Exception:
+        pass
+
+    if _v561_is_r32_text(raw):
+        await update.effective_message.reply_text(_v56_round32_text(), reply_markup=_v56_round32_keyboard())
+        return
+
+    if _v561_is_watch_text(raw):
+        await update.effective_message.reply_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        return
+
+    if _v561_is_board_text(raw):
+        await update.effective_message.reply_text(_v561_reply_board_text(), reply_markup=_v32_board_keyboard())
+        return
+
+    if _v561_is_stats_text(raw):
+        txt = _v55_stats_home_text() if '_v55_stats_home_text' in globals() else '📊 إحصائيات البطولة\nاختر القسم اللي تبيه:'
+        await update.effective_message.reply_text(txt, reply_markup=_v55_stats_keyboard())
+        return
+
+    if _v561_is_qualified_text(raw):
+        await update.effective_message.reply_text(_v56_qualified_text(), reply_markup=_v56_qualified_keyboard())
+        return
+
+    if _v561_is_thirds_text(raw):
+        await update.effective_message.reply_text(_v32_best_thirds_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔄 تحديث', callback_data='v32|thirds_force'), InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]]))
+        return
+
+    if callable(_V561_PREV_TEXT_STATE_ROUTER):
+        return await _V561_PREV_TEXT_STATE_ROUTER(update, context)
+
+_V561_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+
+    if action == 'board':
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v561_reply_board_text(), reply_markup=_v32_board_keyboard())
+        except Exception:
+            await q.message.reply_text(_v561_reply_board_text(), reply_markup=_v32_board_keyboard())
+        return
+
+    if action == 'board_force':
+        try: await q.answer()
+        except Exception: pass
+        if _v55_schedule_board_refresh(context, chat_id=q.message.chat_id if q.message else None, notify=True):
+            await q.message.reply_text('🔄 بدأ تحديث لوحة البطولة بالخلفية.\nتقدر تستخدم باقي الأزرار طبيعي، وسيصلك تأكيد عند الانتهاء.')
+        else:
+            await q.message.reply_text(f'⏳ تحديث لوحة البطولة شغال بالفعل من: {V55_BOARD_REFRESH_STARTED_AT or "-"}')
+        return
+
+    if callable(_V561_PREV_V32_CALLBACK):
+        return await _V561_PREV_V32_CALLBACK(update, context)
+
+# ==================== END V56.1 HOTFIX — FAHAD ====================
+
 if __name__ == "__main__":
     main()
