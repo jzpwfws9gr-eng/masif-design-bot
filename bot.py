@@ -7097,6 +7097,19 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تحديث_احتمالات_المغادرة|تحديث_مغادرة_البطولة|تحديث_المغادرة)(?:\s|$)"), admin_only(v48_refresh_exit_probs_command)))
+
+    # V51 — مصدر الهدافين + تحديث كيف يتأهل + تحديث احتمالات المغادرة المجدول
+    try:
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:مصدر_الهدافين|تبديل_مصدر_الهدافين)(?:\s|$)"), admin_only(v51_top_scorers_source_command)))
+    except Exception:
+        pass
+    try:
+        if getattr(app, "job_queue", None):
+            app.job_queue.run_repeating(v51_how_qualify_refresh_job, interval=15*60, first=75, name="v51_how_qualify_refresh")
+            app.job_queue.run_repeating(v51_exit_auto_schedule_job, interval=60, first=35, name="v51_exit_auto_schedule")
+    except Exception:
+        pass
+
     app.run_polling()
 
 
@@ -49424,6 +49437,484 @@ async def v49_live_auto_refresh_job(context):
         pass
 
 # ==================== END V50 FINAL AGREEMENTS PATCH — FAHAD ====================
+
+
+
+# ==================== V51 SOURCE TOGGLE + SMART REFRESH PATCH — FAHAD ====================
+# اعتماد فهد:
+# - هدافين البطولة: زر/أمر إداري لاختيار المصدر الرسمي: SofaScore أو ESPN.
+# - إذا اختار SofaScore لا يتم استخدام ESPN والعكس.
+# - تحسين دالة SofaScore بإضافة endpoints الإحصائيات.
+# - كيف يتأهل يتحدث من 7م إلى 9ص كل 15 دقيقة بالخلفية.
+# - احتمالات المغادرة تحدث تلقائيًا 10م / 1ص / 4:30ف / 10ص + يدويًا، بدون تأثير على البوت.
+
+V51_PATCH_NAME = "V51_SOURCE_TOGGLE_AND_REFRESH"
+V51_HOW_REFRESH_INTERVAL = 15 * 60
+V51_HOW_REFRESH_TIMEOUT = 300
+V51_EXIT_AUTO_TIMES = {"22:00", "01:00", "04:30", "10:00"}
+V51_EXIT_AUTO_LAST_RUN = {}
+V51_HOW_REFRESH_RUNNING = False
+
+
+def _v51_data_dir():
+    try:
+        return globals().get('_V50_DATA_DIR') or _v50_data_dir()
+    except Exception:
+        try:
+            base = os.environ.get('MASEEF_DATA_DIR') or '/data'
+            os.makedirs(base, exist_ok=True)
+            return base
+        except Exception:
+            return os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else '.'
+
+
+def _v51_json_load(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data if isinstance(data, type(default)) else default
+    except Exception:
+        pass
+    return default
+
+
+def _v51_json_save_atomic(path, data):
+    try:
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    except Exception:
+        pass
+    tmp = f"{path}.tmp"
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+V51_SETTINGS_FILE = os.path.join(_v51_data_dir(), 'top_scorers_source.json')
+
+
+def v51_get_top_scorers_source():
+    data = _v51_json_load(V51_SETTINGS_FILE, {})
+    src = str(data.get('source') or data.get('top_scorers_source') or 'sofascore').strip().lower()
+    if src not in ('sofascore', 'espn'):
+        src = 'sofascore'
+    return src
+
+
+def v51_set_top_scorers_source(src):
+    src = str(src or '').strip().lower()
+    if src not in ('sofascore', 'espn'):
+        src = 'sofascore'
+    data = {'source': src, 'updated_at': _v49_now_makkah_str() if '_v49_now_makkah_str' in globals() else ''}
+    try:
+        _v51_json_save_atomic(V51_SETTINGS_FILE, data)
+    except Exception:
+        pass
+    return src
+
+
+def v51_top_source_label(src=None):
+    src = src or v51_get_top_scorers_source()
+    return 'SofaScore Goals' if src == 'sofascore' else 'ESPN Top Scorers'
+
+
+def _v51_country_ar(name_or_code):
+    try:
+        return _v49_country_ar(name_or_code)
+    except Exception:
+        return name_or_code or ''
+
+
+def _v51_extract_sofascore_top_scorers(data):
+    """يدعم أكثر من شكل من SofaScore: top-players + statistics."""
+    items = []
+    try:
+        walker = _v49_walk
+    except Exception:
+        def walker(obj):
+            if isinstance(obj, dict):
+                yield obj
+                for v in obj.values():
+                    yield from walker(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    yield from walker(v)
+    def to_int(v):
+        try:
+            if v is None or v == '': return None
+            return int(float(str(v).strip()))
+        except Exception:
+            return None
+    for node in walker(data):
+        if not isinstance(node, dict):
+            continue
+        player = node.get('player') if isinstance(node.get('player'), dict) else None
+        if not player:
+            # بعض إحصائيات SofaScore تأتي player داخل row أو entity.
+            for k in ('participant', 'entity', 'athlete'):
+                if isinstance(node.get(k), dict) and (node[k].get('name') or node[k].get('shortName')):
+                    player = node[k]; break
+        if not isinstance(player, dict):
+            continue
+        stats = node.get('statistics') or node.get('statistic') or node.get('stats') or node
+        goals = None
+        for container in (stats, node):
+            if not isinstance(container, dict):
+                continue
+            for k in ('goals', 'goal', 'totalGoals', 'scores', 'goalsTotal'):
+                if k in container:
+                    goals = to_int(container.get(k)); break
+            if goals is not None:
+                break
+        if goals is None or goals <= 0:
+            continue
+        name = player.get('name') or player.get('shortName') or player.get('slug') or ''
+        if not name:
+            continue
+        country = ''
+        if isinstance(player.get('country'), dict):
+            country = player['country'].get('name') or player['country'].get('alpha2') or player['country'].get('slug') or ''
+        elif isinstance(node.get('team'), dict):
+            country = node['team'].get('name') or node['team'].get('shortName') or ''
+        team = _v51_country_ar(country)
+        played = ''
+        for container in (stats, node):
+            if isinstance(container, dict):
+                for k in ('appearances', 'matches', 'playedMatches', 'games', 'matchesPlayed'):
+                    if k in container:
+                        played = to_int(container.get(k)) or ''
+                        break
+            if played != '':
+                break
+        items.append({'name': str(name).strip(), 'team': team, 'played': played, 'goals': int(goals)})
+    uniq, seen = [], set()
+    for it in items:
+        k = (str(it.get('name','')).lower(), str(it.get('team','')).lower())
+        if not k[0] or k in seen:
+            continue
+        seen.add(k)
+        uniq.append(it)
+    uniq.sort(key=lambda x: (-int(x.get('goals') or 0), int(x.get('played') or 999), str(x.get('name') or '')))
+    return uniq[:30]
+
+
+# احتفظ بالدالة القديمة كاحتياط داخلي.
+_V51_OLD_FETCH_SOFASCORE_TOP_SCORERS = globals().get('fetch_sofascore_top_scorers')
+
+def fetch_sofascore_top_scorers():
+    global _V49_TOP_SCORERS_LAST_META
+    if not requests:
+        _V49_TOP_SCORERS_LAST_META = {'source': 'SofaScore Goals', 'fetched_at': _v49_now_makkah_str(), 'error': 'requests غير متوفر'}
+        return []
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1',
+        'Accept': 'application/json,text/html,*/*',
+        'Referer': 'https://www.sofascore.com/football/tournament/world/world-championship/16',
+        'Origin': 'https://www.sofascore.com',
+    }
+    season_ids = []
+    last_error = ''
+    for base in ('https://www.sofascore.com/api/v1', 'https://api.sofascore.com/api/v1'):
+        try:
+            r = requests.get(f'{base}/unique-tournament/16/seasons', headers=headers, timeout=16)
+            if int(getattr(r, 'status_code', 200) or 200) >= 400:
+                last_error = f'seasons HTTP {getattr(r,"status_code","")}'
+                continue
+            data = r.json()
+            seasons = data.get('seasons') if isinstance(data, dict) else []
+            for s in seasons or []:
+                sid = s.get('id')
+                name = str(s.get('name') or s.get('year') or '')
+                if sid and ('2026' in name or not season_ids):
+                    season_ids.append(str(sid))
+        except Exception as e:
+            last_error = str(e)[:120]
+    # إزالة التكرار مع وضع موسم 2026 أولًا إذا كان موجودًا.
+    season_ids = list(dict.fromkeys(season_ids))[:5]
+    urls = []
+    for sid in season_ids:
+        for base in ('https://www.sofascore.com/api/v1', 'https://api.sofascore.com/api/v1'):
+            urls.extend([
+                f'{base}/unique-tournament/16/season/{sid}/top-players/goals',
+                f'{base}/unique-tournament/16/season/{sid}/top-players/overall',
+                f'{base}/unique-tournament/16/season/{sid}/statistics?limit=100&offset=0',
+                f'{base}/unique-tournament/16/season/{sid}/statistics?limit=100&offset=0&sort=-goals',
+                f'{base}/unique-tournament/16/season/{sid}/statistics?limit=100&offset=0&order=-goals',
+            ])
+    urls.extend([
+        'https://www.sofascore.com/api/v1/unique-tournament/16/top-players/goals',
+        'https://api.sofascore.com/api/v1/unique-tournament/16/top-players/goals',
+        'https://www.sofascore.com/football/tournament/world/world-championship/16',
+    ])
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=22)
+            if int(getattr(r, 'status_code', 200) or 200) >= 400:
+                last_error = f'HTTP {getattr(r,"status_code","")} {url[-55:]}'
+                continue
+            items = []
+            ctype = str((getattr(r, 'headers', {}) or {}).get('content-type','')).lower()
+            if 'json' in ctype or '/api/' in url:
+                try:
+                    items = _v51_extract_sofascore_top_scorers(r.json())
+                except Exception as e:
+                    last_error = str(e)[:120]
+            if not items:
+                txt = getattr(r, 'text', '') or ''
+                # SofaScore Web embeds Next.js data in some pages.
+                for m in re.finditer(r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>', txt, re.S):
+                    try:
+                        items = _v51_extract_sofascore_top_scorers(json.loads(m.group(1)))
+                        if items: break
+                    except Exception:
+                        pass
+                # Fallback: ابحث عن أي JSON كبير في الصفحة.
+                if not items:
+                    for m in re.finditer(r'\{\s*"props"\s*:\s*\{.*?\}\s*\}\s*</script>', txt, re.S):
+                        try:
+                            block = m.group(0).replace('</script>', '')
+                            items = _v51_extract_sofascore_top_scorers(json.loads(block))
+                            if items: break
+                        except Exception:
+                            pass
+            if items and len(items) >= 3:
+                _V49_TOP_SCORERS_LAST_META = {'source': 'SofaScore Goals', 'fetched_at': _v49_now_makkah_str(), 'error': '', 'source_url': url}
+                return items
+        except Exception as e:
+            last_error = str(e)[:120]
+    # جرّب الدالة القديمة إن وجدت، لكن فقط إذا أعطت قائمة صالحة.
+    if callable(_V51_OLD_FETCH_SOFASCORE_TOP_SCORERS):
+        try:
+            items = _V51_OLD_FETCH_SOFASCORE_TOP_SCORERS() or []
+            if items and len(items) >= 3:
+                try: _V49_TOP_SCORERS_LAST_META.update({'source': 'SofaScore Goals', 'fetched_at': _v49_now_makkah_str()})
+                except Exception: pass
+                return items
+        except Exception as e:
+            last_error = str(e)[:120]
+    _V49_TOP_SCORERS_LAST_META = {'source': 'SofaScore Goals', 'fetched_at': _v49_now_makkah_str(), 'error': last_error or 'لم يرجع SofaScore قائمة صالحة'}
+    return []
+
+
+def _v51_fetch_espn_top_scorers_only():
+    global _V49_TOP_SCORERS_LAST_META
+    items = []
+    err = ''
+    if callable(globals().get('_V49_ORIG_FETCH_ESPN_TOP_SCORERS')):
+        try:
+            items = _V49_ORIG_FETCH_ESPN_TOP_SCORERS(True) or []
+        except Exception as e:
+            err = str(e)[:160]
+    if not items:
+        err = err or (globals().get('_V39_TOP_SCORERS_LAST_ERROR') or 'لم يرجع ESPN قائمة صالحة')
+    meta = dict(globals().get('_V47_SCORERS_LAST_META') or {})
+    _V49_TOP_SCORERS_LAST_META = {'source': 'ESPN Top Scorers', 'fetched_at': meta.get('fetched_at') or _v49_now_makkah_str(), 'error': err or meta.get('error','')}
+    return items
+
+
+def _v49_choose_top_scorers():
+    global _V49_TOP_SCORERS_LAST_META
+    src = v51_get_top_scorers_source()
+    if src == 'espn':
+        return _v51_fetch_espn_top_scorers_only()
+    items = []
+    try:
+        items = fetch_sofascore_top_scorers() or []
+    except Exception as e:
+        _V49_TOP_SCORERS_LAST_META = {'source': 'SofaScore Goals', 'fetched_at': _v49_now_makkah_str(), 'error': str(e)[:160]}
+        items = []
+    if items and len(items) >= 3:
+        return items
+    # لا نرجع ESPN إذا المصدر الرسمي المختار SofaScore؛ نعرض فشل المصدر المختار حتى تعرف السبب.
+    return []
+
+
+def fetch_espn_top_scorers(force_refresh=True):
+    # الاسم القديم يبقى حتى لا تنكسر الدوال، لكن المصدر يحدده خيار الإدارة.
+    return _v49_choose_top_scorers()
+
+
+async def v51_top_scorers_source_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    args = [str(a).strip().lower() for a in (getattr(context, 'args', None) or [])]
+    current = v51_get_top_scorers_source()
+    if args and args[0] in ('espn','esbn','espn_top','sofa','sofascore'):
+        new_src = 'espn' if args[0].startswith('espn') or args[0] == 'esbn' else 'sofascore'
+        v51_set_top_scorers_source(new_src)
+        await msg.reply_text(f"✅ تم اعتماد {v51_top_source_label(new_src)} كمصدر رسمي لهدافين البطولة.")
+        return
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(('✅ ' if current == 'sofascore' else '') + 'SofaScore Goals', callback_data='v32adm|top_scorers_source|sofascore')],
+        [InlineKeyboardButton(('✅ ' if current == 'espn' else '') + 'ESPN Top Scorers', callback_data='v32adm|top_scorers_source|espn')],
+        [InlineKeyboardButton('🔄 تبديل المصدر', callback_data='v32adm|toggle_top_scorers_source')],
+    ])
+    await msg.reply_text(
+        f"🏆 مصدر هدافين البطولة الحالي: {v51_top_source_label(current)}\n\n"
+        "اختر المصدر الرسمي. إذا اخترت مصدرًا، لن يتم استخدام المصدر الثاني حتى تغيّره من الإدارة.",
+        reply_markup=kb
+    )
+
+
+# زر داخل لوحة الإدارة.
+_V51_PREV_ADMIN_KEYBOARD = globals().get('_v38e_admin_keyboard')
+def _v38e_admin_keyboard():
+    try:
+        kb = _V51_PREV_ADMIN_KEYBOARD() if callable(_V51_PREV_ADMIN_KEYBOARD) else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    current = v51_get_top_scorers_source()
+    label = '🏆 مصدر الهدافين: SofaScore' if current == 'sofascore' else '🏆 مصدر الهدافين: ESPN'
+    exists = any(str(getattr(btn, 'callback_data', '')) in ('v32adm|toggle_top_scorers_source','v32adm|top_scorers_source|sofascore','v32adm|top_scorers_source|espn') for row in rows for btn in row)
+    if not exists:
+        rows.append([InlineKeyboardButton(label, callback_data='v32adm|toggle_top_scorers_source')])
+    return InlineKeyboardMarkup(rows)
+
+
+# Callback الإدارة للمصدر + يحافظ على الموجود.
+_V51_PREV_ADMIN_CALLBACK = globals().get('v32_admin_callback')
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in ('toggle_top_scorers_source', 'top_scorers_source'):
+        try: await q.answer()
+        except Exception: pass
+        if not is_admin_user(update):
+            await q.message.reply_text('هذا الخيار للمشرفين فقط 🔒')
+            return
+        if action == 'toggle_top_scorers_source':
+            current = v51_get_top_scorers_source()
+            new_src = 'espn' if current == 'sofascore' else 'sofascore'
+        else:
+            new_src = parts[2] if len(parts) > 2 else 'sofascore'
+            new_src = 'espn' if str(new_src).lower().startswith('espn') else 'sofascore'
+        v51_set_top_scorers_source(new_src)
+        await q.message.reply_text(
+            f"✅ تم اعتماد {v51_top_source_label(new_src)} كمصدر رسمي لهدافين البطولة.\n"
+            "المصدر الثاني لن يستخدم حتى تغيّر الخيار من الإدارة."
+        )
+        return
+    if callable(_V51_PREV_ADMIN_CALLBACK):
+        return await _V51_PREV_ADMIN_CALLBACK(update, context)
+
+
+# ---------- تحديث كيف يتأهل بالخلفية ----------
+def _v51_in_how_refresh_window(now=None):
+    now = now or (_v49_now_makkah_dt() if '_v49_now_makkah_dt' in globals() else datetime.now())
+    try:
+        h = int(now.hour)
+        return h >= 19 or h < 9
+    except Exception:
+        return False
+
+
+async def v51_how_qualify_refresh_job(context):
+    global V51_HOW_REFRESH_RUNNING
+    if not _v51_in_how_refresh_window():
+        return
+    if V51_HOW_REFRESH_RUNNING:
+        return
+    V51_HOW_REFRESH_RUNNING = True
+    try:
+        if '_v33_snapshot' in globals():
+            await asyncio.wait_for(asyncio.to_thread(_v33_snapshot, True), timeout=V51_HOW_REFRESH_TIMEOUT)
+    except Exception:
+        pass
+    finally:
+        V51_HOW_REFRESH_RUNNING = False
+
+
+# ---------- تحديث احتمالات المغادرة التلقائي ----------
+def _v51_admin_notify_chat_id():
+    raw = os.environ.get('V51_ADMIN_NOTIFY_CHAT_ID') or os.environ.get('ADMIN_NOTIFY_CHAT_ID') or ''
+    try:
+        if raw.strip():
+            return int(raw.strip())
+    except Exception:
+        pass
+    try:
+        ids = list(admin_id_set() or [])
+        return int(ids[0]) if ids else None
+    except Exception:
+        return None
+
+
+async def v51_exit_auto_schedule_job(context):
+    global V48_EXIT_UPDATE_TASK, V48_EXIT_UPDATE_STARTED_AT
+    now = _v49_now_makkah_dt() if '_v49_now_makkah_dt' in globals() else datetime.now()
+    try:
+        hhmm = now.strftime('%H:%M')
+        day_key = now.strftime('%Y-%m-%d')
+    except Exception:
+        return
+    if hhmm not in V51_EXIT_AUTO_TIMES:
+        return
+    run_key = f'{day_key}|{hhmm}'
+    if V51_EXIT_AUTO_LAST_RUN.get(hhmm) == run_key:
+        return
+    V51_EXIT_AUTO_LAST_RUN[hhmm] = run_key
+    if globals().get('V48_EXIT_UPDATE_TASK') and not V48_EXIT_UPDATE_TASK.done():
+        return
+    chat_id = _v51_admin_notify_chat_id()
+    if not chat_id:
+        # بدون معرف مشرف لا نرسل رسائل، لكن نحدّث بالخلفية بدون التأثير على البوت.
+        try:
+            asyncio.create_task(asyncio.to_thread(_v49_run_exit_update_subprocess, V49_EXIT_TIMEOUT_SECONDS))
+        except Exception:
+            pass
+        return
+    V48_EXIT_UPDATE_STARTED_AT = _v49_now_makkah_str() if '_v49_now_makkah_str' in globals() else hhmm
+    try:
+        await context.bot.send_message(chat_id=chat_id, text=(
+            '🔄 بدأ التحديث التلقائي لاحتمالات مغادرة البطولة...\n\n'
+            f'⏳ المهلة القصوى: {V49_EXIT_TIMEOUT_SECONDS} ثانية\n'
+            f'🕒 الوقت المجدول: {hhmm} بتوقيت مكة'
+        ))
+    except Exception:
+        pass
+    try:
+        V48_EXIT_UPDATE_TASK = context.application.create_task(_v49_refresh_exit_probs_bg(context.bot, chat_id))
+    except Exception:
+        V48_EXIT_UPDATE_TASK = asyncio.create_task(_v49_refresh_exit_probs_bg(context.bot, chat_id))
+
+# ==================== END V51 SOURCE TOGGLE + SMART REFRESH PATCH — FAHAD ====================
+
+
+
+
+# ==================== V51B TOP SCORERS SEND OVERRIDE — FAHAD ====================
+# يحافظ على ترتيب المصدر الرسمي بدل إعادة ترتيب المتساوين أبجديًا.
+async def _v41_send_working_top_scorers(message):
+    wait = await message.reply_text('⏳ أسحب هدافي البطولة...')
+    try:
+        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=90)
+        meta = dict(globals().get('_V49_TOP_SCORERS_LAST_META') or {})
+        if not items:
+            src = v51_top_source_label() if 'v51_top_source_label' in globals() else 'المصدر المحدد'
+            err = meta.get('error') or 'لم يرجع المصدر قائمة صالحة الآن.'
+            await wait.edit_text(f'⚠️ تعذر جلب هدافي البطولة من {src}.\nالسبب: {err}')
+            return
+        # المصدر يعطي الترتيب الصحيح؛ نكتفي بأول 25 بدون تغيير ترتيب المتساوين.
+        items = list(items or [])[:25]
+        path = _v47_render_unique_top_scorers(items) if '_v47_render_unique_top_scorers' in globals() else render_top_scorers_v29(items)
+        caption = (
+            'هدافو البطولة ✅\n'
+            f"المصدر: {meta.get('source') or v51_top_source_label()}\n"
+            '⚠️ قد تختلف سرعة تحديث الهدافين بين المصادر.\n'
+            f"آخر تحديث: {meta.get('fetched_at') or _v49_now_makkah_str()}"
+        )
+        await send_photo_path(message, path, caption)
+        try: await wait.delete()
+        except Exception: pass
+    except Exception as e:
+        await wait.edit_text(f'تعذر جلب هدافي البطولة ❌\n{str(e)[:180]}')
+
+# ==================== END V51B TOP SCORERS SEND OVERRIDE — FAHAD ====================
+
 
 if __name__ == "__main__":
     main()
