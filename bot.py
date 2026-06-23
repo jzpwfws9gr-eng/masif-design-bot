@@ -47170,2709 +47170,463 @@ async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAU
 
 # ==================== END V41 SCORERS ONLY FROM WORKING FILE ====================
 
+# ==================== V47 CLEAN SAFE PATCH — FAHAD ====================
+# اعتماد فهد الأخير:
+# - لا تحديث تلقائي ولا تحديث بالخلفية ولا كاش شامل.
+# - ترتيب المجموعات يبقى كما هو ويسحب من ESPN عند الضغط.
+# - الفانتزي لا يُلمس.
+# - الهدافين: كل ضغطة سحب مباشر من ESPN، تصميم مثل أول، ولا أرقام قديمة عند فشل السحب.
+# - أفضل الثوالث: عداد 1/8 والضامن رسميًا عليه ✅.
+# - كيف تتأهل: مهلة التفاصيل الثقيلة 240 ثانية مع رسالة واضحة.
+
+import time as _v47_time
+from urllib.parse import urlencode as _v47_urlencode
+
+_V47_SCORERS_LAST_META = {
+    "source": "-",
+    "source_url": "-",
+    "fetched_at": "-",
+    "cache_used": False,
+    "rows_count": 0,
+    "error": "",
+}
 
 
-# ==================== V42 FINAL FIXES — FAHAD ====================
-# المطلوب الآن:
-# 1) لوحة البطولة: المكتملة + المباشرة فقط، مع منع مباريات اليوم القادمة من الدخول بسبب 0-0 أو كاش.
-# 2) لوحة البطولة: فتح سريع من كاش محفوظ، والتحديث الثقيل من زر الإدارة/التحديث.
-# 3) الهدافين: منع أرقام كاش/صورة قديمة، وقراءة goals/played بدقة من ESPN byathlete/Stats.
-# 4) زر جديد: ❌ احتمالات مغادرة البطولة، يشرح الخروج كثالث بسبب أفضل 8 ثوالث.
-
-import time
-
-# ---------- V42: helpers ----------
-V42_BOARD_CACHE_FILE = 'tournament_board_cache_v42.json'
-V42_SCORERS_CACHE_FILE = 'top_scorers_cache_v42.json'
-
-
-def _v42_riyadh_now():
+def _v47_now_makkah_str():
     try:
-        return datetime.utcnow() + timedelta(hours=3)
+        return (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M بتوقيت مكة")
     except Exception:
-        return datetime.now()
+        return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
-def _v42_json_load(path, default):
-    try:
-        return _json_load_file(path, default) if '_json_load_file' in globals() else json.load(open(path, 'r', encoding='utf-8'))
-    except Exception:
-        return default
-
-
-def _v42_json_save(path, data):
-    try:
-        if '_json_save_file' in globals():
-            _json_save_file(path, data)
-        else:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
-def _v42_int(x):
-    try:
-        if x is None:
-            return None
-        s = str(x).strip()
-        if not s:
-            return None
-        s = re.sub(r'[^0-9\-\.]', '', s)
-        if s in ('', '-', '.', '-.'):
-            return None
-        return int(float(s))
-    except Exception:
-        return None
-
-
-# ---------- V42: accurate match status/counting ----------
-def _v42_status_blob(obj):
-    vals = []
-    def add(v):
-        if v is not None:
-            vals.append(str(v))
-    if isinstance(obj, dict):
-        for k in ('status','state','detail','shortDetail','description','statusText','stage','phase','clock','period'):
-            v = obj.get(k)
-            if isinstance(v, dict):
-                for kk in ('state','detail','shortDetail','description','name','type','completed'):
-                    add(v.get(kk))
-                typ = v.get('type')
-                if isinstance(typ, dict):
-                    for kk in ('state','detail','shortDetail','description','name','completed'):
-                        add(typ.get(kk))
-            else:
-                add(v)
-        st = obj.get('status')
-        if isinstance(st, dict):
-            typ = st.get('type') if isinstance(st.get('type'), dict) else {}
-            for kk in ('state','detail','shortDetail','description','name','completed'):
-                add(typ.get(kk))
-    return ' '.join(vals).lower()
-
-
-def _v42_parse_fixture_datetime_riyadh(m):
-    try:
-        d = _normalize_date_arg((m or {}).get('date'))
-        if not d:
-            return None
-        dd, mm, yy = [int(x) for x in d.split('/')]
-        time_s = str((m or {}).get('time') or '').strip()
-        # أمثلة: 3:00 صباحاً، 12:00 صباحاً، 10:00 مساءً
-        mt = re.search(r'(\d{1,2})\s*[:٫]\s*(\d{2})', time_s)
-        if not mt:
-            return datetime(yy, mm, dd, 12, 0)
-        hh = int(mt.group(1)); mi = int(mt.group(2))
-        is_pm = any(x in time_s for x in ('مساء', 'م', 'PM', 'pm'))
-        is_am = any(x in time_s for x in ('صباح', 'ص', 'AM', 'am'))
-        if is_pm and hh < 12:
-            hh += 12
-        if is_am and hh == 12:
-            hh = 0
-        return datetime(yy, mm, dd, hh, mi)
-    except Exception:
-        return None
-
-
-def _v42_match_bucket(obj, fixture=None):
-    """complete / live / scheduled — لا نعتمد على وجود score وحده."""
-    if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
-        return 'scheduled'
-    blob = _v42_status_blob(obj)
-    # الحالات الرسمية أولاً
-    if any(x in blob for x in ('status_final', 'final', 'post', 'full time', 'full-time', 'ft ', ' ft', 'finished', 'complete', 'completed', 'نهاية', 'انتهت', 'نهائي')):
-        return 'complete'
-    if any(x in blob for x in ('in_progress', 'in-progress', 'status_in_progress', 'live', 'halftime', 'half time', ' ht', 'ht ', 'مباشر', 'الشوط')):
-        return 'live'
-    if any(x in blob for x in ('pre', 'scheduled', 'status_scheduled', 'not started', 'لم تبدأ', 'قبل المباراة')):
-        return 'scheduled'
-
-    # كاش قديم بدون حالة: استخدم وقت المباراة، وليس وجود 0-0.
-    ko = _v42_parse_fixture_datetime_riyadh(fixture or {})
-    now = _v42_riyadh_now()
-    if ko:
-        if now < ko:
-            return 'scheduled'
-        # داخل أول 150 دقيقة من البداية: تعامل معها كمباشرة حتى لو الحالة ناقصة.
-        if ko <= now < ko + timedelta(minutes=150):
-            return 'live'
-        return 'complete'
-    return 'scheduled'
-
-
-# اجعل دوال V40 تستخدم التحديد الأدق.
-_v40_match_bucket = _v42_match_bucket
-
-_V42_PREV_RESULT_FOR_FIXTURE = globals().get('_v32_result_for_fixture')
-def _v32_result_for_fixture(m, force=False):
-    obj = None
-    if _V42_PREV_RESULT_FOR_FIXTURE:
-        try:
-            obj = _V42_PREV_RESULT_FOR_FIXTURE(m, force=force)
-        except TypeError:
-            obj = _V42_PREV_RESULT_FOR_FIXTURE(m)
-        except Exception:
-            obj = None
-    if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
-        return obj
-    bucket = _v42_match_bucket(obj, m)
-    if bucket == 'scheduled':
-        return None
-    obj = dict(obj)
-    obj['_v40_bucket'] = bucket
-    obj['_v42_bucket'] = bucket
-    return obj
-
-
-def _v40_counted_matches_and_goals(force=False):
-    completed = live = goals = 0
-    seen = set()
-    try:
-        fixtures = _v32_all_group_fixtures() if '_v32_all_group_fixtures' in globals() else []
-    except Exception:
-        fixtures = []
-    for m in fixtures or []:
-        try:
-            key = str(m.get('id') or '') or f"{m.get('date')}|{m.get('time')}|{m.get('team1')}|{m.get('team2')}"
-            if key in seen:
-                continue
-            seen.add(key)
-            obj = _v32_result_for_fixture(m, force=force)
-            if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
-                continue
-            bucket = obj.get('_v42_bucket') or obj.get('_v40_bucket') or _v42_match_bucket(obj, m)
-            if bucket not in ('complete', 'live'):
-                continue
-            s1 = int(obj.get('score1') or 0); s2 = int(obj.get('score2') or 0)
-            if bucket == 'complete':
-                completed += 1
-            else:
-                live += 1
-            goals += s1 + s2
-        except Exception:
-            continue
-    return {'completed': completed, 'live': live, 'counted': completed + live, 'goals': goals}
-
-
-# ---------- V42: board cache ----------
-def _v42_raw_board_text(force=False):
-    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
-    biggest = snap.get('biggest') or {}
-    big = '-' if not biggest else f"{biggest.get('team1')} {biggest.get('score1')}-{biggest.get('score2')} {biggest.get('team2')}"
-    ba = snap.get('best_attack') or ('-',0)
-    bd = snap.get('best_defense') or ('-',0)
-    last_q = (snap.get('qualified') or ['-'])[-1]
-    last_e = (snap.get('eliminated') or ['-'])[-1]
-    try:
-        decisive_count = len(_v32_decisive_rows(False))
-    except Exception:
-        decisive_count = 0
-    try:
-        cnt = _v40_counted_matches_and_goals(force=force)
-        counted = int(cnt.get('counted') or 0)
-        completed = int(cnt.get('completed') or 0)
-        live = int(cnt.get('live') or 0)
-        goals = int(cnt.get('goals') or 0)
-    except Exception:
-        counted = int(snap.get('finished_count') or 0)
-        completed = int(snap.get('completed_count') or counted)
-        live = int(snap.get('live_count') or 0)
-        goals = int(snap.get('goals') or 0)
-    updated = _now_riyadh_text() if '_now_riyadh_text' in globals() else _v42_riyadh_now().strftime('%Y-%m-%d %H:%M') + ' بتوقيت مكة'
-    lines = [
-        '🏆 لوحة البطولة',
-        f'آخر تحديث: {updated}',
-        '',
-        f'مباريات البطولة المحتسبة: {counted} / {snap.get("total_tournament_matches",104)}',
-        f'مباريات دور المجموعات المحتسبة: {counted} / {snap.get("total_group_matches",72)}',
-        f'تفصيلها: {completed} مكتملة + {live} مباشرة',
-        f'إجمالي الأهداف: {goals}',
-        f'أكبر نتيجة: {big}',
-        f'أقوى هجوم: {ba[0]} — {ba[1]} أهداف',
-        f'أقوى دفاع: {bd[0]} — استقبل {bd[1]}',
-        f'آخر متأهل رسميًا: {last_q}',
-        f'آخر مستبعد رسميًا: {last_e}',
-        f'مباريات الحسم القادمة: {decisive_count}',
-    ]
-    text = '\n'.join(lines)
-    _v42_json_save(V42_BOARD_CACHE_FILE, {'text': text, 'updated_at': updated, 'saved_ts': time.time()})
-    return text
-
-
-def _v32_tournament_board_text(force=False):
-    # عند الضغط العادي: افتح سريع من الكاش. عند التحديث: احسب واحفظ.
-    if not force:
-        cache = _v42_json_load(V42_BOARD_CACHE_FILE, {})
-        txt = cache.get('text') if isinstance(cache, dict) else None
-        if txt:
-            return txt
-    return _v42_raw_board_text(force=force)
-
-
-def _v39_board_text(force=False):
-    return _v32_tournament_board_text(force=force)
-
-
-# ---------- V42: ESPN scorers accurate parser/no stale image ----------
-def _v42_is_goal_stat_name(name):
-    n = str(name or '').strip().lower()
-    n = re.sub(r'[^a-z0-9أ-ي]+', '', n)
-    return n in {'g', 'goal', 'goals', 'goalsfor', 'الأهداف', 'اهداف'} or str(name or '').strip().lower() in {'goals', 'goal', 'g'}
-
-
-def _v42_is_played_stat_name(name):
-    n = str(name or '').strip().lower()
-    n2 = re.sub(r'[^a-z0-9أ-ي]+', '', n)
-    return n2 in {'p', 'gp', 'games', 'gamesplayed', 'appearances', 'matches', 'played', 'app'}
-
-
-def _v42_stat_value_from_obj(st):
-    if not isinstance(st, dict):
-        return _v42_int(st)
-    for k in ('value', 'displayValue', 'display', 'total', 'stat', 'rankValue'):
-        val = _v42_int(st.get(k))
-        if val is not None:
-            return val
-    return None
-
-
-def _v42_pick_stat_value(node, kind='goals'):
-    if not isinstance(node, dict):
-        return None
-    # مفاتيح مباشرة بدقة؛ لا نلتقط goalsAgainst ولا displayName بسبب حرف P.
-    direct_goal = {'goals', 'goal', 'g'}
-    direct_played = {'appearances', 'gamesplayed', 'games_played', 'games', 'matches', 'played', 'gp', 'p'}
-    keys = direct_goal if kind == 'goals' else direct_played
-    for k, v in node.items():
-        lk = str(k).strip().lower()
-        lk_clean = re.sub(r'[^a-z0-9]+', '', lk)
-        if lk in keys or lk_clean in keys:
-            val = _v42_stat_value_from_obj(v)
-            if val is not None:
-                return val
-    # قوائم إحصائية داخل الصف.
-    for list_key in ('statistics', 'stats', 'splits', 'categories', 'leaders'):
-        arr = node.get(list_key)
-        if isinstance(arr, list):
-            for st in arr:
-                if not isinstance(st, dict):
-                    continue
-                nm_candidates = [st.get('name'), st.get('displayName'), st.get('shortDisplayName'), st.get('abbreviation'), st.get('label'), st.get('key')]
-                ok = any((_v42_is_goal_stat_name(x) if kind == 'goals' else _v42_is_played_stat_name(x)) for x in nm_candidates)
-                if ok:
-                    val = _v42_stat_value_from_obj(st)
-                    if val is not None:
-                        return val
-                # بعض ESPN يضع إحصائيات داخل عنصر متداخل
-                val = _v42_pick_stat_value(st, kind)
-                if val is not None:
-                    return val
-    return None
-
-
-# اربط الاسم القديم بالدقيق حتى تستفيد دوال الملف الشغال.
-def _v29_pick_stat_value(obj, names=("goals", "goal", "G")):
-    names_l = {str(x).lower() for x in (names or [])}
-    kind = 'played' if any(x in names_l for x in ('appearances','gamesplayed','games','p','gp')) else 'goals'
-    return _v42_pick_stat_value(obj, kind)
-
-
-def _v42_name_from_node(node):
-    if not isinstance(node, dict):
-        return ''
-    for k in ('athlete', 'player', 'participant'):
-        v = node.get(k)
-        if isinstance(v, dict):
-            for nk in ('displayName', 'fullName', 'shortName', 'name'):
-                nm = normalize_name(v.get(nk) or '')
-                if nm:
-                    return nm
-    for nk in ('displayName', 'fullName', 'shortName', 'name'):
-        nm = normalize_name(node.get(nk) or '')
-        if nm:
-            return nm
-    return ''
-
-
-def _v42_team_from_node(node):
-    if not isinstance(node, dict):
-        return ''
-    for k in ('team','club','competitor'):
-        v = node.get(k)
-        if isinstance(v, dict):
-            nm = v.get('displayName') or v.get('shortDisplayName') or v.get('abbreviation') or v.get('name') or ''
-            if nm:
-                return canonical_team_name(nm) or normalize_name(nm)
-    return ''
-
-
-def _v42_valid_scorer_name(name):
-    s = normalize_name(name)
-    if not s or len(s) < 2 or len(s) > 60:
-        return False
-    bad = r'(goal|goals|against|assist|corner|shot|free\-?kick|penalty area|saved|world cup|statistics|table|ranking|team|club)'
-    return not re.search(bad, s, re.I)
-
-
-def _v29_extract_top_scorers_from_json(data):
-    items = []
-    seen_best = {}
-    walker = _v28_walk_json(data) if '_v28_walk_json' in globals() else []
-    for node in walker:
-        if not isinstance(node, dict):
-            continue
-        name = _v42_name_from_node(node)
-        if not _v42_valid_scorer_name(name):
-            continue
-        goals = _v42_pick_stat_value(node, 'goals')
-        if goals is None or int(goals) <= 0:
-            continue
-        played = _v42_pick_stat_value(node, 'played')
-        team = _v42_team_from_node(node) or '-'
-        item = {'name': normalize_name(name), 'team': team, 'played': played if played is not None else '', 'goals': int(goals)}
-        key = (item['name'].lower(), item['team'].lower())
-        old = seen_best.get(key)
-        if (old is None) or int(item['goals']) > int(old.get('goals') or 0):
-            seen_best[key] = item
-    items = list(seen_best.values())
-    items.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
-    return items[:25]
-
-
-# HTML fallback يبقى لكن بعده نعيد الترتيب والتنظيف.
-_V42_PREV_HTML_SCORERS = globals().get('_v29_extract_top_scorers_from_html')
-def _v29_extract_top_scorers_from_html(html):
-    items = []
-    try:
-        m = re.search(r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>', html or '', flags=re.S)
-        if m:
-            data = json.loads(m.group(1))
-            items = _v29_extract_top_scorers_from_json(data)
-            if items:
-                return items
-    except Exception:
-        pass
-    if _V42_PREV_HTML_SCORERS:
-        try:
-            items = _V42_PREV_HTML_SCORERS(html)
-        except Exception:
-            items = []
-    clean = []
-    for it in items or []:
-        if _v42_valid_scorer_name(it.get('name')) and _v42_int(it.get('goals')) and _v42_int(it.get('goals')) > 0:
-            clean.append({'name': normalize_name(it.get('name')), 'team': canonical_team_name(it.get('team')) or normalize_name(it.get('team') or '-'), 'played': _v42_int(it.get('played')) if _v42_int(it.get('played')) is not None else '', 'goals': int(_v42_int(it.get('goals')) or 0)})
-    clean.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
-    return clean[:25]
-
-
-def _v42_scoring_stats_urls():
-    ts = int(time.time())
-    base = _v29_scoring_stats_urls() if '_v29_scoring_stats_urls' in globals() else []
-    out = []
-    for u in base:
-        sep = '&' if '?' in u else '?'
-        out.append(f'{u}{sep}_ts={ts}')
-    return out
-
-
-def fetch_espn_top_scorers(force_refresh=True):
-    global _V39_TOP_SCORERS_LAST_ERROR, _V38_TOP_SCORERS_LAST_ERROR, _V38F_ESPN_SCORERS_LAST_ERROR
-    try:
-        _V39_TOP_SCORERS_LAST_ERROR = _V38_TOP_SCORERS_LAST_ERROR = _V38F_ESPN_SCORERS_LAST_ERROR = ''
-    except Exception:
-        pass
-    if not requests:
-        return []
-    # لا نرجع من كاش داخلي عند force_refresh=True. الكاش فقط لآخر نسخة محفوظة لو فشل المصدرين.
-    errors = []
-    for url in _v42_scoring_stats_urls():
-        try:
-            r = _requests_get(url, timeout=22)
-            status = int(getattr(r, 'status_code', 200) or 200)
-            if status >= 400:
-                errors.append(f'HTTP {status}')
-                continue
-            ctype = (getattr(r, 'headers', {}) or {}).get('content-type', '')
-            items = []
-            if 'json' in ctype or 'byathlete' in url or 'statistics?' in url:
-                try:
-                    items = _v29_extract_top_scorers_from_json(r.json())
-                except Exception as e:
-                    errors.append(f'JSON {str(e)[:70]}')
-            if not items:
-                try:
-                    items = _v29_extract_top_scorers_from_html(getattr(r, 'text', '') or '')
-                except Exception as e:
-                    errors.append(f'HTML {str(e)[:70]}')
-            if items:
-                items = sorted(items, key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))[:25]
-                _v42_json_save(V42_SCORERS_CACHE_FILE, {'items': items, 'saved_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else str(_v42_riyadh_now()), 'saved_ts': time.time(), 'source': 'ESPN مباشر'})
-                return items
-            errors.append('بدون صفوف صالحة')
-        except Exception as e:
-            errors.append(str(e)[:100])
-            continue
-    msg = ' | '.join(errors[-5:])[:500] or 'ESPN لم يرجع قائمة هدافين صالحة الآن.'
-    try:
-        _V39_TOP_SCORERS_LAST_ERROR = _V38_TOP_SCORERS_LAST_ERROR = _V38F_ESPN_SCORERS_LAST_ERROR = msg
-    except Exception:
-        pass
-    # آخر نسخة محفوظة فقط إذا فشل السحب، مع توضيح ذلك في الإرسال.
-    if not force_refresh:
-        cache = _v42_json_load(V42_SCORERS_CACHE_FILE, {})
-        if isinstance(cache, dict) and isinstance(cache.get('items'), list):
-            return cache.get('items') or []
-    return []
-
-
-def _v42_render_unique_top_scorers(items):
-    try:
-        base_path = render_top_scorers_v29(items)
-        base, ext = os.path.splitext(base_path)
-        new_path = f'{base}_fresh_{int(time.time()*1000)}{ext or ".png"}'
-        shutil.copy2(base_path, new_path)
-        return new_path
-    except Exception:
-        return _v39_render_unique_top_scorers(items) if '_v39_render_unique_top_scorers' in globals() else render_top_scorers_v29(items)
-
-
-async def _v42_send_top_scorers(message):
-    wait = await message.reply_text('⏳ أسحب هدافي البطولة من ESPN مباشرة...')
-    try:
-        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=55)
-        caption_note = 'المصدر: ESPN — مباشر بدون كاش'
-        if not items:
-            cache = _v42_json_load(V42_SCORERS_CACHE_FILE, {})
-            if isinstance(cache, dict) and isinstance(cache.get('items'), list) and cache.get('items'):
-                items = cache.get('items')
-                caption_note = f"المصدر: آخر نسخة محفوظة — {cache.get('saved_at','')}"
-        if not items:
-            err = globals().get('_V39_TOP_SCORERS_LAST_ERROR') or 'لم يرجع ESPN قائمة هدافين صالحة الآن.'
-            await wait.edit_text(f'⚠️ تعذر سحب هدافين البطولة من ESPN حاليًا.\n{err}')
-            return
-        items = sorted(items, key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))[:25]
-        path = _v42_render_unique_top_scorers(items)
-        await send_photo_path(message, path, f'هدافو البطولة ✅\n{caption_note}')
-        try:
-            await wait.delete()
-        except Exception:
-            pass
-    except Exception as e:
-        await wait.edit_text(f'تعذر جلب هدافي البطولة ❌\n{str(e)[:300]}')
-
-
-_v39_send_top_scorers = _v42_send_top_scorers
-_v41_send_working_top_scorers = _v42_send_top_scorers
-_v38f_send_espn_top_scorers = _v42_send_top_scorers
-_v38_send_fresh_espn_top_scorers = _v42_send_top_scorers
-async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _v42_send_top_scorers(update.message)
-
-
-# ---------- V42: exit scenarios / أفضل الثوالث تضيع عليه ----------
-def _v42_match_win_phrase(team, match_text):
-    team = normalize_name(team)
-    mt = normalize_name(match_text or '')
-    if '×' in mt:
-        a, b = [normalize_name(x) for x in mt.split('×', 1)]
-        if team == a and b:
-            return f'فوز {team} على {b}'
-        if team == b and a:
-            return f'فوز {team} على {a}'
-    return f'فوز {team} في مباراة {mt}' if mt else f'فوز {team}'
-
-
-def _v42_exit_candidate_lines(team, target_pts, snap=None):
-    danger, mixed, compare, safe = _v38e_third_categories(team, target_pts, snap) if '_v38e_third_categories' in globals() else ([], [], [], [])
-    # نحتاج 8 ثوالث أفضل؛ ابدأ بمن يتجاوز بالنقاط ثم من يحتاج فارق أفضل.
-    candidates = []
-    for mode, arr in [('يتجاوز بالنقاط', danger), ('قد يتجاوز أو يدخل مقارنة', mixed), ('يحتاج فارق أفضل', compare)]:
-        for x in arr:
-            if (x.get('team') or '') == team:
-                continue
-            candidates.append((mode, x))
-    candidates = candidates[:8]
-    lines = []
-    for idx, (mode, x) in enumerate(candidates, start=1):
-        t = x.get('team') or '-'
-        g = x.get('group') or ''
-        pts = int(x.get('pts') or 0)
-        max_third = int(x.get('max_third') or x.get('current_max') or pts)
-        match = x.get('match') or ''
-        phrase = _v42_match_win_phrase(t, match)
-        if mode == 'يحتاج فارق أفضل':
-            phrase += ' بفارق مناسب'
-            reason = f'{t} قد يصل إلى {target_pts} نقاط ويتفوق بفارق الأهداف أو الأهداف المسجلة.'
-        elif max_third > int(target_pts):
-            reason = f'{t} قد يصبح ثالثًا بـ{max_third} نقاط ويتقدم على {team}.'
-        else:
-            reason = f'{t} قد يدخل مقارنة مباشرة مع {team} حسب الفارق والأهداف.'
-        lines.append(f'{idx}. {_v33_group_label(g) if "_v33_group_label" in globals() else g}')
-        lines.append(phrase)
-        lines.append(f'➡️ {reason}')
-        lines.append('')
-    return lines, len(candidates)
-
-
-def _v42_fourth_exit_block(team, snap=None):
-    try:
-        code = _v33_team_group(team)
-        scenarios = _v38_all_group_scenarios(code, snap, max_cases=729) if '_v38_all_group_scenarios' in globals() else []
-        fourth = None
-        for sc in scenarios:
-            pos, row = _v38_position_row(team, sc.get('rows') or [])
-            if int(pos or 99) == 4:
-                fourth = sc
-                break
-        if not fourth:
-            return []
-        rows = fourth.get('rows') or []
-        lines = ['📉 سيناريو مغادرة كمركز رابع:', '']
-        lines.append(f'يوجد مسار حسابي يجعل {team} ينهي المجموعة في المركز الرابع، ووقتها يغادر مباشرة دون حسابات أفضل الثوالث.')
-        lines.append('')
-        lines.append('ترتيب مثال ممكن:')
-        for i, r in enumerate(rows, start=1):
-            lines.append(f"{i}. {r.get('team')} — {r.get('Pts',0)} نقاط")
-        return lines
-    except Exception:
-        return []
-
-
-def _v42_how_exit_text(team):
-    team = _v33_find_team(team) or team
-    snap = _v33_snapshot(False) if '_v33_snapshot' in globals() else {}
-    code = _v33_team_group(team) if '_v33_team_group' in globals() else ''
-    lines = [f'❌ احتمالات مغادرة البطولة — {team}', '']
-    lines.append(f'{team} قد يغادر البطولة بطريقتين:')
-    lines.append('1. أن ينهي المجموعة في المركز الرابع.')
-    lines.append('2. أن ينهي المجموعة ثالثًا، لكنه لا يكون ضمن أفضل 8 ثوالث من أصل 12.')
-    lines.append('')
-
-    fourth_block = _v42_fourth_exit_block(team, snap)
-    if fourth_block:
-        lines.extend(fourth_block)
-        lines.append('')
-
-    # مسار الخروج كثالث
-    try:
-        target_pts, case = _v37_target_third_points(team, snap) if '_v37_target_third_points' in globals() else (None, None)
-        if not target_pts:
-            case = _v37_third_case_info(team, snap) if '_v37_third_case_info' in globals() else None
-            target_pts = _v38_case_final_pts(case) if case else None
-    except Exception:
-        target_pts, case = None, None
-
-    if target_pts:
-        lines.append('🥉 سيناريو مغادرة وهو ثالث:')
-        lines.append('')
-        lines.append(f'{team} ينهي {_v33_group_label(code) if "_v33_group_label" in globals() else code} في المركز الثالث بـ{target_pts} نقاط.')
-        lines.append('')
-        lines.append('وقتها يحتاج للتأهل أن يكون ضمن أفضل 8 ثوالث.')
-        lines.append('لكن قد تذهب عليه أفضل الثوالث إذا جاءت نتائج مجموعات أخرى بهذا الشكل:')
-        lines.append('')
-        cand_lines, n = _v42_exit_candidate_lines(team, int(target_pts), snap)
-        if cand_lines:
-            lines.extend(cand_lines)
-            if n >= 8:
-                lines.append(f'📊 النتيجة:')
-                lines.append(f'إذا تحققت هذه المسارات، يصبح أمام {team} 8 منتخبات ثالثة أفضل منه، فيغادر رغم أنه ثالث.')
-            else:
-                lines.append(f'📊 النتيجة:')
-                lines.append(f'حاليًا لا يظهر 8 منتخبات ثالثة واضحة أمام {team} في هذا السيناريو، لكن القائمة أعلاه توضح أهم النتائج التي تضغط عليه.')
-        else:
-            lines.append('لا يظهر حاليًا مسار واضح يضع 8 ثوالث أمامه حسب البيانات الحالية.')
-    else:
-        lines.append('لا يظهر حاليًا مسار ثالث واضح لحساب خروجه عبر أفضل الثوالث.')
-    lines.append('')
-    lines.append('⚠️ هذا سيناريو محتمل، وليس استبعادًا رسميًا.')
-    return '\n'.join([x for x in lines if x is not None]).strip()
-
-
-# أضف زر المغادرة إلى لوحة كيف تتأهل.
-def _v33_how_qualify_keyboard(team):
-    key = _v33_team_button_key(team) if '_v33_team_button_key' in globals() else str(team)
-    snap = _v33_snapshot(False) if '_v33_snapshot' in globals() else {}
-    status_txt = str((snap.get('status') or {}).get(team) or '')
-    is_q = ('متأهل' in status_txt and 'رسمي' in status_txt) or ('ضمن رسمي' in status_txt)
-    is_out = (('مستبعد' in status_txt or 'غادر' in status_txt) and 'رسمي' in status_txt)
-    rows_btn = []
-    if is_q or is_out:
-        if is_q and '_v38e_has_opponent_group' in globals() and _v38e_has_opponent_group(team):
-            rows_btn.append([InlineKeyboardButton('📊 تفاصيل مجموعة الخصم', callback_data=f'v32|opp_group|{key}')])
-        rows_btn.append([InlineKeyboardButton('📊 تفاصيل المجموعة', callback_data=f'v32|how_group|{key}')])
-        rows_btn.append([InlineKeyboardButton('⬅️ رجوع', callback_data='v32|how_start')])
-        return InlineKeyboardMarkup(rows_btn)
-    possible = set()
-    try:
-        possible = _v38_possible_positions_for_team(team, snap) if '_v38_possible_positions_for_team' in globals() else {1,2,3}
-    except Exception:
-        possible = {1,2,3}
-    row_btn = []
-    if 1 in possible:
-        row_btn.append(InlineKeyboardButton('🥇 احتمالات المركز الأول', callback_data=f'v32|how_first|{key}'))
-    if 2 in possible:
-        row_btn.append(InlineKeyboardButton('🥈 احتمالات المركز الثاني', callback_data=f'v32|how_second|{key}'))
-    if row_btn:
-        rows_btn.append(row_btn)
-    try:
-        if (3 in possible) or (_v37_third_case_info(team, snap) if '_v37_third_case_info' in globals() else False):
-            rows_btn.append([InlineKeyboardButton('🥉 احتمالات المركز الثالث وتحليله', callback_data=f'v32|how_thirds|{key}')])
-    except Exception:
-        if 3 in possible:
-            rows_btn.append([InlineKeyboardButton('🥉 احتمالات المركز الثالث وتحليله', callback_data=f'v32|how_thirds|{key}')])
-    rows_btn.append([InlineKeyboardButton('❌ احتمالات مغادرة البطولة', callback_data=f'v32|how_exit|{key}')])
-    rows_btn.append([InlineKeyboardButton('📊 تفاصيل المجموعة', callback_data=f'v32|how_group|{key}')])
-    rows_btn.append([InlineKeyboardButton('⬅️ رجوع', callback_data='v32|how_start')])
-    return InlineKeyboardMarkup(rows_btn)
-
-
-# Router override لإضافة callback الزر الجديد، وبقية الإجراءات للراوتر السابق.
-_V42_PREV_V32_CALLBACK = globals().get('v32_callback')
-async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q:
-        return
-    data = q.data or ''
-    parts = data.split('|')
-    action = parts[1] if len(parts) > 1 else ''
-    if action == 'how_exit' and len(parts) >= 3:
-        try:
-            await q.answer()
-        except Exception:
-            pass
-        team = _v33_team_from_button_key(parts[2]) if '_v33_team_from_button_key' in globals() else parts[2]
-        await q.edit_message_text(_v42_how_exit_text(team), reply_markup=_v33_how_qualify_keyboard(team))
-        return
-    if _V42_PREV_V32_CALLBACK:
-        return await _V42_PREV_V32_CALLBACK(update, context)
-
-# ==================== END V42 FINAL FIXES — FAHAD ====================
-
-
-# ==================== V43 FINAL AGREEMENT PATCH — FAHAD ====================
-# اعتماد فهد:
-# 1) لوحة البطولة لا تعتمد على قراءة عامة للجدول.
-#    العد = نتائج المباريات المنتهية + مباشر الآن فقط.
-#    المباريات القادمة لا تدخل أبدًا.
-# 2) مباشر الآن يستخدم الوقت كتصحيح مساعد: من بداية المباراة إلى 150 دقيقة = مباشر، بعدها مكتملة إذا عندها نتيجة.
-# 3) هدافين البطولة: كاش جديد + صورة باسم جديد، والكاش يظهر فقط كآخر نسخة محفوظة إذا فشل السحب المباشر.
-# 4) زر مغادرة البطولة: يوضح أولًا كيف يصبح المنتخب ثالث/رابع، ثم من يتعداه بالنقاط، ثم من يتعادل معه ويتفوق بالفارق.
-
-V43_BOARD_CACHE_FILE = 'tournament_board_cache_v43.json'
-try:
-    V42_BOARD_CACHE_FILE = V43_BOARD_CACHE_FILE
-except Exception:
-    pass
-try:
-    V42_SCORERS_CACHE_FILE = 'top_scorers_cache_v43.json'
-except Exception:
-    pass
-
-
-def _v43b_fixture_key(m):
-    try:
-        eid = str((m or {}).get('event_id') or '').replace('espn_', '').strip()
-        if eid:
-            return 'eid:' + eid
-    except Exception:
-        pass
-    try:
-        return f"{_normalize_date_arg((m or {}).get('date'))}|{simple_key((m or {}).get('team1',''))}|{simple_key((m or {}).get('team2',''))}"
-    except Exception:
-        return str(m)
-
-
-def _v43b_obj_is_complete(obj):
-    if not isinstance(obj, dict):
-        return False
-    blob = _v42_status_blob(obj) if '_v42_status_blob' in globals() else str(obj.get('status') or '').lower()
-    return any(x in blob for x in (
-        'status_final', 'final', 'post', 'full time', 'full-time', 'ft ', ' ft',
-        'finished', 'complete', 'completed', 'نهاية', 'انتهت', 'نهائي'
-    ))
-
-
-def _v43b_obj_is_live(obj):
-    if not isinstance(obj, dict):
-        return False
-    blob = _v42_status_blob(obj) if '_v42_status_blob' in globals() else str(obj.get('status') or '').lower()
-    return any(x in blob for x in (
-        'in_progress', 'in-progress', 'status_in_progress', 'live', 'halftime',
-        'half time', ' ht', 'ht ', 'مباشر', 'الشوط', 'استراحة'
-    ))
-
-
-def _v43b_fixture_status_by_time(m, now=None):
-    """scheduled / live / complete بالوقت فقط؛ يستخدم كتصحيح مساعد وليس مصدر نتيجة."""
-    now = now or (_v33_now_riyadh_dt() if '_v33_now_riyadh_dt' in globals() else _v42_riyadh_now())
-    dt = None
-    try:
-        dt = _v33_parse_fixture_datetime(m)
-    except Exception:
-        dt = None
-    if not dt:
-        try:
-            dt = _v42_parse_fixture_datetime_riyadh(m)
-        except Exception:
-            dt = None
-    if not dt:
-        return 'scheduled'
-    if now < dt:
-        return 'scheduled'
-    if dt <= now < dt + timedelta(minutes=150):
-        return 'live'
-    return 'complete'
-
-
-def _v43b_safe_fetch_result(m, d=None, force=False, allow_seed=True):
-    d = _normalize_date_arg(d or (m or {}).get('date'))
-    # استخدم نفس دالة نتائج المباريات الشغالة، مع كاشها.
-    try:
-        obj = _v41_fetch_result_for_fixture(m, d, force=force, allow_seed=allow_seed)
-        if isinstance(obj, dict):
-            return obj
-    except Exception:
-        pass
-    try:
-        obj = _v40_fetch_result_for_fixture(m, d, force=force, allow_seed=allow_seed)
-        if isinstance(obj, dict):
-            return obj
-    except Exception:
-        pass
-    try:
-        obj = _v33_fetch_result_for_fixture(m, d, force=force)
-        if isinstance(obj, dict):
-            return obj
-    except Exception:
-        pass
-    return None
-
-
-def _v43b_record_from_obj(m, obj, bucket):
-    t1 = canonical_team_name((m or {}).get('team1')) or (m or {}).get('team1') or (obj or {}).get('team1') or ''
-    t2 = canonical_team_name((m or {}).get('team2')) or (m or {}).get('team2') or (obj or {}).get('team2') or ''
-    s1 = _v42_int((obj or {}).get('score1')) if '_v42_int' in globals() else None
-    s2 = _v42_int((obj or {}).get('score2')) if '_v42_int' in globals() else None
-    return {
-        'key': _v43b_fixture_key(m), 'bucket': bucket,
-        'team1': t1, 'team2': t2,
-        'score1': int(s1 or 0), 'score2': int(s2 or 0),
-        'numeric': (s1 is not None and s2 is not None),
-    }
-
-
-def _v43b_board_records(force=False):
-    """مصدر اللوحة الجديد: نتائج المباريات + مباشر الآن فقط."""
-    records, seen = [], set()
-    now = _v33_now_riyadh_dt() if '_v33_now_riyadh_dt' in globals() else _v42_riyadh_now()
-    active = _normalize_date_arg(_v41_active_live_date()) if '_v41_active_live_date' in globals() else ''
-
-    # 1) نتائج المباريات: الأيام السابقة لليوم النشط فقط.
-    result_dates = []
-    try:
-        result_dates = [d for d, _dy in _v41_result_dates()]
-    except Exception:
-        try:
-            result_dates = [d for d, _dy in _v28_previous_result_dates()]
-        except Exception:
-            result_dates = []
-
-    for d in result_dates:
-        d = _normalize_date_arg(d)
-        try:
-            matches = _v43_results_fixtures_for_date(d, force=force, debug=[]) if '_v43_results_fixtures_for_date' in globals() else _v40_fixtures_for_date(d)
-        except Exception:
-            matches = []
-        for m in matches or []:
-            try:
-                key = _v43b_fixture_key(m)
-                if key in seen:
-                    continue
-                obj = _v43b_safe_fetch_result(m, d, force=force, allow_seed=True)
-                if not isinstance(obj, dict) or not _patch6_numeric_score(obj):
-                    continue
-                # بما أنه من شاشة نتائج المباريات، نعده مكتملًا فقط.
-                seen.add(key)
-                records.append(_v43b_record_from_obj(m, obj, 'complete'))
-            except Exception:
-                continue
-
-    # 2) مباشر الآن: اليوم النشط فقط؛ القادم لا يدخل.
-    live_matches = []
-    if active:
-        try:
-            live_matches = _v40_live_rows(active) if '_v40_live_rows' in globals() else _v33_live_rows(active)
-        except Exception:
-            live_matches = []
-    for m in live_matches or []:
-        try:
-            key = _v43b_fixture_key(m)
-            if key in seen:
-                continue
-            time_bucket = _v43b_fixture_status_by_time(m, now)
-            if time_bucket == 'scheduled':
-                continue
-            obj = _v43b_safe_fetch_result(m, active or (m or {}).get('date'), force=force, allow_seed=False)
-            if not isinstance(obj, dict):
-                # المباراة بدأت لكن المصدر ما رجع نتيجة: نحسبها مباشر 0 أهداف مؤقتًا.
-                if time_bucket == 'live':
-                    seen.add(key)
-                    records.append({'key': key, 'bucket': 'live', 'team1': (m or {}).get('team1',''), 'team2': (m or {}).get('team2',''), 'score1': 0, 'score2': 0, 'numeric': False})
-                continue
-            # الحالة الرسمية تتقدم على الوقت.
-            if _v43b_obj_is_complete(obj):
-                bucket = 'complete'
-            elif _v43b_obj_is_live(obj):
-                bucket = 'live'
-            else:
-                bucket = time_bucket
-            if bucket not in ('complete', 'live'):
-                continue
-            # بعد 150 دقيقة: مكتملة مؤقتًا إذا النتيجة موجودة.
-            if bucket == 'complete' and not _patch6_numeric_score(obj):
-                continue
-            seen.add(key)
-            records.append(_v43b_record_from_obj(m, obj, bucket))
-        except Exception:
-            continue
-    return records
-
-
-def _v43b_board_metrics(force=False):
-    records = _v43b_board_records(force=force)
-    completed = sum(1 for r in records if r.get('bucket') == 'complete')
-    live = sum(1 for r in records if r.get('bucket') == 'live')
-    goals = sum(int(r.get('score1') or 0) + int(r.get('score2') or 0) for r in records if r.get('numeric'))
-    # أكبر نتيجة: أكبر مجموع أهداف ثم أكبر فارق.
-    biggest = None
-    for r in records:
-        if not r.get('numeric'):
-            continue
-        total = int(r.get('score1') or 0) + int(r.get('score2') or 0)
-        diff = abs(int(r.get('score1') or 0) - int(r.get('score2') or 0))
-        key = (total, diff)
-        if biggest is None or key > biggest[0]:
-            biggest = (key, r)
-    big_text = '-'
-    if biggest:
-        r = biggest[1]
-        big_text = f"{r.get('team1')} {r.get('score1')}-{r.get('score2')} {r.get('team2')}"
-    stats = {}
-    for r in records:
-        if not r.get('numeric'):
-            continue
-        a, b = r.get('team1'), r.get('team2')
-        s1, s2 = int(r.get('score1') or 0), int(r.get('score2') or 0)
-        for t in (a, b):
-            stats.setdefault(t, {'gf': 0, 'ga': 0, 'p': 0})
-        stats[a]['gf'] += s1; stats[a]['ga'] += s2; stats[a]['p'] += 1
-        stats[b]['gf'] += s2; stats[b]['ga'] += s1; stats[b]['p'] += 1
-    best_attack = ('-', 0)
-    best_defense = ('-', 0)
-    if stats:
-        best_attack = max(stats.items(), key=lambda kv: (kv[1]['gf'], -kv[1]['ga'], kv[0]))
-        best_attack = (best_attack[0], best_attack[1]['gf'])
-        best_defense = min(stats.items(), key=lambda kv: (kv[1]['ga'], -kv[1]['gf'], kv[0]))
-        best_defense = (best_defense[0], best_defense[1]['ga'])
-    return {
-        'completed': completed,
-        'live': live,
-        'counted': completed + live,
-        'goals': goals,
-        'biggest_text': big_text,
-        'best_attack': best_attack,
-        'best_defense': best_defense,
-        'records': records,
-    }
-
-
-def _v40_counted_matches_and_goals(force=False):
-    m = _v43b_board_metrics(force=force)
-    return {'completed': m['completed'], 'live': m['live'], 'counted': m['counted'], 'goals': m['goals']}
-
-
-def _v42_raw_board_text(force=False):
-    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
-    bm = _v43b_board_metrics(force=force)
-    try:
-        decisive_count = len(_v32_decisive_rows(False))
-    except Exception:
-        decisive_count = 0
-    last_q = (snap.get('qualified') or ['-'])[-1]
-    last_e = (snap.get('eliminated') or ['-'])[-1]
-    ba = bm.get('best_attack') or ('-', 0)
-    bd = bm.get('best_defense') or ('-', 0)
-    updated = _now_riyadh_text() if '_now_riyadh_text' in globals() else _v42_riyadh_now().strftime('%Y-%m-%d %H:%M') + ' بتوقيت مكة'
-    text = '\n'.join([
-        '🏆 لوحة البطولة',
-        f'آخر تحديث: {updated}',
-        '',
-        f'مباريات البطولة المحتسبة: {bm.get("counted",0)} / {snap.get("total_tournament_matches",104)}',
-        f'مباريات دور المجموعات المحتسبة: {bm.get("counted",0)} / {snap.get("total_group_matches",72)}',
-        f'تفصيلها: {bm.get("completed",0)} مكتملة + {bm.get("live",0)} مباشرة',
-        f'إجمالي الأهداف: {bm.get("goals",0)}',
-        f'أكبر نتيجة: {bm.get("biggest_text") or "-"}',
-        f'أقوى هجوم: {ba[0]} — {ba[1]} أهداف',
-        f'أقوى دفاع: {bd[0]} — استقبل {bd[1]}',
-        f'آخر متأهل رسميًا: {last_q}',
-        f'آخر مستبعد رسميًا: {last_e}',
-        f'مباريات الحسم القادمة: {decisive_count}',
-        '',
-        '✅ ترتيب المجموعات/سباق التأهل: تم',
-        '✅ الهدافين: تم',
-        '✅ أفضل الثوالث: تم',
-        '✅ لوحة البطولة: تم',
-    ])
-    _v42_json_save(V43_BOARD_CACHE_FILE, {'text': text, 'updated_at': updated, 'saved_ts': time.time(), 'source': 'live_now + results_only'})
-    return text
-
-
-def _v32_tournament_board_text(force=False):
-    if not force:
-        cache = _v42_json_load(V43_BOARD_CACHE_FILE, {})
-        if isinstance(cache, dict) and cache.get('text'):
-            return cache.get('text')
-    return _v42_raw_board_text(force=force)
-
-
-def _v39_board_text(force=False):
-    return _v32_tournament_board_text(force=force)
-
-
-# ---------- V43: Top scorers freshness ----------
-_V43_PREV_FETCH_TOP_SCORERS = globals().get('fetch_espn_top_scorers')
-
-def fetch_espn_top_scorers(force_refresh=True):
-    # السحب المباشر أولاً دائمًا. لا نرجع كاش إلا إذا force_refresh=False أو في دالة الإرسال بعد الفشل.
-    try:
-        if callable(_V43_PREV_FETCH_TOP_SCORERS):
-            items = _V43_PREV_FETCH_TOP_SCORERS(True)
-            clean = []
-            for it in items or []:
-                try:
-                    g = _v42_int(it.get('goals'))
-                    if g is None or g <= 0:
-                        continue
-                    clean.append({
-                        'name': normalize_name(it.get('name')),
-                        'team': canonical_team_name(it.get('team')) or normalize_name(it.get('team') or '-'),
-                        'played': _v42_int(it.get('played')) if _v42_int(it.get('played')) is not None else '',
-                        'goals': int(g),
-                    })
-                except Exception:
-                    continue
-            clean.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
-            if clean:
-                _v42_json_save(V42_SCORERS_CACHE_FILE, {'items': clean[:25], 'saved_at': _now_riyadh_text() if '_now_riyadh_text' in globals() else str(_v42_riyadh_now()), 'saved_ts': time.time(), 'source': 'ESPN مباشر V43'})
-                return clean[:25]
-    except Exception as e:
-        try:
-            globals()['_V39_TOP_SCORERS_LAST_ERROR'] = str(e)[:300]
-        except Exception:
-            pass
-    if not force_refresh:
-        cache = _v42_json_load(V42_SCORERS_CACHE_FILE, {})
-        if isinstance(cache, dict) and isinstance(cache.get('items'), list):
-            return cache.get('items') or []
-    return []
-
-
-# ---------- V43: Exit scenarios detailed ----------
-def _v43b_result_sentence_from_sim(r):
-    try:
-        return _v35_result_sentence(r)
-    except Exception:
-        t1 = r.get('team1'); t2 = r.get('team2')
-        s1 = int(r.get('score1') or 0); s2 = int(r.get('score2') or 0)
-        if s1 > s2:
-            return f'فوز {t1} على {t2}'
-        if s2 > s1:
-            return f'فوز {t2} على {t1}'
-        return f'تعادل {t1} مع {t2}'
-
-
-def _v43b_required_lines_for_scenario(team, scenario, snap=None, max_lines=5):
-    try:
-        lines = _v38_scenario_required_lines(team, scenario, snap, max_lines=max_lines)
-        if lines:
-            return lines[:max_lines]
-    except Exception:
-        pass
-    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
-    code = _v33_team_group(team) if '_v33_team_group' in globals() else ''
-    base = list((((snap.get('groups') or {}).get(code, {}) or {}).get('results') or []))
-    try:
-        base_pairs = {_v38_pair_key(r) for r in base}
-    except Exception:
-        base_pairs = set()
-    out = []
-    for r in (scenario or {}).get('results') or []:
-        try:
-            if _v38_pair_key(r) in base_pairs:
-                continue
-        except Exception:
-            pass
-        out.append(_v43b_result_sentence_from_sim(r))
-        if len(out) >= max_lines:
-            break
-    return out
-
-
-def _v43b_fourth_case_info(team, snap=None):
-    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
-    try:
-        code = _v33_team_group(team)
-        for sc in _v38_all_group_scenarios(code, snap):
-            pos, row = _v38_position_row(team, sc.get('rows') or [])
-            if int(pos or 99) == 4:
-                return {'scenario': sc, 'row': row, 'pos': pos, 'pts': _v37_safe_int((row or {}).get('Pts')), 'played': _v37_safe_int((row or {}).get('P'))}
-    except Exception:
-        pass
-    return None
-
-
-def _v43b_points_need_phrase(team, x, target_pts, mode='exceed', snap=None):
-    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
-    pts = int(x.get('pts') or 0)
-    target = int(target_pts or 0)
-    if mode == 'exceed':
-        need = max(0, target + 1 - pts)
-    else:
-        need = max(0, target - pts)
-    try:
-        rem = list(_v33_remaining_for_team(team, snap) or [])
-    except Exception:
-        rem = []
-    rem_txt = []
-    for m in rem[:2]:
-        try:
-            t1 = canonical_team_name(m.get('team1')) or m.get('team1')
-            t2 = canonical_team_name(m.get('team2')) or m.get('team2')
-            opp = t2 if t1 == team else t1
-            rem_txt.append(f'{team} × {opp}' if opp else _v33_format_remaining_match(m))
-        except Exception:
-            try:
-                rem_txt.append(_v33_format_remaining_match(m))
-            except Exception:
-                pass
-    match_hint = ' و '.join(rem_txt)
-    if need <= 0:
-        return f'يبقى {team} على رصيده الحالي مع نتائج المجموعة المناسبة'
-    if len(rem) >= 2:
-        if need >= 6:
-            return f'فوز {team} في مباراتيه المتبقيتين' + (f': {match_hint}' if match_hint else '')
-        if need == 4:
-            return f'فوز مباراة + تعادل مباراة لـ{team}' + (f' من: {match_hint}' if match_hint else '')
-        if need == 3:
-            return f'فوز {team} في مباراة من مبارياته المتبقية' + (f': {match_hint}' if match_hint else '')
-        if need == 2:
-            return f'تعادلان أو فوز واحد لـ{team}' + (f' من: {match_hint}' if match_hint else '')
-        return f'تعادل واحد على الأقل لـ{team}' + (f' من: {match_hint}' if match_hint else '')
-    # مباراة واحدة أو لا توجد.
-    match = x.get('match') or (match_hint if match_hint else '')
-    if need >= 3:
-        return _v42_match_win_phrase(team, match) if '_v42_match_win_phrase' in globals() else f'فوز {team}'
-    if need == 1:
-        return f'تعادل {team}' + (f' في {match}' if match else '')
-    return f'نتيجة إيجابية لـ{team}' + (f' في {match}' if match else '')
-
-
-def _v43b_exit_candidate_blocks(team, target_pts, snap=None):
-    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
-    danger, mixed, compare, safe = _v38e_third_categories(team, int(target_pts), snap) if '_v38e_third_categories' in globals() else ([], [], [], [])
-    over = []
-    equal = []
-    for x in list(danger) + list(mixed):
-        if int(x.get('current_max') or x.get('max_third') or 0) > int(target_pts):
-            over.append(x)
-    for x in list(mixed) + list(compare):
-        if x.get('can_equal') or int(x.get('current_max') or 0) >= int(target_pts):
-            equal.append(x)
-    # إزالة التكرار بين القوائم حسب المنتخب/المجموعة.
-    def unique(arr):
-        out, seen = [], set()
-        for x in arr:
-            k = (x.get('group'), x.get('team'))
-            if k in seen or x.get('team') == team:
-                continue
-            seen.add(k); out.append(x)
-        return out
-    over = unique(over)
-    equal = unique(equal)
-    lines = []
-    total_used = 0
-    if over:
-        lines.append(f'🔥 منتخبات قد تتجاوز {team} بالنقاط:')
-        for idx, x in enumerate(over[:8], start=1):
-            t = x.get('team') or '-'
-            g = _v33_group_label(x.get('group')) if '_v33_group_label' in globals() else x.get('group')
-            max_pts = int(x.get('current_max') or x.get('max_third') or x.get('pts') or 0)
-            played = int(x.get('played') or 0)
-            phrase = _v43b_points_need_phrase(t, x, target_pts, 'exceed', snap)
-            lines.extend([
-                f'{idx}. {g}',
-                f'النتيجة المطلوبة: {phrase}',
-                f'➡️ {t} قد يصبح ثالثًا بـ{max_pts} نقاط | لعب: 3/3',
-                f'➡️ يتقدم على {team} بالنقاط',
-                ''
-            ])
-            total_used += 1
-            if total_used >= 8:
-                break
-    if total_used < 8 and equal:
-        lines.append(f'⚖️ منتخبات قد تتعادل مع {team} بالنقاط وتتفوق بالفارق:')
-        start = 1
-        for x in equal[:max(0, 8-total_used)]:
-            t = x.get('team') or '-'
-            g = _v33_group_label(x.get('group')) if '_v33_group_label' in globals() else x.get('group')
-            phrase = _v43b_points_need_phrase(t, x, target_pts, 'equal', snap)
-            lines.extend([
-                f'{start}. {g}',
-                f'النتيجة المطلوبة: {phrase}',
-                f'➡️ {t} يصل إلى {int(target_pts)} نقاط | لعب: 3/3',
-                f'➡️ يحتاج فارق أهداف أو أهداف مسجلة أفضل من {team}',
-                ''
-            ])
-            start += 1
-            total_used += 1
-            if total_used >= 8:
-                break
-    return lines, total_used
-
-
-def _v42_how_exit_text(team):
-    team = _v33_find_team(team) or team
-    snap = _v33_snapshot(False) if '_v33_snapshot' in globals() else {}
-    code = _v33_team_group(team) if '_v33_team_group' in globals() else ''
-    lines = [f'❌ احتمالات مغادرة البطولة — {team}', '']
-    lines.append(f'{team} قد يغادر البطولة بطريقتين:')
-    lines.append('1. أن ينهي المجموعة في المركز الرابع.')
-    lines.append('2. أن ينهي المجموعة ثالثًا، لكنه لا يكون ضمن أفضل 8 ثوالث من أصل 12.')
-    lines.append('')
-
-    lines.append(f'📌 أولًا: كيف قد يصبح {team} ثالثًا أو رابعًا؟')
-    lines.append('')
-    third_pts = None
-    third_case = None
-    try:
-        third_pts, third_case = _v37_target_third_points(team, snap)
-    except Exception:
-        third_pts, third_case = None, None
-    if third_pts:
-        scenario = (third_case or {}).get('scenario') or (third_case or {}).get('case') or {}
-        row = ((third_case or {}).get('case') or {}).get('row') or (scenario.get('row') if isinstance(scenario, dict) else {}) or {}
-        played = _v37_safe_int(row.get('P')) if row else 3
-        req = _v43b_required_lines_for_scenario(team, scenario if isinstance(scenario, dict) else {}, snap, max_lines=4)
-        if req:
-            lines.append('سيناريو يجعله ثالثًا:')
-            for i, r in enumerate(req, start=1):
-                lines.append(f'{i}. {r}')
-        else:
-            lines.append('يوجد مسار حسابي يجعله ينهي المجموعة في المركز الثالث حسب نتائج مجموعته.')
-        lines.append(f'➡️ يصبح رصيد {team}: {int(third_pts)} نقاط | لعب: {played or 3}/3')
-        lines.append('')
-    fourth = _v43b_fourth_case_info(team, snap)
-    if fourth:
-        req = _v43b_required_lines_for_scenario(team, fourth.get('scenario') or {}, snap, max_lines=4)
-        lines.append('سيناريو يجعله رابعًا:')
-        if req:
-            for i, r in enumerate(req, start=1):
-                lines.append(f'{i}. {r}')
-        else:
-            lines.append('نتائج معيّنة داخل المجموعة قد تجعله ينهي المركز الرابع.')
-        lines.append(f"➡️ يصبح رصيد {team}: {int(fourth.get('pts') or 0)} نقاط | لعب: {int(fourth.get('played') or 3)}/3")
-        lines.append('➡️ إذا أنهى المركز الرابع يغادر مباشرة دون حسابات أفضل الثوالث.')
-        lines.append('')
-
-    if third_pts:
-        lines.append('🥉 ثانيًا: كيف تذهب عليه أفضل الثوالث؟')
-        lines.append('')
-        lines.append(f'إذا أنهى {team} مجموعته ثالثًا بـ{int(third_pts)} نقاط، يحتاج أن يكون ضمن أفضل 8 ثوالث من أصل 12.')
-        lines.append(f'حتى يغادر، يجب أن يصبح أمام {team} ثمانية منتخبات ثالثة أفضل منه.')
-        lines.append('')
-        cand_lines, n = _v43b_exit_candidate_blocks(team, int(third_pts), snap)
-        if cand_lines:
-            lines.extend(cand_lines)
-            lines.append('📊 النتيجة:')
-            if n >= 8:
-                lines.append(f'إذا تحققت هذه المسارات، يصبح أمام {team} 8 منتخبات ثالثة أفضل منه، فيغادر رغم أنه ثالث.')
-            else:
-                lines.append(f'حاليًا تظهر {n} مسارات ضغط واضحة فقط، وقد تتغير القائمة مع تحديث نتائج بقية المجموعات.')
-        else:
-            lines.append('لا تظهر حاليًا مسارات كافية تجعل 8 ثوالث أمامه حسب البيانات الحالية.')
-    else:
-        lines.append('لا يظهر حاليًا مسار واضح يجعله ثالثًا برصيد يدخل حسابات أفضل الثوالث.')
-    lines.append('')
-    lines.append('⚠️ هذا سيناريو محتمل، وليس استبعادًا رسميًا.')
-    return '\n'.join([str(x) for x in lines if x is not None]).strip()
-
-# ==================== END V43 FINAL AGREEMENT PATCH — FAHAD ====================
-
-
-# ==================== V44 STABILITY PATCH — FAHAD ====================
-# اعتماد فهد:
-# 1) إصلاح تعليق V43 العام: فصل لوحة البطولة والحسابات الثقيلة عن snapshot العام.
-# 2) كيف تتأهل: رد أساسي سريع، والتفاصيل الثقيلة بأزرار بمهلة 240 ثانية.
-# 3) المتأهلين/المغادرين يقرؤون من كاش آخر تحديث فقط.
-# 4) لوحة البطولة منفصلة: مباشر الآن + نتائج المباريات فقط، ولا تدخل في snapshot.
-# 5) تحديث تلقائي كل 15 دقيقة وقت المباريات + تحديث يدوي من الإدارة مع قفل.
-# 6) هدافين البطولة: مسح كاش الهدافين القديم، سحب مباشر من ESPN، وإرسال نص أولًا للتأكد.
-
-import threading as _v44_threading
-
-V44_SNAPSHOT_CACHE_FILE = 'tournament_snapshot_cache_v44.json'
-V44_BOARD_CACHE_FILE = 'tournament_board_cache_v44.json'
-V44_REFRESH_STATUS_FILE = 'tournament_refresh_status_v44.json'
-V44_AUTO_INTERVAL_SECONDS = 15 * 60
-V44_HEAVY_TIMEOUT = 240
-_V44_REFRESH_LOCK = _v44_threading.Lock()
-_V44_SNAPSHOT_MEM = {'ts': 0, 'data': None}
-_V44_BOARD_MEM = {'ts': 0, 'text': None}
-
-# نحتفظ بمراجع النسخة الخفيفة قبل V40/V43 إن وجدت.
-_V44_BASE_V32_SNAPSHOT = globals().get('_V40_PREV_V32_SNAPSHOT') or globals().get('_V39_PREV_V33_SNAPSHOT') or globals().get('_V39_PREV_V32_SNAPSHOT')
-_V44_BASE_V33_SNAPSHOT = globals().get('_V40_PREV_V33_SNAPSHOT') or globals().get('_V39_PREV_V33_SNAPSHOT')
-_V44_PREV_V32_CALLBACK = globals().get('v32_callback')
-_V44_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
-_V44_PREV_ADMIN_CALLBACK = globals().get('v32_admin_callback')
-_V44_PREV_HOW_TEXT = globals().get('_v33_how_qualify_text')
-_V44_PREV_HOW_KEYBOARD = globals().get('_v33_how_qualify_keyboard')
-
-
-def _v44_now_text():
-    try:
-        return _now_riyadh_text()
-    except Exception:
-        try:
-            return _v42_riyadh_now().strftime('%Y-%m-%d %H:%M بتوقيت مكة')
-        except Exception:
-            return datetime.now().strftime('%Y-%m-%d %H:%M')
-
-
-def _v44_json_load(path, default=None):
-    default = {} if default is None else default
-    try:
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return default
-
-
-def _v44_json_save(path, data):
-    try:
-        tmp = str(path) + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data or {}, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-        return True
-    except Exception:
-        return False
-
-
-def _v44_apply_official_statuses(snap):
-    if not isinstance(snap, dict):
-        snap = {}
-    try:
-        if '_v37_apply_official_best_thirds' in globals():
-            snap = _v37_apply_official_best_thirds(snap) or snap
-    except Exception:
-        pass
-    try:
-        status = snap.setdefault('status', {})
-        q = _v39_clean_team_list(snap.get('qualified') or []) if '_v39_clean_team_list' in globals() else list(snap.get('qualified') or [])
-        e = _v39_clean_team_list(snap.get('eliminated') or []) if '_v39_clean_team_list' in globals() else list(snap.get('eliminated') or [])
-        for tr in list(snap.get('thirds') or []):
-            team = canonical_team_name(tr.get('team')) or tr.get('team')
-            st = str(tr.get('third_status') or status.get(team, '') or '')
-            if team and ('متأهل' in st and 'رسمي' in st):
-                tr['third_status'] = '✅ ضمن رسميًا كأفضل ثالث'
-                status[team] = '✅ ضمن رسميًا كأفضل ثالث'
-                if team not in q:
-                    q.append(team)
-        for team, st in list(status.items()):
-            s = str(st or '')
-            if team and ('متأهل' in s and 'رسمي' in s) and team not in q:
-                q.append(team)
-            if team and (('مستبعد' in s or 'غادر' in s or 'خارج' in s) and 'رسمي' in s) and team not in e:
-                e.append(team)
-        snap['qualified'] = q[:32]
-        snap['eliminated'] = e[:32]
-    except Exception:
-        pass
-    snap.setdefault('updated_at', _v44_now_text())
-    return snap
-
-
-def _v44_build_snapshot(force=False):
-    """يبني snapshot خفيف بدون أرقام لوحة البطولة، حتى لا يعلق كيف تتأهل والمتأهلين."""
-    base = None
-    try:
-        if callable(_V44_BASE_V33_SNAPSHOT):
-            base = _V44_BASE_V33_SNAPSHOT(force)
-        elif callable(_V44_BASE_V32_SNAPSHOT):
-            base = _V44_BASE_V32_SNAPSHOT(force)
-        elif '_V39_PREV_V33_SNAPSHOT' in globals() and callable(globals().get('_V39_PREV_V33_SNAPSHOT')):
-            base = globals()['_V39_PREV_V33_SNAPSHOT'](force)
-    except Exception:
-        base = None
-    if not isinstance(base, dict):
-        base = _v44_json_load(V44_SNAPSHOT_CACHE_FILE, {})
-    if not isinstance(base, dict):
-        base = {}
-    return _v44_apply_official_statuses(base)
-
-
-def _v44_get_snapshot(force=False, max_age=120):
-    now = time.time()
-    if not force:
-        mem = _V44_SNAPSHOT_MEM.get('data')
-        if isinstance(mem, dict) and now - float(_V44_SNAPSHOT_MEM.get('ts') or 0) <= max_age:
-            return mem
-        cached = _v44_json_load(V44_SNAPSHOT_CACHE_FILE, {})
-        if isinstance(cached, dict) and isinstance(cached.get('snapshot'), dict):
-            # نقرأ الكاش سريعًا حتى لو قديم، ونكتب وقت آخر تحديث للمستخدم.
-            snap = cached.get('snapshot') or {}
-            _V44_SNAPSHOT_MEM['ts'] = now
-            _V44_SNAPSHOT_MEM['data'] = snap
-            return snap
-    snap = _v44_build_snapshot(force=force)
-    _V44_SNAPSHOT_MEM['ts'] = now
-    _V44_SNAPSHOT_MEM['data'] = snap
-    try:
-        _v44_json_save(V44_SNAPSHOT_CACHE_FILE, {'snapshot': snap, 'saved_at': _v44_now_text(), 'saved_ts': now})
-    except Exception:
-        pass
-    return snap
-
-
-# ألغِ ربط V40/V43 الثقيل داخل snapshot.
-def _v32_snapshot(force=False):
-    return _v44_get_snapshot(force=force)
-
-
-def _v33_snapshot(force=False):
-    return _v44_get_snapshot(force=force)
-
-
-def _v44_cached_status_lists():
-    snap = _v44_get_snapshot(False)
-    q = list(snap.get('qualified') or [])
-    e = list(snap.get('eliminated') or [])
-    return q[:32], e[:32], snap
-
-
-def _v32_calculated_qualified():
-    q, _e, _snap = _v44_cached_status_lists()
-    return q
-
-
-def _v32_calculated_eliminated():
-    _q, e, _snap = _v44_cached_status_lists()
-    return e
-
-
-# ---------- لوحة البطولة منفصلة عن snapshot ----------
-def _v44_record_key(m):
-    try:
-        return str((m or {}).get('id') or '') or f"{(m or {}).get('date')}|{(m or {}).get('team1')}|{(m or {}).get('team2')}"
-    except Exception:
-        return str(m)
-
-
-def _v44_board_metrics_from_sources(force=False):
-    """مباريات البطولة المحتسبة = نتائج المباريات المنتهية + مباشر الآن فقط."""
-    # نستخدم دوال V43 إن كانت موجودة؛ لكنها محصورة هنا فقط ولا تدخل snapshot.
-    if '_v43b_board_metrics' in globals():
-        try:
-            return globals()['_v43b_board_metrics'](force=force) or {}
-        except Exception:
-            pass
-    # احتياط خفيف: اعتمد على حساب V40 السابق إن توفر، لكن فقط هنا.
-    try:
-        raw = _V40_RAW_COUNTED_MATCHES_AND_GOALS(force=force) if '_V40_RAW_COUNTED_MATCHES_AND_GOALS' in globals() else {}
-        return {
-            'completed': int(raw.get('completed') or 0),
-            'live': int(raw.get('live') or 0),
-            'counted': int(raw.get('counted') or 0),
-            'goals': int(raw.get('goals') or 0),
-            'biggest': raw.get('biggest') or {},
-            'best_attack': raw.get('best_attack') or ('-', 0),
-            'best_defense': raw.get('best_defense') or ('-', 0),
-        }
-    except Exception:
-        return {'completed': 0, 'live': 0, 'counted': 0, 'goals': 0}
-
-
-def _v44_make_board_text(force=False):
-    snap = _v44_get_snapshot(False)
-    bm = _v44_board_metrics_from_sources(force=force)
-    completed = int(bm.get('completed') or 0)
-    live = int(bm.get('live') or 0)
-    counted = int(bm.get('counted') or (completed + live))
-    goals = int(bm.get('goals') or 0)
-    biggest = bm.get('biggest') or snap.get('biggest') or {}
-    if biggest:
-        big = f"{biggest.get('team1')} {biggest.get('score1')}-{biggest.get('score2')} {biggest.get('team2')}"
-    else:
-        big = '-'
-    ba = bm.get('best_attack') or snap.get('best_attack') or ('-', 0)
-    bd = bm.get('best_defense') or snap.get('best_defense') or ('-', 0)
-    q = list(snap.get('qualified') or [])
-    e = list(snap.get('eliminated') or [])
-    try:
-        decisive_count = len(_v32_decisive_rows(False)) if '_v32_decisive_rows' in globals() else 0
-    except Exception:
-        decisive_count = 0
-    updated = _v44_now_text()
-    lines = [
-        '🏆 لوحة البطولة',
-        f'آخر تحديث: {updated}',
-        '',
-        f'مباريات البطولة المحتسبة: {counted} / 104',
-        f'مباريات دور المجموعات المحتسبة: {counted} / 72',
-        f'تفصيلها: {completed} مكتملة + {live} مباشرة',
-        f'إجمالي الأهداف: {goals}',
-        f'أكبر نتيجة: {big}',
-        f'أقوى هجوم: {ba[0] if isinstance(ba, (list, tuple)) else "-"} — {ba[1] if isinstance(ba, (list, tuple)) and len(ba) > 1 else 0} أهداف',
-        f'أقوى دفاع: {bd[0] if isinstance(bd, (list, tuple)) else "-"} — استقبل {bd[1] if isinstance(bd, (list, tuple)) and len(bd) > 1 else 0}',
-        f'آخر متأهل رسميًا: {(q or ["-"])[-1]}',
-        f'آخر مستبعد رسميًا: {(e or ["-"])[-1]}',
-        f'مباريات الحسم القادمة: {decisive_count}',
-        '',
-        '✅ ترتيب المجموعات/سباق التأهل: من آخر تحديث محفوظ',
-        '✅ الهدافين: مباشر عند الطلب',
-        '✅ أفضل الثوالث: من آخر تحديث محفوظ',
-        '✅ لوحة البطولة: مباشر الآن + نتائج المباريات فقط',
-    ]
-    text = '\n'.join(lines)
-    _V44_BOARD_MEM['ts'] = time.time()
-    _V44_BOARD_MEM['text'] = text
-    _v44_json_save(V44_BOARD_CACHE_FILE, {'text': text, 'updated_at': updated, 'saved_ts': time.time(), 'source': 'live_now + results_only'})
-    return text
-
-
-def _v39_board_text(force=False):
-    if force:
-        return _v44_make_board_text(force=True)
-    mem = _V44_BOARD_MEM.get('text')
-    if mem and time.time() - float(_V44_BOARD_MEM.get('ts') or 0) < 180:
-        return mem
-    cache = _v44_json_load(V44_BOARD_CACHE_FILE, {})
-    if isinstance(cache, dict) and cache.get('text'):
-        _V44_BOARD_MEM['ts'] = time.time()
-        _V44_BOARD_MEM['text'] = cache.get('text')
-        return cache.get('text')
-    # أول تشغيل فقط: ابنِها هنا، لكنها لا تؤثر على snapshot.
-    return _v44_make_board_text(force=False)
-
-
-def _v32_tournament_board_text(force=False):
-    return _v39_board_text(force)
-
-
-# ---------- التحديث اليدوي والتلقائي ----------
-def _v44_refresh_all_cache(force=True, include_scorers=False):
-    if not _V44_REFRESH_LOCK.acquire(blocking=False):
-        return {'ok': False, 'message': 'تحديث آخر يعمل الآن، انتظر قليلًا.', 'report': ['⚠️ تحديث آخر يعمل الآن']}
-    report = []
-    board = None
-    try:
-        try:
-            snap = _v44_build_snapshot(force=True)
-            _V44_SNAPSHOT_MEM['ts'] = time.time()
-            _V44_SNAPSHOT_MEM['data'] = snap
-            _v44_json_save(V44_SNAPSHOT_CACHE_FILE, {'snapshot': snap, 'saved_at': _v44_now_text(), 'saved_ts': time.time()})
-            report.append('✅ ترتيب المجموعات/سباق التأهل: تم')
-        except Exception as e:
-            report.append(f'❌ ترتيب المجموعات/سباق التأهل: تعذر ({str(e)[:70]})')
-        try:
-            # لا نستخدم كاش قديم للأفضل، فقط نحسب النص من الكاش/السnapshot الحالي.
-            if '_v32_best_thirds_text' in globals():
-                _v32_best_thirds_text(False)
-            report.append('✅ أفضل الثوالث: تم')
-        except Exception as e:
-            report.append(f'❌ أفضل الثوالث: تعذر ({str(e)[:70]})')
-        try:
-            board = _v44_make_board_text(force=True)
-            report.append('✅ لوحة البطولة: تم')
-        except Exception as e:
-            board = _v39_board_text(False)
-            report.append(f'❌ لوحة البطولة: تعذر ({str(e)[:70]})')
-        if include_scorers:
-            try:
-                items = fetch_espn_top_scorers(True)
-                report.append('✅ الهدافين: تم' if items else '⚠️ الهدافين: لم ترجع قائمة صالحة')
-            except Exception as e:
-                report.append(f'❌ الهدافين: تعذر ({str(e)[:70]})')
-        _v44_json_save(V44_REFRESH_STATUS_FILE, {'report': report, 'updated_at': _v44_now_text(), 'ok': True})
-        return {'ok': True, 'message': 'تم التحديث', 'report': report, 'board': board}
-    finally:
-        try:
-            _V44_REFRESH_LOCK.release()
-        except Exception:
-            pass
-
-
-def _v44_has_match_window_now():
-    try:
-        now = _v33_now_riyadh_dt() if '_v33_now_riyadh_dt' in globals() else _v42_riyadh_now()
-    except Exception:
-        now = datetime.now()
-    try:
-        active = _normalize_date_arg(_v41_active_live_date()) if '_v41_active_live_date' in globals() else _normalize_date_arg(now.strftime('%d/%m/%Y'))
-    except Exception:
-        active = _normalize_date_arg(now.strftime('%d/%m/%Y'))
-    fixtures = []
-    try:
-        fixtures.extend(_v40_fixtures_for_date(active) or [])
-    except Exception:
-        pass
-    try:
-        fixtures.extend(_v40_live_rows(active) or [])
-    except Exception:
-        pass
-    for m in fixtures:
-        try:
-            dt = _v42_parse_fixture_datetime_riyadh(m) if '_v42_parse_fixture_datetime_riyadh' in globals() else None
-            if not dt:
-                continue
-            minutes = (dt - now).total_seconds() / 60.0
-            # قبل المباراة بـ15 دقيقة، وطوال 3 ساعات ونصف بعدها.
-            if -210 <= minutes <= 15:
-                return True
-        except Exception:
-            continue
-    return False
-
-
-async def _v44_auto_refresh_job(context):
-    try:
-        if not _v44_has_match_window_now():
-            return
-        await asyncio.to_thread(_v44_refresh_all_cache, True, False)
-    except Exception:
-        pass
-
-
-# ---------- هدافين البطولة: مباشر نصي بدون كاش قديم ----------
-def _v44_clear_scorers_cache_files():
-    names = set([
-        'top_scorers_cache_v42.json', 'top_scorers_cache_v43.json', 'top_scorers_cache_v44.json',
-        'scorers_cache.json', 'top_scorers_cache.json', 'scorers_history.json', 'last_scorers.json'
-    ])
-    try:
-        if 'V42_SCORERS_CACHE_FILE' in globals(): names.add(str(V42_SCORERS_CACHE_FILE))
-        if 'V42_BOARD_CACHE_FILE' in globals(): pass
-    except Exception:
-        pass
-    for fn in list(names):
-        try:
-            if fn and os.path.exists(fn):
-                os.remove(fn)
-        except Exception:
-            pass
-    for cache_name in ('TOP_SCORERS_CACHE', '_TOP_SCORERS_CACHE', 'ESPN_TOP_SCORERS_CACHE'):
-        try:
-            obj = globals().get(cache_name)
-            if hasattr(obj, 'clear'):
-                obj.clear()
-        except Exception:
-            pass
-
-
-def fetch_espn_top_scorers(force_refresh=True):
-    global _V39_TOP_SCORERS_LAST_ERROR, _V38_TOP_SCORERS_LAST_ERROR, _V38F_ESPN_SCORERS_LAST_ERROR
-    _v44_clear_scorers_cache_files()
-    try:
-        _V39_TOP_SCORERS_LAST_ERROR = _V38_TOP_SCORERS_LAST_ERROR = _V38F_ESPN_SCORERS_LAST_ERROR = ''
-    except Exception:
-        pass
-    if not requests:
-        return []
-    errors = []
-    urls = []
-    try:
-        urls = _v42_scoring_stats_urls() if '_v42_scoring_stats_urls' in globals() else _v29_scoring_stats_urls()
-    except Exception:
-        urls = []
-    for url in urls:
-        try:
-            r = _requests_get(url, timeout=24) if '_requests_get' in globals() else requests.get(url, timeout=24)
-            status = int(getattr(r, 'status_code', 200) or 200)
-            if status >= 400:
-                errors.append(f'HTTP {status}')
-                continue
-            items = []
-            ctype = (getattr(r, 'headers', {}) or {}).get('content-type', '')
-            if 'json' in ctype or 'byathlete' in url or 'statistics' in url:
-                try:
-                    items = _v29_extract_top_scorers_from_json(r.json()) if '_v29_extract_top_scorers_from_json' in globals() else []
-                except Exception as e:
-                    errors.append(f'JSON {str(e)[:60]}')
-            if not items:
-                try:
-                    items = _v29_extract_top_scorers_from_html(getattr(r, 'text', '') or '') if '_v29_extract_top_scorers_from_html' in globals() else []
-                except Exception as e:
-                    errors.append(f'HTML {str(e)[:60]}')
-            clean = []
-            seen = set()
-            for it in items or []:
-                try:
-                    name = normalize_name(it.get('name') or '')
-                    goals = _v42_int(it.get('goals')) if '_v42_int' in globals() else int(it.get('goals') or 0)
-                    if not name or goals is None or int(goals) <= 0:
-                        continue
-                    team = canonical_team_name(it.get('team')) or normalize_name(it.get('team') or '-')
-                    played = _v42_int(it.get('played')) if '_v42_int' in globals() else it.get('played', '')
-                    key = (simple_key(name), simple_key(team))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    clean.append({'name': name, 'team': team or '-', 'played': played if played is not None else '', 'goals': int(goals)})
-                except Exception:
-                    continue
-            if clean:
-                clean.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
-                return clean[:25]
-            errors.append('بدون صفوف صالحة')
-        except Exception as e:
-            errors.append(str(e)[:90])
-    msg = ' | '.join(errors[-5:])[:500] or 'ESPN لم يرجع قائمة هدافين صالحة الآن.'
-    try:
-        _V39_TOP_SCORERS_LAST_ERROR = _V38_TOP_SCORERS_LAST_ERROR = _V38F_ESPN_SCORERS_LAST_ERROR = msg
-    except Exception:
-        pass
-    return []
-
-
-def _v44_top_scorers_text(items):
-    lines = ['🏆 هدافين البطولة', 'المصدر: ESPN مباشر — بدون كاش قديم', f'آخر تحديث: {_v44_now_text()}', '']
-    if not items:
-        lines.append('لا توجد بيانات هدافين صالحة حاليًا.')
-        return '\n'.join(lines)
-    for i, it in enumerate(items[:25], start=1):
-        name = it.get('name') or '-'
-        team = it.get('team') or '-'
-        goals = int(it.get('goals') or 0)
-        played = it.get('played') if it.get('played') not in (None, '') else '-'
-        lines.append(f'{i}. {name} — {team}')
-        lines.append(f'   الأهداف: {goals} | لعب: {played}')
-        lines.append('')
-    return '\n'.join(lines).strip()
-
-
-async def _v44_send_top_scorers(message):
-    wait = await message.reply_text('⏳ أسحب هدافين البطولة من ESPN مباشرة بدون كاش...')
-    try:
-        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=70)
-        if not items:
-            err = globals().get('_V39_TOP_SCORERS_LAST_ERROR') or 'لم يرجع ESPN قائمة هدافين صالحة الآن.'
-            await wait.edit_text(f'⚠️ تعذر سحب هدافين البطولة من ESPN حاليًا.\n{err}')
-            return
-        text = _v44_top_scorers_text(items)
-        await wait.edit_text(text[:3900])
-        # التصميم نؤجله للتشخيص؛ النص هو المصدر الأساسي الآن.
-    except Exception as e:
-        await wait.edit_text(f'تعذر جلب هدافين البطولة ❌\n{str(e)[:300]}')
-
-
-_v39_send_top_scorers = _v44_send_top_scorers
-_v41_send_working_top_scorers = _v44_send_top_scorers
-_v38f_send_espn_top_scorers = _v44_send_top_scorers
-_v38_send_fresh_espn_top_scorers = _v44_send_top_scorers
-async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _v44_send_top_scorers(update.message)
-
-
-# ---------- كيف تتأهل: رد سريع + التفاصيل الثقيلة بأزرار ----------
-def _v44_team_status_text(team, snap=None):
-    snap = snap or _v44_get_snapshot(False)
-    status = str((snap.get('status') or {}).get(team, '') or '')
-    q = set(snap.get('qualified') or [])
-    e = set(snap.get('eliminated') or [])
-    if team in q and not status:
-        status = '✅ متأهل رسميًا'
-    if team in e and not status:
-        status = '❌ مستبعد رسميًا'
-    return status
-
-
-def _v44_is_official_qualified(team, snap=None):
-    st = _v44_team_status_text(team, snap)
-    return ('متأهل' in st and 'رسمي' in st) or (team in set((snap or _v44_get_snapshot(False)).get('qualified') or []))
-
-
-def _v44_is_official_out(team, snap=None):
-    st = _v44_team_status_text(team, snap)
-    return (('مستبعد' in st or 'خارج' in st or 'غادر' in st) and 'رسمي' in st) or (team in set((snap or _v44_get_snapshot(False)).get('eliminated') or []))
-
-
-def _v33_how_qualify_text(team, force=False):
-    team = _v33_find_team(team) or team
-    snap = _v44_get_snapshot(False)
-    try:
-        if _v44_is_official_qualified(team, snap) and '_v39_official_qualified_text' in globals():
-            return _v39_official_qualified_text(team, snap)
-    except Exception:
-        pass
-    try:
-        if _v44_is_official_out(team, snap) and '_v38d_status_text' in globals():
-            return _v38d_status_text(team, snap)
-    except Exception:
-        pass
-    try:
-        if callable(_V44_PREV_HOW_TEXT):
-            return _V44_PREV_HOW_TEXT(team, False)
-    except Exception as e:
-        return f'⚠️ تعذر تجهيز معلومات المنتخب.\nجرّب مرة ثانية أو اختر المنتخب من القائمة.\n\nالسبب: {type(e).__name__}: {str(e)[:120]}'
-    return f'✅ كيف يتأهل {team}؟\n\nلا توجد بيانات كافية حاليًا.\nآخر تحديث: {snap.get("updated_at", "-")}'
-
-
-async def _v36_send_how_for_team(message, team, force=False):
-    team = _v33_find_team(team) or team
-    # لا نرسل انتظار للأشياء السهلة، لكن لو تأخر الحساب فالمهلة 240 ثانية.
-    try:
-        text = await asyncio.wait_for(asyncio.to_thread(_v33_how_qualify_text, team, False), timeout=V44_HEAVY_TIMEOUT)
-    except Exception as e:
-        text = f'⚠️ تعذر تجهيز معلومات المنتخب.\nجرّب مرة ثانية أو اختر المنتخب من القائمة.\n\nالسبب: {type(e).__name__}: {str(e)[:120]}'
-    kb = _v33_how_qualify_keyboard(team) if '_v33_how_qualify_keyboard' in globals() else None
-    await message.reply_text(text, reply_markup=kb)
-
-
-async def _v44_edit_heavy(q, func, team, label='الحساب'):
-    try:
-        await q.answer('⏳ قد يستغرق الحساب حتى 4 دقائق...', show_alert=False)
-    except Exception:
-        pass
-    try:
-        txt = await asyncio.wait_for(asyncio.to_thread(func, team), timeout=V44_HEAVY_TIMEOUT)
-    except Exception as e:
-        txt = f'⚠️ تعذر تجهيز {label}.\nالسبب: {type(e).__name__}: {str(e)[:150]}'
-    await q.edit_message_text(txt, reply_markup=_v33_how_qualify_keyboard(team))
-
-
-# ---------- Callback wrappers ----------
-async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q:
-        return
-    data = q.data or ''
-    if data == 'mainmenu|scorers':
-        try: await q.answer()
-        except Exception: pass
-        await _v44_send_top_scorers(q.message); return
-    if data in ('v32|board', 'mainmenu|board'):
-        try: await q.answer()
-        except Exception: pass
-        await q.edit_message_text(_v39_board_text(False), reply_markup=_v32_board_keyboard()); return
-    if _V44_PREV_PUBLIC_MENU_CALLBACK:
-        return await _V44_PREV_PUBLIC_MENU_CALLBACK(update, context)
-
-
-async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q:
-        return
-    data = q.data or ''
-    parts = data.split('|')
-    action = parts[1] if len(parts) > 1 else ''
-    try: await q.answer()
-    except Exception: pass
-
-    if action == 'board':
-        await q.edit_message_text(_v39_board_text(False), reply_markup=_v32_board_keyboard()); return
-    if action == 'board_force':
-        await q.edit_message_text('🔄 جاري تحديث بيانات البطولة...')
-        res = await asyncio.to_thread(_v44_refresh_all_cache, True, False)
-        board = res.get('board') or _v39_board_text(False)
-        await q.edit_message_text(board + '\n\n' + '\n'.join(res.get('report') or []), reply_markup=_v32_board_keyboard()); return
-    if action == 'qualified':
-        teams = _v32_calculated_qualified()
-        lines = ['✅ المتأهلون رسميًا', '']
-        lines.extend([f'- {t}' for t in teams] if teams else ['لا يوجد حتى الآن.'])
-        await q.edit_message_text('\n'.join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]])); return
-    if action == 'eliminated':
-        teams = _v32_calculated_eliminated()
-        lines = ['❌ المستبعدون رسميًا', '']
-        lines.extend([f'- {t} — ❌ مستبعد رسميًا' for t in teams] if teams else ['لا يوجد حتى الآن.'])
-        await q.edit_message_text('\n'.join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]])); return
-    if action == 'how_start':
-        _v33_set_waiting_state(context, 'how')
-        await q.edit_message_text(_v33_how_start_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')]])); return
-    if action in ('how_thirds','how_first','how_second','how_group','opp_all','opp_group','how_exit') and len(parts) >= 3:
-        team = _v33_team_from_button_key(parts[2])
-        if action == 'how_thirds':
-            return await _v44_edit_heavy(q, _v33_how_thirds_text, team, 'احتمالات المركز الثالث')
-        if action == 'how_first':
-            return await _v44_edit_heavy(q, lambda t: _v38d_position_text(t, 1), team, 'احتمالات المركز الأول')
-        if action == 'how_second':
-            return await _v44_edit_heavy(q, lambda t: _v38d_position_text(t, 2), team, 'احتمالات المركز الثاني')
-        if action == 'how_group':
-            return await _v44_edit_heavy(q, _v38d_group_details_text, team, 'تفاصيل المجموعة')
-        if action == 'opp_all':
-            return await _v44_edit_heavy(q, _v33_all_opponents_text, team, 'الخصوم المحتملين')
-        if action == 'opp_group':
-            return await _v44_edit_heavy(q, _v38e_opponent_group_details_text, team, 'تفاصيل مجموعة الخصم')
-        if action == 'how_exit':
-            return await _v44_edit_heavy(q, _v42_how_exit_text, team, 'احتمالات مغادرة البطولة')
-    if _V44_PREV_V32_CALLBACK:
-        return await _V44_PREV_V32_CALLBACK(update, context)
-
-
-async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q:
-        return
-    parts = (q.data or '').split('|')
-    action = parts[1] if len(parts) > 1 else ''
-    if action == 'refresh':
-        try: await q.answer('🔄 تحديث البطولة...', show_alert=False)
-        except Exception: pass
-        await q.edit_message_text('🔄 جاري تحديث بيانات البطولة...')
-        res = await asyncio.to_thread(_v44_refresh_all_cache, True, False)
-        board = res.get('board') or _v39_board_text(False)
-        await q.edit_message_text(board + '\n\n' + '\n'.join(res.get('report') or []), reply_markup=_v38e_admin_keyboard() if '_v38e_admin_keyboard' in globals() else None)
-        return
-    if _V44_PREV_ADMIN_CALLBACK:
-        return await _V44_PREV_ADMIN_CALLBACK(update, context)
-
-
-# أضف التحديث التلقائي إلى main بدون إعادة كتابة البوت كاملًا.
-_V44_PREV_MAIN = globals().get('main')
-def main():
-    # نعيد تنفيذ main الأصلي بعد حقن job_queue بطريقة آمنة عن طريق تغليف ApplicationBuilder.build مؤقتًا.
-    if not _V44_PREV_MAIN:
-        return
-    orig_build = ApplicationBuilder.build
-    def _v44_build_with_jobs(self, *a, **kw):
-        app = orig_build(self, *a, **kw)
-        try:
-            jq = getattr(app, 'job_queue', None)
-            if jq is not None:
-                jq.run_repeating(_v44_auto_refresh_job, interval=V44_AUTO_INTERVAL_SECONDS, first=75, name='v44_auto_refresh')
-        except Exception:
-            pass
-        return app
-    try:
-        ApplicationBuilder.build = _v44_build_with_jobs
-        return _V44_PREV_MAIN()
-    finally:
-        try:
-            ApplicationBuilder.build = orig_build
-        except Exception:
-            pass
-
-# ==================== END V44 STABILITY PATCH — FAHAD ====================
-
-
-# ==================== V46 CLEAN FIX PATCH — FAHAD ====================
-# اعتماد فهد:
-# - لا نرجع لنسخة قديمة ولا نبدأ من الصفر.
-# - إزالة/تعطيل مسارات V45 الثقيلة والمتعارضة.
-# - ترتيب المجموعات يبقى كما هو: يسحب من ESPN عند ضغط الزر، بدون تعديل.
-# - الهدافين: كل ضغطة تسحب ESPN مباشر + تصميم مثل أول، بدون كاش مخفي.
-# - تحديث البطولة: يوميًا 10 صباحًا + وقت المباريات من 7 مساءً إلى 6 صباحًا كل 20 دقيقة + تحديث يدوي من الإدارة.
-# - كل التحديثات تعمل بالخلفية ولا تعلق أزرار المستخدمين.
-
-import threading as _v46_threading
-import time as _v46_time
-try:
-    from datetime import time as _v46_dt_time
-    from zoneinfo import ZoneInfo as _v46_ZoneInfo
-except Exception:
-    _v46_dt_time = None
-    _v46_ZoneInfo = None
-
-V46_PATCH_NAME = 'V46_CLEAN_FIX_FAHAD'
-V46_HEAVY_TIMEOUT = 240
-V46_MATCH_REFRESH_SECONDS = 20 * 60
-V46_SCORERS_TIMEOUT = 55
-V46_REFRESH_LOCK = _v46_threading.Lock()
-V46_REFRESH_STATUS_FILE = 'tournament_refresh_status_v46.json'
-V46_SCORERS_DEBUG_FILE = 'top_scorers_direct_debug_v46.json'
-V46_BOARD_CACHE_FILE = globals().get('V44_BOARD_CACHE_FILE') or 'tournament_board_cache_v44.json'
-V46_SNAPSHOT_CACHE_FILE = globals().get('V44_SNAPSHOT_CACHE_FILE') or 'tournament_snapshot_cache_v44.json'
-
-# استخدم main الأصلي قبل V44 لتجنب جدولة V44/V45 القديمة، ثم نضيف وظائف V46 فقط.
-_V46_BASE_MAIN = globals().get('_V44_PREV_MAIN') or globals().get('_V45_PREV_MAIN') or globals().get('main')
-_V46_PREV_PUBLIC_MENU_CALLBACK = globals().get('_V44_PREV_PUBLIC_MENU_CALLBACK') or globals().get('_V45_PREV_PUBLIC_MENU_CALLBACK') or globals().get('public_menu_callback')
-_V46_PREV_V32_CALLBACK = globals().get('_V44_PREV_V32_CALLBACK') or globals().get('_V45_PREV_V32_CALLBACK') or globals().get('v32_callback')
-_V46_PREV_ADMIN_CALLBACK = globals().get('_V44_PREV_ADMIN_CALLBACK') or globals().get('_V45_PREV_ADMIN_CALLBACK') or globals().get('v32_admin_callback')
-_V46_DIRECT_RENDER_SCORERS = globals().get('render_top_scorers_v29')
-
-
-def _v46_riyadh_now():
-    try:
-        if '_v42_riyadh_now' in globals():
-            return _v42_riyadh_now()
-    except Exception:
-        pass
-    try:
-        if _v46_ZoneInfo:
-            return datetime.now(_v46_ZoneInfo('Asia/Riyadh'))
-    except Exception:
-        pass
-    return datetime.now()
-
-
-def _v46_now_text():
-    try:
-        return _v46_riyadh_now().strftime('%Y-%m-%d %H:%M بتوقيت مكة')
-    except Exception:
-        return datetime.now().strftime('%Y-%m-%d %H:%M')
-
-
-def _v46_json_load(path, default=None):
-    default = {} if default is None else default
-    try:
-        if path and os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return default
-
-
-def _v46_json_save(path, data):
-    try:
-        tmp = str(path) + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data or {}, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-        return True
-    except Exception:
-        return False
-
-
-# ---------- كاش سريع فقط: لا بناء ثقيل عند ضغط المستخدم ----------
-def _v46_get_cached_snapshot():
-    for p in [V46_SNAPSHOT_CACHE_FILE, globals().get('V44_SNAPSHOT_CACHE_FILE'), globals().get('V43_BOARD_CACHE_FILE'), 'tournament_snapshot_cache_v44.json', 'tournament_snapshot_cache_v43.json', 'tournament_snapshot_cache_v42.json']:
-        try:
-            data = _v46_json_load(p, {}) if p else {}
-            if isinstance(data, dict) and isinstance(data.get('snapshot'), dict):
-                snap = data.get('snapshot') or {}
-                snap.setdefault('updated_at', data.get('saved_at') or data.get('updated_at') or '-')
-                return snap
-            if isinstance(data, dict) and ('groups' in data or 'qualified' in data or 'thirds' in data):
-                data.setdefault('updated_at', data.get('saved_at') or data.get('updated_at') or '-')
-                return data
-        except Exception:
-            continue
-    return {'updated_at': 'لا يوجد تحديث محفوظ بعد', 'groups': {}, 'qualified': [], 'eliminated': [], 'thirds': [], 'status': {}}
-
-
-def _v44_get_snapshot(force=False, max_age=120):
-    # مهم: لا نبني snapshot عند ضغط المستخدم. البناء يصير فقط من تحديث البطولة الخلفي.
-    if force:
-        return _v46_build_and_save_snapshot()
-    return _v46_get_cached_snapshot()
-
-
-def _v32_snapshot(force=False):
-    return _v44_get_snapshot(force=force)
-
-
-def _v33_snapshot(force=False):
-    return _v44_get_snapshot(force=force)
-
-
-def _v46_build_and_save_snapshot():
-    snap = {}
-    # نستخدم باني V44 إذا موجود لأنه يعرف آخر منطق التأهل، لكن فقط داخل الخلفية/التحديث اليدوي.
-    builder = globals().get('_v44_build_snapshot')
-    try:
-        if callable(builder):
-            snap = builder(True) or {}
-    except Exception:
-        snap = {}
-    if not isinstance(snap, dict):
-        snap = {}
-    try:
-        if '_v44_apply_official_statuses' in globals():
-            snap = _v44_apply_official_statuses(snap) or snap
-    except Exception:
-        pass
-    snap.setdefault('updated_at', _v46_now_text())
-    _v46_json_save(V46_SNAPSHOT_CACHE_FILE, {'snapshot': snap, 'saved_at': _v46_now_text(), 'saved_ts': _v46_time.time()})
-    # اكتب على ملف V44 للتوافق مع الدوال القديمة.
-    try:
-        _v46_json_save(globals().get('V44_SNAPSHOT_CACHE_FILE') or 'tournament_snapshot_cache_v44.json', {'snapshot': snap, 'saved_at': _v46_now_text(), 'saved_ts': _v46_time.time()})
-    except Exception:
-        pass
-    return snap
-
-
-def _v32_calculated_qualified():
-    snap = _v46_get_cached_snapshot()
-    return list(snap.get('qualified') or [])[:32]
-
-
-def _v32_calculated_eliminated():
-    snap = _v46_get_cached_snapshot()
-    return list(snap.get('eliminated') or [])[:32]
-
-
-# ---------- لوحة البطولة: عرض من الكاش فقط، تحديثها بالخلفية ----------
-def _v46_make_board_text(force=False):
-    # إذا force=True يبني اللوحة من دالة V44 داخل الخلفية فقط.
-    if force:
-        try:
-            maker = globals().get('_v44_make_board_text')
-            if callable(maker):
-                return maker(True)
-        except Exception:
-            pass
-    cache = _v46_json_load(V46_BOARD_CACHE_FILE, {})
-    if isinstance(cache, dict) and cache.get('text'):
-        return cache.get('text')
-    return ('🏆 لوحة البطولة\n'
-            'آخر تحديث: لا يوجد تحديث محفوظ بعد.\n\n'
-            'اضغط من الإدارة: 🔄 تحديث بيانات البطولة\n'
-            'أو انتظر التحديث التلقائي وقت المباريات.')
-
-
-def _v39_board_text(force=False):
-    return _v46_make_board_text(force=False if not force else True)
-
-
-def _v32_tournament_board_text(force=False):
-    return _v39_board_text(force)
-
-
-# ---------- تحديث البطولة بالخلفية ----------
-def _v46_in_match_refresh_window(now=None):
-    now = now or _v46_riyadh_now()
-    try:
-        h = int(now.hour)
-        return h >= 19 or h < 6
-    except Exception:
-        return False
-
-
-def _v46_refresh_all_cache_sync(reason='manual', include_scorers=False):
-    if not V46_REFRESH_LOCK.acquire(blocking=False):
-        return {'ok': False, 'message': 'تحديث آخر يعمل الآن', 'report': ['⚠️ تحديث آخر يعمل الآن، تم تخطي الطلب.']}
-    report = [f'🔄 سبب التحديث: {reason}', f'⏱️ بدأ: {_v46_now_text()}']
-    board = None
-    try:
-        try:
-            snap = _v46_build_and_save_snapshot()
-            qn = len(snap.get('qualified') or [])
-            en = len(snap.get('eliminated') or [])
-            report.append(f'✅ الحالة/التأهل: تم | المتأهلين {qn} | المغادرين {en}')
-        except Exception as e:
-            report.append(f'❌ الحالة/التأهل: تعذر ({type(e).__name__}: {str(e)[:70]})')
-        try:
-            # أفضل الثوالث من الكاش/الحالة الحالية فقط حتى لا يتعطل التحديث.
-            if '_v32_best_thirds_text' in globals():
-                _v32_best_thirds_text(False)
-            report.append('✅ أفضل الثوالث: تم')
-        except Exception as e:
-            report.append(f'❌ أفضل الثوالث: تعذر ({type(e).__name__}: {str(e)[:70]})')
-        try:
-            maker = globals().get('_v44_make_board_text')
-            board = maker(True) if callable(maker) else _v46_make_board_text(True)
-            report.append('✅ لوحة البطولة: تم')
-        except Exception as e:
-            board = _v46_make_board_text(False)
-            report.append(f'❌ لوحة البطولة: تعذر ({type(e).__name__}: {str(e)[:70]})')
-        # لا نحدّث الهدافين تلقائيًا حسب طلبك: كل ضغطة تسحب مباشرة.
-        report.append('✅ الهدافين: مباشر عند الضغط فقط')
-        report.append(f'✅ انتهى: {_v46_now_text()}')
-        data = {'ok': True, 'updated_at': _v46_now_text(), 'saved_ts': _v46_time.time(), 'reason': reason, 'report': report, 'board': board}
-        _v46_json_save(V46_REFRESH_STATUS_FILE, data)
-        try:
-            _v46_json_save(globals().get('V44_REFRESH_STATUS_FILE') or 'tournament_refresh_status_v44.json', data)
-        except Exception:
-            pass
-        return data
-    finally:
-        try:
-            V46_REFRESH_LOCK.release()
-        except Exception:
-            pass
-
-
-async def _v46_refresh_notify(context, chat_id=None, reason='manual'):
-    try:
-        res = await asyncio.to_thread(_v46_refresh_all_cache_sync, reason, False)
-        if chat_id:
-            report = '\n'.join(res.get('report') or [])
-            txt = ('✅ تم تحديث بيانات البطولة\n' if res.get('ok') else '⚠️ لم يكتمل تحديث البطولة\n') + report
-            await context.bot.send_message(chat_id=chat_id, text=txt[:3900])
-    except Exception as e:
-        if chat_id:
-            try:
-                await context.bot.send_message(chat_id=chat_id, text=f'❌ تعذر تحديث البطولة\n{type(e).__name__}: {str(e)[:180]}')
-            except Exception:
-                pass
-
-
-async def _v46_match_window_refresh_job(context):
-    if not _v46_in_match_refresh_window():
-        return
-    await _v46_refresh_notify(context, chat_id=None, reason='auto_match_20min')
-
-
-async def _v46_daily_refresh_job(context):
-    await _v46_refresh_notify(context, chat_id=None, reason='daily_10am')
-
-
-# توافق مع أسماء V44 إن استدعيت من أي مسار قديم.
-def _v44_refresh_all_cache(force=True, include_scorers=False):
-    return _v46_refresh_all_cache_sync('compat_manual', include_scorers=False)
-
-
-async def _v44_auto_refresh_job(context):
-    return await _v46_match_window_refresh_job(context)
-
-
-# ---------- هدافين البطولة: سحب ESPN مباشر كل ضغطة + تصميم، بدون كاش ----------
-def _v46_scorer_urls():
-    base = [
-        'https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&season=2026&limit=100&sort=goals:desc',
-        'https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete?region=us&lang=en&contentorigin=espn&limit=100&sort=goals:desc',
-        'https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics?region=us&lang=en&contentorigin=espn&season=2026',
-        'https://www.espn.com/soccer/stats/_/league/FIFA.WORLD/season/2026',
-        'https://www.espn.com/soccer/stats/_/league/FIFA.WORLD',
-    ]
-    cb = str(int(_v46_time.time()))
-    out = []
-    for u in base:
-        out.append(u + ('&' if '?' in u else '?') + '_cb=' + cb)
-    return out
-
-
-def _v46_walk_json(obj):
+def _v47_walk_json(obj):
     if isinstance(obj, dict):
         yield obj
         for v in obj.values():
-            yield from _v46_walk_json(v)
+            yield from _v47_walk_json(v)
     elif isinstance(obj, list):
-        for x in obj:
-            yield from _v46_walk_json(x)
+        for v in obj:
+            yield from _v47_walk_json(v)
 
 
-def _v46_int(v):
-    if v is None or v == '':
-        return None
+def _v47_int(v):
     try:
         if isinstance(v, dict):
-            for k in ('value', 'displayValue', 'display', 'stat'):
+            for k in ("value", "displayValue", "display", "stat", "total", "rankValue"):
                 if k in v:
-                    return _v46_int(v.get(k))
-        s = str(v).strip().replace(',', '')
-        if not s:
+                    out = _v47_int(v.get(k))
+                    if out is not None:
+                        return out
+            return None
+        s = str(v).strip()
+        if not s or s.lower() in ("none", "null", "-"):
+            return None
+        s = re.sub(r"[^0-9.\-]", "", s)
+        if s in ("", "-", "."):
             return None
         return int(float(s))
     except Exception:
         return None
 
 
-def _v46_stat_value(node, names):
-    names_l = [str(x).lower() for x in names]
+def _v47_clean_player_name(name):
+    try:
+        if '_player_name_ar' in globals():
+            nm = _player_name_ar(name)
+        else:
+            nm = normalize_name(name or "")
+    except Exception:
+        nm = normalize_name(name or "")
+    nm = re.sub(r"\s+", " ", str(nm or "")).strip()
+    if not nm or len(nm) > 70:
+        return ""
+    bad = ("fifa", "world cup", "standings", "team", "goals", "player", "league")
+    if any(x in nm.lower() for x in bad):
+        return ""
+    return nm
+
+
+def _v47_team_name(raw):
+    try:
+        return canonical_team_name(raw) or normalize_name(raw or "-") or "-"
+    except Exception:
+        return normalize_name(raw or "-") or "-"
+
+
+def _v47_stat_from_node(node, wanted):
     if not isinstance(node, dict):
         return None
+    wanted_l = {str(x).lower() for x in wanted}
     # direct keys
     for k, v in node.items():
-        lk = str(k).lower()
-        if any(n == lk or n in lk for n in names_l):
-            val = _v46_int(v)
-            if val is not None:
-                return val
-    # statistics/stats lists
-    for key in ('statistics', 'stats', 'stat', 'splits'):
+        lk = str(k).lower().replace("_", "")
+        if lk in wanted_l or any(w in lk for w in wanted_l if len(w) >= 3):
+            out = _v47_int(v)
+            if out is not None:
+                return out
+    # ESPN statistics arrays
+    for key in ("statistics", "stats", "splits", "categories", "leaders"):
         arr = node.get(key)
         if isinstance(arr, list):
             for st in arr:
                 if not isinstance(st, dict):
                     continue
-                nm = str(st.get('name') or st.get('displayName') or st.get('abbreviation') or st.get('label') or '').lower()
-                if any(n == nm or n in nm for n in names_l):
-                    val = _v46_int(st.get('value') if 'value' in st else st.get('displayValue'))
-                    if val is not None:
-                        return val
-        elif isinstance(arr, dict):
-            val = _v46_stat_value(arr, names)
-            if val is not None:
-                return val
+                nm = str(st.get("name") or st.get("displayName") or st.get("shortDisplayName") or st.get("abbreviation") or st.get("label") or "").lower().replace("_", "").strip()
+                if nm and (nm in wanted_l or any(w in nm for w in wanted_l if len(w) >= 3)):
+                    out = _v47_int(st.get("value") or st.get("displayValue") or st.get("total") or st.get("stat") or st.get("rankValue"))
+                    if out is not None:
+                        return out
+                out = _v47_stat_from_node(st, wanted_l)
+                if out is not None:
+                    return out
     return None
 
 
-def _v46_name_from_node(node):
-    for k in ('athlete', 'player', 'participant', 'competitor'):
-        v = node.get(k) if isinstance(node, dict) else None
+def _v47_name_from_node(node):
+    if not isinstance(node, dict):
+        return ""
+    for key in ("athlete", "player", "participant", "person"):
+        v = node.get(key)
         if isinstance(v, dict):
-            name = v.get('displayName') or v.get('shortName') or v.get('fullName') or v.get('name')
-            if name:
-                return str(name)
-    for k in ('displayName', 'shortName', 'fullName', 'athleteName', 'playerName', 'name'):
-        v = node.get(k) if isinstance(node, dict) else None
-        if isinstance(v, str) and 2 <= len(v.strip()) <= 70:
-            return v.strip()
-    return ''
+            for nk in ("displayName", "fullName", "shortName", "name"):
+                nm = _v47_clean_player_name(v.get(nk))
+                if nm:
+                    return nm
+    for nk in ("displayName", "fullName", "shortName", "name"):
+        nm = _v47_clean_player_name(node.get(nk))
+        if nm:
+            return nm
+    return ""
 
 
-def _v46_team_from_node(node):
-    for k in ('team', 'club', 'squad', 'competitor'):
-        v = node.get(k) if isinstance(node, dict) else None
+def _v47_team_from_node(node):
+    if not isinstance(node, dict):
+        return "-"
+    for key in ("team", "club", "competitor"):
+        v = node.get(key)
         if isinstance(v, dict):
-            team = v.get('displayName') or v.get('shortDisplayName') or v.get('abbreviation') or v.get('name')
-            if team:
-                return canonical_team_name(team) or normalize_name(team)
-        if isinstance(v, str) and v.strip():
-            return canonical_team_name(v) or normalize_name(v)
-    for k in ('teamName', 'teamDisplayName', 'clubName'):
-        v = node.get(k) if isinstance(node, dict) else None
-        if isinstance(v, str) and v.strip():
-            return canonical_team_name(v) or normalize_name(v)
-    return '-'
+            for nk in ("displayName", "shortDisplayName", "abbreviation", "name"):
+                if v.get(nk):
+                    return _v47_team_name(v.get(nk))
+        elif isinstance(v, str) and v.strip():
+            return _v47_team_name(v)
+    # sometimes nested athlete has team
+    for key in ("athlete", "player", "participant"):
+        v = node.get(key)
+        if isinstance(v, dict):
+            tm = _v47_team_from_node(v)
+            if tm and tm != "-":
+                return tm
+    return "-"
 
 
-def _v46_extract_scorers_from_json(data):
-    raw = []
-    for node in _v46_walk_json(data):
+def _v47_espn_scorers_urls():
+    base = "https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics/byathlete"
+    params_list = [
+        {"region": "us", "lang": "en", "contentorigin": "espn", "season": "2026", "limit": "80", "sort": "goals:desc"},
+        {"region": "us", "lang": "en", "contentorigin": "espn", "limit": "80", "sort": "goals:desc"},
+    ]
+    urls = [base + "?" + _v47_urlencode(p) for p in params_list]
+    urls += [
+        "https://site.web.api.espn.com/apis/common/v3/sports/soccer/fifa.world/statistics?region=us&lang=en&contentorigin=espn&season=2026",
+        "https://www.espn.com/soccer/stats/_/league/FIFA.WORLD/season/2026",
+        "https://www.espn.com/soccer/stats/_/league/FIFA.WORLD",
+    ]
+    return urls
+
+
+def _v47_extract_scorers_from_json(data):
+    found = {}
+    for node in _v47_walk_json(data):
         if not isinstance(node, dict):
             continue
-        name = _v46_name_from_node(node)
+        goals = _v47_stat_from_node(node, ("goals", "goal", "g"))
+        if goals is None:
+            # accept rows where ESPN gives value for a sorted goals category only when a player exists
+            goals = _v47_int(node.get("goals") or node.get("goal") or node.get("G"))
+        if goals is None or goals <= 0 or goals > 30:
+            continue
+        name = _v47_name_from_node(node)
         if not name:
             continue
-        goals = _v46_stat_value(node, ('goals', 'goal', 'g'))
-        if goals is None:
-            continue
-        try:
-            goals = int(goals)
-        except Exception:
-            continue
-        if goals <= 0:
-            continue
-        played = _v46_stat_value(node, ('appearances', 'gamesPlayed', 'games', 'matches', 'p', 'gp'))
-        team = _v46_team_from_node(node)
-        raw.append({'name': normalize_name(name), 'team': team or '-', 'played': played if played is not None else '', 'goals': goals})
-    # dedupe by player/team, keep highest goals
-    by = {}
-    for it in raw:
-        key = (simple_key(it.get('name') or ''), simple_key(it.get('team') or '')) if 'simple_key' in globals() else ((it.get('name') or '').lower(), (it.get('team') or '').lower())
-        if not key[0]:
-            continue
-        old = by.get(key)
-        if old is None or int(it.get('goals') or 0) > int(old.get('goals') or 0):
-            by[key] = it
-    items = list(by.values())
-    items.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
-    return items[:30]
+        team = _v47_team_from_node(node)
+        played = _v47_stat_from_node(node, ("appearances", "appearance", "gamesplayed", "games", "played", "gp", "p"))
+        if played is not None and (played < 0 or played > 10):
+            played = ""
+        row = {"name": name, "team": team or "-", "played": played if played is not None else "", "goals": int(goals)}
+        key = (simple_key(name) if 'simple_key' in globals() else name.lower(), simple_key(team) if 'simple_key' in globals() else str(team).lower())
+        old = found.get(key)
+        if not old or int(row["goals"]) > int(old.get("goals") or 0):
+            found[key] = row
+    items = list(found.values())
+    items.sort(key=lambda x: (-int(x.get("goals") or 0), str(x.get("name") or "")))
+    return items[:25]
 
 
-def _v46_extract_scorers_from_html(html):
-    # استخدم parser القديم أولًا إذا كان متاح، لكنه ليس كاش؛ فقط parser للصفحة الحالية.
+def _v47_extract_scorers_from_html(html):
+    # Official ESPN stats page often embeds JSON in __NEXT_DATA__.
     try:
-        old = globals().get('_v29_extract_top_scorers_from_html')
-        if callable(old):
-            items = old(html) or []
-            if items:
-                items.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
-                return items[:30]
-    except Exception:
-        pass
-    try:
-        m = re.search(r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', html or '', flags=re.S)
+        m = re.search(r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', html or "", flags=re.S)
         if m:
-            data = json.loads(m.group(1))
-            return _v46_extract_scorers_from_json(data)
+            items = _v47_extract_scorers_from_json(json.loads(m.group(1)))
+            if items:
+                return items
     except Exception:
         pass
-    return []
+    # Last-resort light parse; no cached records.
+    try:
+        if BeautifulSoup:
+            soup = BeautifulSoup(html or "", "html.parser")
+            text = soup.get_text(" ")
+        else:
+            text = re.sub(r"<[^>]+>", " ", html or "")
+        text = re.sub(r"\s+", " ", text)
+        items = []
+        team_map = globals().get('TEAM_SEARCH_EN') or {}
+        for team_ar, names in team_map.items():
+            for en in names or []:
+                if not en or len(en) < 3:
+                    continue
+                pat = r"([A-Z][A-Za-zÀ-ÖØ-öø-ÿ'\.\- ]{2,55})\s+" + re.escape(en) + r"\s+(\d{1,2})\s+(\d{1,2})"
+                for mm in re.finditer(pat, text):
+                    played = _v47_int(mm.group(2))
+                    goals = _v47_int(mm.group(3))
+                    name = _v47_clean_player_name(mm.group(1))
+                    if name and goals and goals > 0:
+                        items.append({"name": name, "team": team_ar, "played": played if played is not None else "", "goals": goals})
+        uniq, seen = [], set()
+        for it in items:
+            k = (it['name'].lower(), it['team'])
+            if k not in seen:
+                seen.add(k); uniq.append(it)
+        uniq.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
+        return uniq[:25]
+    except Exception:
+        return []
 
 
 def fetch_espn_top_scorers(force_refresh=True):
-    """كل استدعاء = سحب مباشر من ESPN. لا كاش ولا fallback قديم."""
-    global _V39_TOP_SCORERS_LAST_ERROR, _V38_TOP_SCORERS_LAST_ERROR, _V38F_ESPN_SCORERS_LAST_ERROR, V46_LAST_SCORERS_META
-    V46_LAST_SCORERS_META = {'cache_used': False, 'rows_count': 0, 'fetched_at': _v46_now_text(), 'source_url': '', 'errors': []}
+    """V47: سحب مباشر فقط من ESPN. لا يستخدم كاش قديم ولا fallback مخفي."""
+    global _V47_SCORERS_LAST_META, _V39_TOP_SCORERS_LAST_ERROR, _V38_TOP_SCORERS_LAST_ERROR, _V38F_ESPN_SCORERS_LAST_ERROR
+    _V47_SCORERS_LAST_META = {
+        "source": "ESPN مباشر",
+        "source_url": "-",
+        "fetched_at": _v47_now_makkah_str(),
+        "cache_used": False,
+        "rows_count": 0,
+        "error": "",
+    }
     try:
-        _V39_TOP_SCORERS_LAST_ERROR = _V38_TOP_SCORERS_LAST_ERROR = _V38F_ESPN_SCORERS_LAST_ERROR = ''
+        _V39_TOP_SCORERS_LAST_ERROR = ""
+        _V38_TOP_SCORERS_LAST_ERROR = ""
+        _V38F_ESPN_SCORERS_LAST_ERROR = ""
     except Exception:
         pass
     if not requests:
-        V46_LAST_SCORERS_META['errors'].append('requests غير متوفر')
+        _V47_SCORERS_LAST_META["error"] = "مكتبة requests غير متوفرة"
+        try: _V39_TOP_SCORERS_LAST_ERROR = _V47_SCORERS_LAST_META["error"]
+        except Exception: pass
         return []
-    headers = {
-        'User-Agent': 'Mozilla/5.0',
-        'Accept': 'application/json,text/html;q=0.9,*/*;q=0.8',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-    }
-    for url in _v46_scorer_urls():
+
+    last_errors = []
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json,text/html,*/*"}
+    for url in _v47_espn_scorers_urls():
         try:
-            r = (_requests_get(url, timeout=24) if '_requests_get' in globals() else requests.get(url, headers=headers, timeout=24))
+            getter = globals().get('_requests_get')
+            if callable(getter):
+                try:
+                    r = getter(url, headers=headers, timeout=22)
+                except TypeError:
+                    r = getter(url, timeout=22)
+            else:
+                r = requests.get(url, headers=headers, timeout=22)
             status = int(getattr(r, 'status_code', 200) or 200)
             if status >= 400:
-                V46_LAST_SCORERS_META['errors'].append(f'HTTP {status}')
+                last_errors.append(f"HTTP {status}")
                 continue
-            ctype = (getattr(r, 'headers', {}) or {}).get('content-type', '')
-            text = getattr(r, 'text', '') or ''
+            ctype = str((getattr(r, 'headers', {}) or {}).get('content-type', '')).lower()
             items = []
-            if 'json' in ctype or 'byathlete' in url or 'statistics' in url:
+            if 'json' in ctype or 'statistics' in url:
                 try:
-                    items = _v46_extract_scorers_from_json(r.json())
+                    items = _v47_extract_scorers_from_json(r.json())
                 except Exception as e:
-                    V46_LAST_SCORERS_META['errors'].append(f'JSON {type(e).__name__}')
+                    last_errors.append(f"JSON: {str(e)[:60]}")
             if not items:
-                items = _v46_extract_scorers_from_html(text)
+                items = _v47_extract_scorers_from_html(getattr(r, 'text', '') or '')
             if items:
-                V46_LAST_SCORERS_META.update({'source_url': url.split('&_cb=')[0], 'rows_count': len(items), 'cache_used': False, 'fetched_at': _v46_now_text()})
-                _v46_json_save(V46_SCORERS_DEBUG_FILE, V46_LAST_SCORERS_META)
-                return items[:25]
-            V46_LAST_SCORERS_META['errors'].append('بدون صفوف صالحة')
+                items = sorted(items, key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))[:25]
+                _V47_SCORERS_LAST_META.update({
+                    "source": "ESPN مباشر",
+                    "source_url": url,
+                    "fetched_at": _v47_now_makkah_str(),
+                    "cache_used": False,
+                    "rows_count": len(items),
+                    "error": "",
+                })
+                return items
+            last_errors.append("بدون صفوف صالحة")
         except Exception as e:
-            V46_LAST_SCORERS_META['errors'].append(f'{type(e).__name__}: {str(e)[:70]}')
-    err = ' | '.join(V46_LAST_SCORERS_META.get('errors') or [])[:500] or 'ESPN لم يرجع قائمة هدافين صالحة.'
+            last_errors.append(str(e)[:80])
+            continue
+    err = "ESPN لم يرجع قائمة هدافين صالحة الآن" + (" — " + " / ".join(list(dict.fromkeys(last_errors))[:3]) if last_errors else "")
+    _V47_SCORERS_LAST_META["error"] = err
     try:
-        _V39_TOP_SCORERS_LAST_ERROR = _V38_TOP_SCORERS_LAST_ERROR = _V38F_ESPN_SCORERS_LAST_ERROR = err
+        _V39_TOP_SCORERS_LAST_ERROR = err
+        _V38_TOP_SCORERS_LAST_ERROR = err
+        _V38F_ESPN_SCORERS_LAST_ERROR = err
     except Exception:
         pass
-    _v46_json_save(V46_SCORERS_DEBUG_FILE, V46_LAST_SCORERS_META)
     return []
 
 
-def _v46_render_scorers_design(items):
-    renderer = globals().get('render_top_scorers_v29') or _V46_DIRECT_RENDER_SCORERS
-    if not callable(renderer):
-        return None
-    path = renderer(items)
-    # لا نرسل نفس اسم الصورة حتى لا يطلع كاش تليجرام/ملف قديم.
+def _v47_render_unique_top_scorers(items):
+    # يحافظ على التصميم القديم، لكن يمنع كاش الصورة بتوليد اسم جديد.
     try:
-        ensure_generated_dir()
-        unique = os.path.join(GENERATED_DIR, f'top_scorers_espn_v46_{int(_v46_time.time())}.png')
-        if path and os.path.exists(path):
-            shutil.copy(path, unique)
-            return unique
+        base_path = render_top_scorers_v29(items)
+        base, ext = os.path.splitext(base_path)
+        new_path = f"{base}_fresh_{int(_v47_time.time()*1000)}{ext or '.png'}"
+        shutil.copy2(base_path, new_path)
+        return new_path
     except Exception:
-        pass
-    return path
+        return render_top_scorers_v29(items)
 
 
-def _v46_scorers_caption(items):
-    meta = globals().get('V46_LAST_SCORERS_META') or {}
-    return ('هدافين البطولة ✅\n'
-            'المصدر: ESPN مباشر\n'
-            f"آخر تحديث: {meta.get('fetched_at') or _v46_now_text()}\n"
-            f"cache_used: {'نعم' if meta.get('cache_used') else 'لا'} | rows_count: {meta.get('rows_count', len(items or []))}")
-
-
-async def _v46_send_top_scorers(message):
-    wait = await message.reply_text('⏳ أسحب هدافين البطولة من ESPN مباشرة...')
+async def _v41_send_working_top_scorers(message):
+    wait = await message.reply_text("⏳ أسحب هدافي البطولة من ESPN مباشرة...")
     try:
-        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=V46_SCORERS_TIMEOUT)
+        items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers, True), timeout=60)
+        meta = dict(globals().get('_V47_SCORERS_LAST_META') or {})
         if not items:
-            err = globals().get('_V39_TOP_SCORERS_LAST_ERROR') or 'ESPN لم يرجع قائمة هدافين صالحة الآن.'
-            await wait.edit_text('⚠️ فشل السحب المباشر من ESPN\ncache_used: لا\nrows_count: 0\n\n' + str(err)[:800])
+            err = meta.get('error') or globals().get('_V39_TOP_SCORERS_LAST_ERROR') or 'لم يرجع ESPN قائمة هدافين صالحة الآن.'
+            await wait.edit_text(
+                "⚠️ فشل السحب المباشر لهدافين البطولة من ESPN.\n"
+                "cache_used: لا\n"
+                "rows_count: 0\n"
+                f"السبب: {err}"
+            )
             return
-        path = await asyncio.to_thread(_v46_render_scorers_design, items)
-        caption = _v46_scorers_caption(items)
-        if path:
-            await send_photo_path(message, path, caption)
-            try:
-                await wait.delete()
-            except Exception:
-                pass
-        else:
-            await wait.edit_text(caption + '\n\n' + '\n'.join([f"{i}. {it.get('name')} — {it.get('team')} | {it.get('goals')}" for i, it in enumerate(items[:15],1)])[:3200])
+        items = sorted(items, key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))[:25]
+        path = _v47_render_unique_top_scorers(items)
+        caption = (
+            "هدافو البطولة ✅\n"
+            "المصدر: ESPN مباشر\n"
+            "cache_used: لا\n"
+            f"rows_count: {len(items)}\n"
+            f"آخر تحديث: {meta.get('fetched_at') or _v47_now_makkah_str()}"
+        )
+        await send_photo_path(message, path, caption)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
     except Exception as e:
-        await wait.edit_text(f'تعذر جلب هدافين البطولة ❌\ncache_used: لا\n{type(e).__name__}: {str(e)[:300]}')
+        await wait.edit_text(f"تعذر جلب هدافي البطولة ❌\ncache_used: لا\n{str(e)[:300]}")
 
 
-_v44_send_top_scorers = _v46_send_top_scorers
-_v45_send_top_scorers = _v46_send_top_scorers
-_v39_send_top_scorers = _v46_send_top_scorers
-_v41_send_working_top_scorers = _v46_send_top_scorers
-_v38f_send_espn_top_scorers = _v46_send_top_scorers
-_v38_send_fresh_espn_top_scorers = _v46_send_top_scorers
+async def _v39_send_top_scorers(message):
+    await _v41_send_working_top_scorers(message)
+
+
+async def _v38f_send_espn_top_scorers(message):
+    await _v41_send_working_top_scorers(message)
+
+
+async def _v38_send_fresh_espn_top_scorers(message):
+    await _v41_send_working_top_scorers(message)
+
 
 async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _v46_send_top_scorers(update.message)
+    await _v41_send_working_top_scorers(update.message)
 
 
-# ---------- أفضل الثوالث: عداد ضمن التأهل + ✅ ----------
-def _v32_best_thirds_text(force=False):
-    snap = _v33_snapshot(False)
-    thirds = snap.get('thirds') or []
-    if not thirds:
-        return '🥉 أفضل الثوالث الآن\nلا توجد بيانات كافية حتى الآن.'
-    qualified_thirds = []
+def _v47_get(row, *keys, default=None):
+    if not isinstance(row, dict):
+        return default
+    for k in keys:
+        if k in row and row.get(k) is not None:
+            return row.get(k)
+    return default
+
+
+def _v47_third_is_official(team, row, snap):
+    status = str(_v47_get(row, 'third_status', 'status', default='') or '')
     try:
-        for r in thirds:
-            team = r.get('team') or '-'
-            st = str(r.get('third_status') or (snap.get('status') or {}).get(team, '') or '')
-            if ('ضمن' in st and 'ثالث' in st) or ('أفضل ثالث' in st and 'متأهل' in st) or ('كأفضل ثالث' in st and 'رسمي' in st):
-                qualified_thirds.append(team)
+        status += ' ' + str((snap.get('status') or {}).get(team, '') or '')
     except Exception:
         pass
-    lines = ['🥉 أفضل الثوالث الآن', f"آخر تحديث: {snap.get('updated_at','-')}", '', f'✅ ضمن التأهل كأفضل ثالث: {len(qualified_thirds)}/8', '']
-    inside = list(enumerate(thirds[:8], start=1))
-    outside = list(enumerate(thirds[8:], start=9))
-    lines.append('✅ داخلين حاليًا')
-    for i, r in inside:
-        team = r.get('team') or '-'
-        st = str(r.get('third_status') or (snap.get('status') or {}).get(team, '') or '⏳ ينتظر نتائج')
-        checked = ''
-        if team in qualified_thirds or ('ضمن' in st and 'ثالث' in st):
-            checked = ' ✅'
-            st = '✅ ضمن رسميًا كأفضل ثالث'
-        lines.append(f"{i}. {team}{checked} — {_v32_group_name(r.get('group')) if '_v32_group_name' in globals() else r.get('group')}")
-        lines.append(f"   النقاط: {r.get('Pts')} | لعب: {r.get('P')}/3 | الفارق: {int(r.get('GD') or 0):+d} | الأهداف: {r.get('GF')}")
-        lines.append(f"   الحالة: {st}")
+    return ('✅' in status or 'متأهل' in status or 'ضمن' in status) and ('رسمي' in status or 'أفضل' in status or 'ثالث' in status)
+
+
+def _v32_best_thirds_text(force=False):
+    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
+    thirds = list((snap or {}).get('thirds') or [])
+    lines = ['🥉 أفضل الثوالث الآن', f"آخر تحديث: {(snap or {}).get('updated_at','-')}", '']
+    if not thirds:
+        return '🥉 أفضل الثوالث الآن\nلا توجد بيانات كافية حتى الآن.'
+
+    official_count = 0
+    for r in thirds[:8]:
+        team = _v47_get(r, 'team', 'name', default='-')
+        if _v47_third_is_official(team, r, snap or {}):
+            official_count += 1
+    lines.append(f'✅ ضمن التأهل كأفضل ثالث: {official_count}/8')
+    lines.append('')
+    lines.append('✅ داخلين حاليًا:')
+
+    for i, r in enumerate(thirds[:8], start=1):
+        team = _v47_get(r, 'team', 'name', default='-')
+        group = _v47_get(r, 'group', 'Group', default='')
+        pts = _v47_get(r, 'Pts', 'pts', 'points', default=0)
+        played = _v47_get(r, 'P', 'played', default=0)
+        gd = _v47_int(_v47_get(r, 'GD', 'gd', default=0)) or 0
+        gf = _v47_get(r, 'GF', 'gf', default='-')
+        official = _v47_third_is_official(team, r, snap or {})
+        mark = ' ✅' if official else ''
+        status = '✅ ضمن التأهل كأفضل ثالث' if official else str(_v47_get(r, 'third_status', default='⏳ ينتظر نتائج') or '⏳ ينتظر نتائج')
+        lines.append(f'{i}. {team}{mark} — {_v32_group_name(group) if "_v32_group_name" in globals() else group}')
+        lines.append(f'   النقاط: {pts} | لعب: {played}/3 | الفارق: {gd:+d} | الأهداف: {gf}')
+        lines.append(f'   الحالة: {status}')
         lines.append('')
-    lines.append('❌ خارجين حاليًا')
+
+    outside = thirds[8:]
+    lines.append('❌ خارجين حاليًا:')
     if not outside:
         lines.append('لا يوجد.')
-    for i, r in outside:
-        team = r.get('team') or '-'
-        st = str(r.get('third_status') or '❌ خارج حاليًا')
-        lines.append(f"{i}. {team} — {_v32_group_name(r.get('group')) if '_v32_group_name' in globals() else r.get('group')}")
-        lines.append(f"   النقاط: {r.get('Pts')} | لعب: {r.get('P')}/3 | الفارق: {int(r.get('GD') or 0):+d} | الأهداف: {r.get('GF')}")
-        lines.append(f"   الحالة: {st}")
+    for i, r in enumerate(outside, start=9):
+        team = _v47_get(r, 'team', 'name', default='-')
+        group = _v47_get(r, 'group', 'Group', default='')
+        pts = _v47_get(r, 'Pts', 'pts', 'points', default=0)
+        played = _v47_get(r, 'P', 'played', default=0)
+        gd = _v47_int(_v47_get(r, 'GD', 'gd', default=0)) or 0
+        gf = _v47_get(r, 'GF', 'gf', default='-')
+        lines.append(f'{i}. {team} — {_v32_group_name(group) if "_v32_group_name" in globals() else group}')
+        lines.append(f'   النقاط: {pts} | لعب: {played}/3 | الفارق: {gd:+d} | الأهداف: {gf}')
+        lines.append('   الحالة: ❌ خارج أفضل الثوالث حاليًا')
         lines.append('')
-    lines.append('أفضل 8 ثوالث من أصل 12 يتأهلون لدور الـ32. اللي ضمن رسميًا يظهر بجانبه ✅ ويتم احتسابه في العداد.')
+    lines.append('أفضل 8 ثوالث من أصل 12 يتأهلون لدور الـ32. الخصم يتحدد حسب جدول FIFA الرسمي لتوزيع أفضل الثوالث.')
     return '\n'.join(lines).strip()
 
 
-# ---------- كيف تتأهل: رد أساسي سريع، التفاصيل الثقيلة بأزرار ----------
-def _v46_group_line(team, snap=None):
-    snap = snap or _v33_snapshot(False)
-    try:
-        groups = snap.get('groups') or {}
-        for g, rows in groups.items():
-            for idx, r in enumerate(rows or [], 1):
-                t = r.get('team') if isinstance(r, dict) else ''
-                same = (simple_key(t) == simple_key(team)) if 'simple_key' in globals() else str(t).strip() == str(team).strip()
-                if same:
-                    pts = r.get('Pts', r.get('points', '-'))
-                    gd = int(r.get('GD', r.get('gd', 0)) or 0)
-                    played = r.get('P', r.get('played', '-'))
-                    return f'📊 المجموعة: {_v33_group_label(g) if "_v33_group_label" in globals() else g}\n🏆 المركز الحالي: {idx}\n📌 النقاط: {pts} | الفارق: {gd:+d}\n🎮 لعب: {played}/3'
-    except Exception:
-        pass
-    return '📊 المجموعة: من آخر تحديث محفوظ\n📌 اضغط تفاصيل المجموعة للمزيد.'
-
-
-def _v46_status_for_team(team, snap=None):
-    snap = snap or _v33_snapshot(False)
-    status = ''
-    try:
-        for k, v in (snap.get('status') or {}).items():
-            same = (simple_key(k) == simple_key(team)) if 'simple_key' in globals() else str(k).strip() == str(team).strip()
-            if same:
-                status = str(v or '')
-                break
-    except Exception:
-        pass
-    try:
-        q = snap.get('qualified') or []
-        if not status and any(((simple_key(x) == simple_key(team)) if 'simple_key' in globals() else str(x).strip() == str(team).strip()) for x in q):
-            status = '✅ متأهل رسميًا'
-        e = snap.get('eliminated') or []
-        if not status and any(((simple_key(x) == simple_key(team)) if 'simple_key' in globals() else str(x).strip() == str(team).strip()) for x in e):
-            status = '❌ مستبعد رسميًا'
-    except Exception:
-        pass
-    return status
-
-
-def _v33_how_qualify_text(team, force=False):
-    team = (_v33_find_team(team) if '_v33_find_team' in globals() else None) or team
-    snap = _v33_snapshot(False)
-    st = _v46_status_for_team(team, snap)
-    updated = snap.get('updated_at') or 'لا يوجد تحديث محفوظ'
-    if ('متأهل' in st and 'رسمي' in st) or ('ضمن' in st and 'ثالث' in st):
-        try:
-            if '_v39_official_qualified_text' in globals():
-                return _v39_official_qualified_text(team, snap)
-        except Exception:
-            pass
-        return f'✅ {team} متأهل رسميًا\n\nآخر تحديث: {updated}\n\n{_v46_group_line(team, snap)}'
-    if (('مستبعد' in st or 'غادر' in st or 'خارج' in st) and 'رسمي' in st):
-        return f'❌ {team} مستبعد رسميًا\n\nآخر تحديث: {updated}\n\n{_v46_group_line(team, snap)}'
-    return (f'✅ كيف يتأهل {team}؟\n\n'
-            f'{_v46_group_line(team, snap)}\n\n'
-            f'آخر تحديث: {updated}\n\n'
-            'اختر من الأزرار بالأسفل للتفاصيل الدقيقة.\n'
-            '⏳ بعض التفاصيل الثقيلة قد تستغرق حتى 4 دقائق.')
+def _v36_team_info_wait_text():
+    return '⏳ جاري تجهيز حسابات التأهل…\n\nقد يستغرق الحساب حتى 4 دقائق عند حساب أفضل الثوالث والخصوم المحتملين.'
 
 
 async def _v36_send_how_for_team(message, team, force=False):
+    wait = await message.reply_text(_v36_team_info_wait_text(), reply_markup=_public_main_reply_keyboard())
     try:
-        team = (_v33_find_team(team) if '_v33_find_team' in globals() else None) or team
-        text = _v33_how_qualify_text(team, False)
+        text = await asyncio.wait_for(asyncio.to_thread(_v33_how_qualify_text, team, force), timeout=240)
     except Exception as e:
-        text = f'⚠️ تعذر تجهيز معلومات المنتخب.\nجرّب مرة ثانية أو اختر المنتخب من القائمة.\n\nالسبب: {type(e).__name__}: {str(e)[:120]}'
-    kb = _v33_how_qualify_keyboard(team) if '_v33_how_qualify_keyboard' in globals() else None
-    await message.reply_text(str(text)[:3900], reply_markup=kb)
-
-
-async def _v46_edit_heavy(q, func, team, label='الحساب'):
+        text = f'⚠️ تعذر تجهيز معلومات المنتخب.\nجرّب مرة ثانية أو اختر المنتخب من القائمة.\n\nالسبب: {type(e).__name__}: {str(e)[:180]}'
+        kb = _public_main_keyboard()
+    else:
+        kb = _v33_how_qualify_keyboard(team)
     try:
-        await q.answer('⏳ قد يستغرق الحساب حتى 4 دقائق...', show_alert=False)
+        await wait.edit_text(text, reply_markup=kb)
     except Exception:
-        pass
-    try:
-        await q.edit_message_text(f'⏳ جاري تجهيز {label}...\nقد يستغرق الحساب حتى 4 دقائق.')
-    except Exception:
-        pass
-    try:
-        txt = await asyncio.wait_for(asyncio.to_thread(func, team), timeout=V46_HEAVY_TIMEOUT)
-    except Exception as e:
-        txt = f'⚠️ تعذر تجهيز {label}.\nالسبب: {type(e).__name__}: {str(e)[:150]}'
-    await q.edit_message_text(str(txt)[:3900], reply_markup=_v33_how_qualify_keyboard(team) if '_v33_how_qualify_keyboard' in globals() else None)
+        await message.reply_text(text, reply_markup=kb)
 
+# ==================== END V47 CLEAN SAFE PATCH — FAHAD ====================
 
-# ---------- Callbacks ----------
-async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q:
-        return
-    data = q.data or ''
-    if data == 'mainmenu|scorers':
-        try:
-            await q.answer()
-        except Exception:
-            pass
-        await _v46_send_top_scorers(q.message)
-        return
-    if data in ('v32|board', 'mainmenu|board'):
-        try:
-            await q.answer()
-        except Exception:
-            pass
-        await q.edit_message_text(_v39_board_text(False), reply_markup=_v32_board_keyboard() if '_v32_board_keyboard' in globals() else None)
-        return
-    if callable(_V46_PREV_PUBLIC_MENU_CALLBACK):
-        return await _V46_PREV_PUBLIC_MENU_CALLBACK(update, context)
-
-
-async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q:
-        return
-    data = q.data or ''
-    parts = data.split('|')
-    action = parts[1] if len(parts) > 1 else ''
-    try:
-        await q.answer()
-    except Exception:
-        pass
-    if action == 'board':
-        await q.edit_message_text(_v39_board_text(False), reply_markup=_v32_board_keyboard() if '_v32_board_keyboard' in globals() else None)
-        return
-    if action == 'board_force':
-        await q.edit_message_text('⏳ جاري تحديث بيانات البطولة بالخلفية...\nتقدر تستخدم البوت الآن، وسيتم إشعارك عند الانتهاء.')
-        try:
-            context.application.create_task(_v46_refresh_notify(context, chat_id=q.message.chat_id, reason='manual_board'))
-        except Exception:
-            pass
-        return
-    if action == 'qualified':
-        teams = _v32_calculated_qualified()
-        snap = _v33_snapshot(False)
-        lines = ['✅ المتأهلون رسميًا', f"آخر تحديث: {snap.get('updated_at','-')}", '']
-        lines.extend([f'- {t}' for t in teams] if teams else ['لا يوجد حتى الآن.'])
-        await q.edit_message_text('\n'.join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]]))
-        return
-    if action == 'eliminated':
-        teams = _v32_calculated_eliminated()
-        snap = _v33_snapshot(False)
-        lines = ['❌ المستبعدون رسميًا', f"آخر تحديث: {snap.get('updated_at','-')}", '']
-        lines.extend([f'- {t} — ❌ مستبعد رسميًا' for t in teams] if teams else ['لا يوجد حتى الآن.'])
-        await q.edit_message_text('\n'.join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]]))
-        return
-    if action == 'thirds_force':
-        await q.edit_message_text(_v32_best_thirds_text(False), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]]))
-        return
-    if action == 'how_start':
-        try:
-            _v33_set_waiting_state(context, 'how')
-        except Exception:
-            pass
-        await q.edit_message_text(_v33_how_start_text() if '_v33_how_start_text' in globals() else 'اكتب اسم المنتخب:', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')]]))
-        return
-    if action in ('how_thirds','how_first','how_second','how_group','opp_all','opp_group','how_exit') and len(parts) >= 3:
-        team = _v33_team_from_button_key(parts[2]) if '_v33_team_from_button_key' in globals() else parts[2]
-        if action == 'how_thirds':
-            return await _v46_edit_heavy(q, _v33_how_thirds_text, team, 'احتمالات المركز الثالث')
-        if action == 'how_first':
-            return await _v46_edit_heavy(q, lambda t: _v38d_position_text(t, 1), team, 'احتمالات المركز الأول')
-        if action == 'how_second':
-            return await _v46_edit_heavy(q, lambda t: _v38d_position_text(t, 2), team, 'احتمالات المركز الثاني')
-        if action == 'how_group':
-            return await _v46_edit_heavy(q, _v38d_group_details_text, team, 'تفاصيل المجموعة')
-        if action == 'opp_all':
-            return await _v46_edit_heavy(q, _v33_all_opponents_text, team, 'الخصوم المحتملين')
-        if action == 'opp_group':
-            return await _v46_edit_heavy(q, _v38e_opponent_group_details_text, team, 'تفاصيل مجموعة الخصم')
-        if action == 'how_exit':
-            return await _v46_edit_heavy(q, _v42_how_exit_text, team, 'احتمالات مغادرة البطولة')
-    if callable(_V46_PREV_V32_CALLBACK):
-        return await _V46_PREV_V32_CALLBACK(update, context)
-
-
-async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q:
-        return
-    parts = (q.data or '').split('|')
-    action = parts[1] if len(parts) > 1 else ''
-    if action == 'refresh':
-        try:
-            await q.answer('🔄 بدأ تحديث البطولة بالخلفية...', show_alert=False)
-        except Exception:
-            pass
-        await q.edit_message_text('⏳ جاري تحديث بيانات البطولة بالخلفية...\nيمكنك استخدام البوت الآن، وسيتم إرسال رسالة عند اكتمال التحديث.')
-        try:
-            context.application.create_task(_v46_refresh_notify(context, chat_id=q.message.chat_id, reason='manual_admin'))
-        except Exception:
-            pass
-        return
-    if callable(_V46_PREV_ADMIN_CALLBACK):
-        return await _V46_PREV_ADMIN_CALLBACK(update, context)
-
-
-# ---------- main: نشغل main الأساسي + وظائف V46 فقط ----------
-def main():
-    if not callable(_V46_BASE_MAIN):
-        raise RuntimeError('تعذر العثور على main الأساسي للبوت')
-    orig_build = ApplicationBuilder.build
-
-    def _v46_build_with_jobs(self, *a, **kw):
-        app = orig_build(self, *a, **kw)
-        try:
-            jq = getattr(app, 'job_queue', None)
-            if jq is not None:
-                # تحديث وقت المباريات: من 7 مساءً إلى 6 صباحًا كل 20 دقيقة.
-                jq.run_repeating(_v46_match_window_refresh_job, interval=V46_MATCH_REFRESH_SECONDS, first=90, name='v46_match_refresh_20m')
-                # تحديث يومي 10 صباحًا بتوقيت الرياض.
-                try:
-                    tz = _v46_ZoneInfo('Asia/Riyadh') if _v46_ZoneInfo else None
-                    t10 = _v46_dt_time(hour=10, minute=0, tzinfo=tz) if _v46_dt_time else None
-                    if t10:
-                        jq.run_daily(_v46_daily_refresh_job, time=t10, name='v46_daily_10am')
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return app
-
-    try:
-        ApplicationBuilder.build = _v46_build_with_jobs
-        return _V46_BASE_MAIN()
-    finally:
-        try:
-            ApplicationBuilder.build = orig_build
-        except Exception:
-            pass
-
-# ==================== END V46 CLEAN FIX PATCH — FAHAD ====================
 
 if __name__ == "__main__":
     main()
