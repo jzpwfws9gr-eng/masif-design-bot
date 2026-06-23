@@ -50864,5 +50864,174 @@ async def _v41_send_working_top_scorers(message):
 
 # ==================== END V53 MANUAL TOP SCORERS ADMIN PATCH — FAHAD ====================
 
+
+# ==================== START V54 MANUAL TOP SCORERS WAITING FIX — FAHAD ====================
+# إصلاح مهم: كان وضع تحديث الهدافين اليدوي يبقى مفتوحًا ويمسك أزرار القائمة/أي رسالة.
+# الآن: رسالة واحدة فقط، أي زر تنقّل يلغي الوضع ويمر للمعالج الطبيعي، وأي خطأ يلغي الوضع فورًا.
+
+def _v54_manual_top_scorers_waiting(context):
+    try:
+        return bool(context.user_data.get('v53_waiting_manual_top_scorers'))
+    except Exception:
+        return False
+
+
+def _v54_clear_manual_top_scorers_waiting(context):
+    try:
+        context.user_data.pop('v53_waiting_manual_top_scorers', None)
+    except Exception:
+        pass
+
+
+def _v54_normalize_ar_text(text):
+    try:
+        t = str(text or '').strip()
+        t = re.sub(r'\s+', ' ', t)
+        return t
+    except Exception:
+        return str(text or '').strip()
+
+
+def _v54_is_cancel_text(text):
+    t = _v54_normalize_ar_text(text).replace('/', '')
+    return t in {'الغاء', 'إلغاء', 'الغاء التحديث', 'إلغاء التحديث', 'رجوع', '⬅️ رجوع', 'خروج', 'إلغاء تحديث الهدافين'}
+
+
+def _v54_is_navigation_text(text):
+    """أزرار/عبارات التنقل التي لا يجوز قراءتها كقائمة هدافين."""
+    t = _v54_normalize_ar_text(text)
+    plain = re.sub(r'[✅❌⚠️🏆📊📺📅🎮📁🗂️🥇🥈🥉🏟️🧮⬅️🔙🔄✏️🧹📣👥🔑🗓️📋🖥️🎲]+', '', t).strip()
+    nav_exact = {
+        'القائمة الرئيسية', 'رجوع', '⬅️ رجوع', '🔙 رجوع',
+        'أرشيف البطولة', '🗂️ أرشيف البطولة', '📁 أرشيف البطولة',
+        'كيف تتأهل؟', '✅ كيف تتأهل؟', 'كيف تتأهل',
+        'حاسبة التأهل', '🧮 حاسبة التأهل',
+        'مباشر الآن', '📺 مباشر الآن',
+        'المباريات القادمة', '📅 المباريات القادمة',
+        'لوحة البطولة', '🏆 لوحة البطولة',
+        'إحصائيات البطولة', '📊 إحصائيات البطولة',
+        'فانتزي', '🎮 فانتزي',
+        'ترتيب المجموعات', '📊 ترتيب المجموعات',
+        'هدافين البطولة', '🏆 هدافين البطولة',
+        'أفضل الثوالث الآن', '🥉 أفضل الثوالث الآن',
+        'التأهل والمغادرة', '✅❌ التأهل والمغادرة',
+        'الخصوم المحتملين', '🏟️ الخصوم المحتملين',
+        'تفاصيل المجموعة', '📊 تفاصيل المجموعة',
+        'جرب سيناريو', '🧮 جرب سيناريو',
+    }
+    if t in nav_exact or plain in nav_exact:
+        return True
+    nav_words = ['اختر من القائمة', 'اختر القسم', 'القائمة', 'مباريات', 'بطولة', 'تأهل', 'المجموعة', 'الخصوم', 'المباشر', 'الأرشيف']
+    # إذا النص قصير وواضح أنه زر، لا نرسله لمحلل الهدافين.
+    if len(t) <= 40 and any(w in t for w in nav_words) and not any(sep in t for sep in ['|', '-', '،', ',']):
+        return True
+    return False
+
+
+# إعادة تعريف الراوتر نفسه باسمه القديم حتى يستخدمه التسجيل الموجود في main بدون تغيير.
+# نحافظ على الراوتر السابق الموجود قبل V53.
+_V54_PREV_TEXT_STATE_ROUTER = globals().get('_V53_PREV_TEXT_STATE_ROUTER') or globals().get('_V53_PREV_TEXT_STATE_ROUTER', None)
+if not callable(_V54_PREV_TEXT_STATE_ROUTER):
+    _V54_PREV_TEXT_STATE_ROUTER = globals().get('_V53_PREV_TEXT_STATE_ROUTER')
+
+async def v53_manual_top_scorers_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # لا يشتغل إلا للإدارة، ولا يشتغل إلا إذا كان وضع الانتظار مفعّلًا.
+    if not is_admin_user(update):
+        _v54_clear_manual_top_scorers_waiting(context)
+        return False
+    if not _v54_manual_top_scorers_waiting(context):
+        return False
+
+    msg = update.effective_message
+    text = (msg.text if msg else '') or ''
+    norm = _v54_normalize_ar_text(text)
+
+    # إلغاء صريح.
+    if _v54_is_cancel_text(norm):
+        _v54_clear_manual_top_scorers_waiting(context)
+        try:
+            await msg.reply_text('✅ تم إلغاء تحديث الهدافين اليدوي.')
+        except Exception:
+            pass
+        return True
+
+    # إذا ضغط زر قائمة/تنقل، نلغي وضع الانتظار ونترك الزر يشتغل طبيعيًا.
+    if _v54_is_navigation_text(norm):
+        _v54_clear_manual_top_scorers_waiting(context)
+        return False
+
+    # حاول قراءة القائمة. سواء نجح أو فشل، ينتهي وضع الانتظار بعد هذه الرسالة.
+    items, bad = _v53_parse_manual_top_scorers_text(text)
+    _v54_clear_manual_top_scorers_waiting(context)
+
+    if not items:
+        try:
+            await msg.reply_text(
+                '❌ ما قدرت أقرأ الصيغة. تم إلغاء وضع تحديث الهدافين اليدوي.\n\n'
+                'أرسل التحديث من زر الإدارة مرة ثانية بهذه الصيغة:\n'
+                'ميسي | الأرجنتين | 5\n'
+                'مبابي | فرنسا | 4'
+            )
+        except Exception:
+            pass
+        return True
+
+    data = _v53_save_manual_top_scorers(items, getattr(update.effective_user, 'id', None))
+    preview = "\n".join([f"{i+1}. {it['name']} — {it['team']} — {it['goals']}" for i, it in enumerate(items[:12])])
+    extra = f"\n\n⚠️ أسطر لم تُقرأ: {len(bad)}" if bad else ""
+    await msg.reply_text(
+        f"✅ تم حفظ تحديث الهدافين اليدوي.\n"
+        f"عدد اللاعبين: {len(items)}\n"
+        f"آخر تحديث: {data.get('updated_at')}\n\n{preview}{extra}\n\n"
+        "لعرضها اضغط: 🏆 هدافين البطولة"
+    )
+    return True
+
+
+# إعادة تعريف text_state_router بإصلاح V54، مع تمرير أي شيء غير مرتبط للراوتر السابق الحقيقي.
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if await v53_manual_top_scorers_text_router(update, context):
+            return
+    except Exception as e:
+        _v54_clear_manual_top_scorers_waiting(context)
+        try:
+            await update.effective_message.reply_text(f"تعذر قراءة تحديث الهدافين اليدوي وتم إلغاؤه: {str(e)[:120]}")
+            return
+        except Exception:
+            pass
+    prev = globals().get('_V53_PREV_TEXT_STATE_ROUTER') or globals().get('_V54_PREV_TEXT_STATE_ROUTER')
+    if callable(prev):
+        return await prev(update, context)
+
+# تحسين رسالة زر التحديث اليدوي: توضيح أن الوضع ينتظر رسالة واحدة فقط.
+_V54_PREV_ADMIN_CALLBACK = globals().get('v32_admin_callback')
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    data = (q.data or '') if q else ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'top_scorers_manual_start':
+        try: await q.answer()
+        except Exception: pass
+        if not is_admin_user(update):
+            await q.message.reply_text('هذا الخيار للمشرفين فقط 🔒')
+            return
+        context.user_data['v53_waiting_manual_top_scorers'] = True
+        await q.message.reply_text(
+            "✏️ أرسل قائمة الهدافين الآن.\n"
+            "سيقبل البوت الرسالة التالية فقط ثم يغلق وضع التحديث تلقائيًا.\n\n"
+            "مثال:\n"
+            "ميسي | الأرجنتين | 5\n"
+            "مبابي | فرنسا | 4\n"
+            "هالاند | النرويج | 4\n\n"
+            "للإلغاء اكتب: إلغاء"
+        )
+        return
+    if callable(_V54_PREV_ADMIN_CALLBACK):
+        return await _V54_PREV_ADMIN_CALLBACK(update, context)
+
+# ==================== END V54 MANUAL TOP SCORERS WAITING FIX — FAHAD ====================
+
 if __name__ == "__main__":
     main()
