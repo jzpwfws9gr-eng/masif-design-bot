@@ -53235,6 +53235,211 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V57 FINAL REQUESTS PATCH — FAHAD ====================
 
+# ==================== V57.1 QUALIFIED LIST HOTFIX — FAHAD ====================
+# إصلاح قائمة "✅ المتأهلون رسميًا":
+# السبب: النسخة السابقة كانت تعتمد فقط على snap['qualified']، وهذا يخلي بعض المنتخبات
+# التي ضمنت حسابيًا المركز الأول/الثاني لا تظهر إذا لم تكن مضافة في قائمة qualified القديمة.
+# الآن القائمة تُحسب من كل منتخبات البطولة عبر possible positions:
+# - إذا ممكنات المنتخب كلها داخل {1,2} => متأهل رسميًا مباشرًا.
+# - إذا {1} => ضمن المركز الأول، وإذا {2} => ضمن المركز الثاني.
+# - إذا {1,2} => تأهل رسميًا لكن المركز لم يُحسم بعد.
+# - ويبقى منطق أفضل ثالث الرسمي كما هو من الحالة/الثوالث.
+
+V571_PATCH_NAME = "V57_1_QUALIFIED_LIST_HOTFIX_FAHD"
+
+
+def _v571_all_tournament_teams(snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    out = []
+    try:
+        groups = (snap or {}).get('groups') or {}
+        order_codes = []
+        try:
+            order_codes = [c for c, _teams in (globals().get('WORLD_CUP_GROUPS') or [])]
+        except Exception:
+            order_codes = []
+        for code in list(order_codes) + [c for c in groups.keys() if c not in order_codes]:
+            rows = (((groups.get(code) or {}) or {}).get('rows') or [])
+            for r in rows:
+                t = canonical_team_name((r or {}).get('team')) or (r or {}).get('team') or ''
+                if t and t not in out:
+                    out.append(t)
+        if out:
+            return out
+    except Exception:
+        pass
+    try:
+        for _code, teams in (globals().get('WORLD_CUP_GROUPS') or []):
+            for t in teams:
+                t = canonical_team_name(t) or t
+                if t and t not in out:
+                    out.append(t)
+    except Exception:
+        pass
+    return out
+
+
+def _v571_exact_possible_positions(team, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    team = _v33_find_team(team) if '_v33_find_team' in globals() else team
+    team = team or canonical_team_name(team) or normalize_name(team)
+    try:
+        vals, _examples = _v38d_possible_positions(team, snap)
+        out = set()
+        for v in vals or []:
+            try:
+                out.add(int(v))
+            except Exception:
+                pass
+        if out:
+            return out
+    except Exception:
+        pass
+    # إذا اكتملت المجموعة وما فيه سيناريوهات، المركز الحالي يصبح نهائي.
+    try:
+        code, pos, _row, _rows = _v33_group_row(team, snap)
+        g = (((snap.get('groups') or {}).get(code) or {}) if isinstance(snap, dict) else {})
+        if int(g.get('remaining') or 0) == 0 and int(pos or 0) in (1, 2, 3, 4):
+            return {int(pos)}
+    except Exception:
+        pass
+    return set()
+
+
+def _v571_make_direct_info(team, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    team = _v33_find_team(team) if '_v33_find_team' in globals() else team
+    team = team or canonical_team_name(team) or normalize_name(team)
+    if not team:
+        return None
+    # أولاً حافظ على أي حالة رسمية قديمة مثل أفضل ثالث/مستبعد.
+    try:
+        info = _v56_team_status_info(team, snap)
+        if info and info.get('kind') in ('first', 'second', 'third', 'best_third', 'qualified_unsettled'):
+            return info
+    except Exception:
+        info = None
+    possible = _v571_exact_possible_positions(team, snap)
+    # التأهل المباشر الرسمي: لا يمكن أن يخرج من المركزين الأول أو الثاني.
+    if possible and possible.issubset({1, 2}):
+        try:
+            code, pos, row, rows = _v33_group_row(team, snap)
+        except Exception:
+            code, pos, row, rows = '', 0, {}, []
+        out = {
+            'team': team,
+            'group': code,
+            'pos': pos,
+            'row': row or {},
+            'possible': possible,
+            'status_txt': str(((snap or {}).get('status') or {}).get(team, '') or ''),
+            'kind': 'qualified_unsettled',
+            'line': '✅ تأهل رسميًا — المركز لم يُحسم بعد',
+            'possible_line': '',
+        }
+        if possible == {1}:
+            out['kind'] = 'first'
+            out['line'] = '✅ تأهل رسميًا — المركز الأول'
+        elif possible == {2}:
+            out['kind'] = 'second'
+            out['line'] = '✅ تأهل رسميًا — المركز الثاني'
+        else:
+            out['kind'] = 'qualified_unsettled'
+            out['line'] = '✅ تأهل رسميًا — المركز لم يُحسم بعد'
+            out['possible_line'] = 'المركز المحتمل: الأول أو الثاني'
+        return out
+    return None
+
+
+def _v571_qualified_infos(force=False):
+    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
+    teams = []
+    # ابدأ بكل المنتخبات لضمان عدم سقوط أي متأهل حسابيًا.
+    for t in _v571_all_tournament_teams(snap):
+        if t and t not in teams:
+            teams.append(t)
+    # ثم أضف أي فريق موجود في قائمة qualified القديمة أو status حتى لا نخسر أفضل ثالث رسمي/إدخال يدوي.
+    try:
+        for t in list((snap or {}).get('qualified') or []):
+            t = _v33_find_team(t) if '_v33_find_team' in globals() else t
+            t = t or canonical_team_name(t) or normalize_name(t)
+            if t and t not in teams:
+                teams.append(t)
+        for t, st in list(((snap or {}).get('status') or {}).items()):
+            s = str(st or '')
+            if t and (('متأهل' in s and 'رسمي' in s) or ('ضمن رسمي' in s)):
+                t = _v33_find_team(t) if '_v33_find_team' in globals() else t
+                t = t or canonical_team_name(t) or normalize_name(t)
+                if t and t not in teams:
+                    teams.append(t)
+    except Exception:
+        pass
+    infos = []
+    seen = set()
+    for t in teams:
+        info = _v571_make_direct_info(t, snap)
+        if not info:
+            continue
+        name = info.get('team') or t
+        if name in seen:
+            continue
+        seen.add(name)
+        infos.append(info)
+    return infos, snap
+
+
+# خليه مصدر القائمة المحسوبة كذلك، عشان أي مكان يعتمد على _v32_calculated_qualified يستفيد.
+def _v32_calculated_qualified():
+    try:
+        infos, _snap = _v571_qualified_infos(False)
+        return [i.get('team') for i in infos if i.get('team')][:32]
+    except Exception:
+        try:
+            return list((_v33_snapshot(False) or {}).get('qualified') or [])[:32]
+        except Exception:
+            return []
+
+
+def _v56_qualified_text(force=False):
+    infos, snap = _v571_qualified_infos(force)
+    if not infos:
+        return '✅ المتأهلون رسميًا\nلا توجد بيانات مؤكدة حتى الآن.'
+    cats = {'first': [], 'second': [], 'third': [], 'best_third': [], 'qualified_unsettled': []}
+    for info in infos:
+        k = info.get('kind') or 'other'
+        if k in cats:
+            cats[k].append(info)
+    lines = ['✅ المتأهلون رسميًا لدور الـ32', f"آخر تحديث: {(snap or {}).get('updated_at','-')}", '']
+    sections = [
+        ('🥇 ضمنوا المركز الأول رسميًا:', cats['first']),
+        ('🥈 ضمنوا المركز الثاني رسميًا:', cats['second']),
+        ('🥉 ضمنوا المركز الثالث رسميًا:', cats['third']),
+        ('🥉 ضمنوا رسميًا كأفضل ثالث:', cats['best_third']),
+        ('⏳ تأهلوا رسميًا لكن المركز لم يُحسم بعد:', cats['qualified_unsettled']),
+    ]
+    wrote = False
+    for title, items in sections:
+        if not items:
+            continue
+        wrote = True
+        lines.append(title)
+        for i, info in enumerate(items, start=1):
+            try:
+                gname = _v33_group_label(info.get('group')) if info.get('group') and '_v33_group_label' in globals() else '-'
+            except Exception:
+                gname = '-'
+            lines.append(f"{i}. {info.get('team') or '-'} — {gname}")
+            lines.append(f"   {info.get('line') or '✅ تأهل رسميًا'}")
+            if info.get('possible_line'):
+                lines.append(f"   {info.get('possible_line')}")
+            lines.append('')
+    if not wrote:
+        lines.append('لا توجد بيانات مؤكدة حتى الآن.')
+    lines.append('⚠️ التحديث يعتمد على الحسم الحسابي: المركزين الأول/الثاني إذا لم يعد المنتخب قادرًا على الخروج منهما، وأفضل ثالث فقط إذا ثبت رسميًا حسابيًا.')
+    return '\n'.join(lines).strip()
+
+# ==================== END V57.1 QUALIFIED LIST HOTFIX — FAHAD ====================
+
 
 if __name__ == "__main__":
     main()
