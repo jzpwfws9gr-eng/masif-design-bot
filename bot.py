@@ -53236,5 +53236,622 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== END V57 FINAL REQUESTS PATCH — FAHAD ====================
 
 
+
+# ==================== V58 FINAL CACHE/UPDATES + WATCH-TIME PATCH — FAHAD ====================
+# اعتماد فهد:
+# - إصلاح التحديث والكاش بدون لمس ترتيب المجموعات ولا الفانتزي.
+# - لوحة البطولة تتحدث فعليًا من نتائج اليوم/المباشر، ولا تفشل بسبب احتمالات المغادرة.
+# - مباشر الآن: النص والصورة من نفس الكاش المحدث، والتحديث التلقائي كل دقيقتين.
+# - وش أتابع الجولة الأخيرة: اختيار اليوم/التوقيت ثم صيغة تفصيل التوقيت المعتمدة.
+
+V58_PATCH_NAME = "V58_FINAL_CACHE_UPDATES_AND_WATCH_TIME"
+V58_LIVE_LAST_REFRESH = {'date': '', 'ts': 0, 'updated': 0, 'error': ''}
+V58_BOARD_LAST_REFRESH = {'ts': 0, 'updated': 0, 'error': ''}
+
+
+def _v58_now_makkah():
+    try:
+        return _v49_now_makkah_str()
+    except Exception:
+        try:
+            return _v55_now_str()
+        except Exception:
+            return datetime.now().strftime('%Y-%m-%d %H:%M')
+
+
+def _v58_safe_active_live_date():
+    for fn in ('_v41_active_live_date', '_v40_active_live_date'):
+        try:
+            if fn in globals():
+                d = globals()[fn]()
+                if d:
+                    return _normalize_date_arg(d) if '_normalize_date_arg' in globals() else str(d)
+        except Exception:
+            pass
+    try:
+        return _v32_today_key()
+    except Exception:
+        return ''
+
+
+def _v58_clear_board_memory_cache():
+    try:
+        if isinstance(globals().get('_V50_BOARD_CACHE'), dict):
+            _V50_BOARD_CACHE.update({'ts': 0, 'text': '', 'force_ts': 0})
+    except Exception:
+        pass
+
+
+def _v58_update_live_day_sync(date_str=None, force=True):
+    """تحديث كاش اليوم/المباشر فقط. لا يلمس منطق ترتيب المجموعات."""
+    d = _normalize_date_arg(date_str) if ('_normalize_date_arg' in globals() and date_str) else (date_str or _v58_safe_active_live_date())
+    d = _normalize_date_arg(d) if '_normalize_date_arg' in globals() else str(d or '')
+    if not d:
+        return 0, ['لا يوجد تاريخ نشط للمباشر']
+    updated, dbg = 0, []
+    try:
+        if '_v41_update_day_results' in globals():
+            updated, dbg = _v41_update_day_results(d, bool(force))
+        elif '_v32_result_text_for_date_uncached' in globals():
+            _v32_result_text_for_date_uncached(d, force=bool(force))
+            updated, dbg = 0, ['تم تحديث اليوم عبر المسار القديم']
+        V58_LIVE_LAST_REFRESH.update({'date': d, 'ts': time.time(), 'updated': int(updated or 0), 'error': ''})
+        return int(updated or 0), list(dbg or [])
+    except Exception as e:
+        V58_LIVE_LAST_REFRESH.update({'date': d, 'ts': time.time(), 'updated': int(updated or 0), 'error': f'{type(e).__name__}: {str(e)[:120]}'})
+        return int(updated or 0), [f'خطأ تحديث مباشر الآن: {type(e).__name__}: {str(e)[:120]}']
+
+
+async def _v58_update_live_day_async(date_str=None, force=True, timeout=75):
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_v58_update_live_day_sync, date_str, force), timeout=timeout)
+    except asyncio.TimeoutError:
+        d = _normalize_date_arg(date_str) if ('_normalize_date_arg' in globals() and date_str) else _v58_safe_active_live_date()
+        V58_LIVE_LAST_REFRESH.update({'date': d, 'ts': time.time(), 'updated': 0, 'error': 'TimeoutError'})
+        return 0, ['TimeoutError']
+    except Exception as e:
+        d = _normalize_date_arg(date_str) if ('_normalize_date_arg' in globals() and date_str) else _v58_safe_active_live_date()
+        V58_LIVE_LAST_REFRESH.update({'date': d, 'ts': time.time(), 'updated': 0, 'error': f'{type(e).__name__}: {str(e)[:120]}'})
+        return 0, [f'{type(e).__name__}: {str(e)[:120]}']
+
+
+def _v58_live_snapshot_is_fresh(date_str=None, max_age=110):
+    try:
+        d = _normalize_date_arg(date_str) if ('_normalize_date_arg' in globals() and date_str) else _v58_safe_active_live_date()
+        return V58_LIVE_LAST_REFRESH.get('date') == d and (time.time() - float(V58_LIVE_LAST_REFRESH.get('ts') or 0) < max_age)
+    except Exception:
+        return False
+
+
+def _v58_board_text_from_current_cache():
+    _v58_clear_board_memory_cache()
+    try:
+        # لا نستخدم force هنا حتى لا تدخل اللوحة في سحب ثقيل أو احتمالات مغادرة.
+        if '_v50_board_text' in globals():
+            return _v50_board_text(False)
+        if '_v32_tournament_board_text' in globals():
+            return _v32_tournament_board_text(False)
+    except Exception:
+        pass
+    try:
+        return _v55_board_cached_text_or_pending()
+    except Exception:
+        return '🏆 لوحة البطولة\nتعذر بناء اللوحة الآن.'
+
+
+async def _v58_refresh_board_bg(context, chat_id=None, notify=False):
+    """تحديث لوحة البطولة الآمن: يحدّث النتائج/المباشر أولًا، ثم يبني اللوحة من الكاش. لا ينتظر احتمالات المغادرة."""
+    global V55_BOARD_REFRESH_TASK, V55_BOARD_REFRESH_STARTED_AT
+    try:
+        active = _v58_safe_active_live_date()
+        updated, dbg = await _v58_update_live_day_async(active, force=True, timeout=80)
+        txt = await asyncio.wait_for(asyncio.to_thread(_v58_board_text_from_current_cache), timeout=25)
+        if str(txt or '').strip():
+            try:
+                _v55_save_board_cache(txt, {'source': 'v58_safe_board_refresh', 'live_updated': updated, 'live_date': active, 'debug': list(dbg or [])[-5:]})
+            except Exception:
+                pass
+            V58_BOARD_LAST_REFRESH.update({'ts': time.time(), 'updated': int(updated or 0), 'error': ''})
+            if notify and chat_id:
+                try:
+                    await context.bot.send_message(chat_id=chat_id, text=f'✅ تم تحديث بيانات البطولة.\nآخر تحديث: {_v58_now_makkah()}')
+                except Exception:
+                    pass
+        else:
+            raise RuntimeError('empty board result')
+    except Exception as e:
+        V58_BOARD_LAST_REFRESH.update({'ts': time.time(), 'updated': 0, 'error': f'{type(e).__name__}: {str(e)[:150]}'})
+        if notify and chat_id:
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=(
+                    '⏱️ تعذر تحديث لوحة البطولة الآن.\n'
+                    'تم الإبقاء على آخر تحديث محفوظ.\n'
+                    f'السبب: {type(e).__name__}: {str(e)[:120]}\n\n'
+                    'ملاحظة: احتمالات المغادرة لا توقف تحديث باقي البيانات.'
+                ))
+            except Exception:
+                pass
+    finally:
+        V55_BOARD_REFRESH_TASK = None
+        V55_BOARD_REFRESH_STARTED_AT = ''
+
+
+# استبدال تحديث اللوحة بالخلفية فقط. التحديثات التلقائية تبقى، لكنها آمنة ومستقلة.
+_v55_refresh_board_bg = _v58_refresh_board_bg
+
+
+def _v55_schedule_board_refresh(context, chat_id=None, notify=False):
+    global V55_BOARD_REFRESH_TASK, V55_BOARD_REFRESH_STARTED_AT
+    try:
+        if V55_BOARD_REFRESH_TASK and not V55_BOARD_REFRESH_TASK.done():
+            return False
+    except Exception:
+        pass
+    V55_BOARD_REFRESH_STARTED_AT = _v58_now_makkah()
+    try:
+        V55_BOARD_REFRESH_TASK = context.application.create_task(_v58_refresh_board_bg(context, chat_id=chat_id, notify=notify))
+    except Exception:
+        V55_BOARD_REFRESH_TASK = asyncio.create_task(_v58_refresh_board_bg(context, chat_id=chat_id, notify=notify))
+    return True
+
+
+# مباشر الآن: تحديث تلقائي كل دقيقتين، والنص/الأزرار من نفس كاش اليوم.
+async def v49_live_auto_refresh_job(context):
+    try:
+        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
+            return
+    except Exception:
+        pass
+    active = _v58_safe_active_live_date()
+    if active:
+        try:
+            if not _v58_live_snapshot_is_fresh(active, max_age=110):
+                await _v58_update_live_day_async(active, force=True, timeout=75)
+        except Exception:
+            pass
+    # حدّث رسائل مباشر الآن المتتبعة من نفس الكاش.
+    try:
+        tracked = globals().get('V49_LIVE_TRACKED_MESSAGES') or {}
+        if active and tracked:
+            text = _v29_live_today_text(active)
+            kb = _v29_live_today_keyboard(active)
+            now_ts = time.time()
+            for key, info in list(tracked.items()):
+                try:
+                    chat_id, message_id = key
+                    if now_ts - float(info.get('ts') or 0) > 14 * 3600:
+                        tracked.pop(key, None); continue
+                    await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=kb)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    # حدث كاش لوحة البطولة كل دقيقتين بدون ربطها باحتمالات المغادرة.
+    try:
+        _v55_schedule_board_refresh(context, notify=False)
+    except Exception:
+        pass
+
+
+# ---------- وش أتابع الجولة الأخيرة: الصفحة = أزرار توقيتات، ثم تفاصيل التوقيت ----------
+V58_LAST_ROUND_DATES = ['24/06/2026', '25/06/2026', '26/06/2026', '27/06/2026']
+V58_DAY_SHORT = {
+    '24/06/2026': 'الأربعاء',
+    '25/06/2026': 'الخميس',
+    '26/06/2026': 'الجمعة',
+    '27/06/2026': 'السبت',
+}
+V58_ARGENTINA_MESSI_NOTE = (
+    '🇦🇷 للمتعة الكروية:\n'
+    'عندما يكون القوت ميسي حاضرًا 🐐\n'
+    'تصبح المباراة أكبر من مجرد حسابات وتأهل.\n'
+    'تابعوا الأرجنتين، واستمتعوا بما تبقّى من التاريخ 👑10👑'
+)
+
+
+def _v58_day_fixtures(date):
+    return [m for m in (globals().get('TOURNAMENT_FIXTURES') or []) if str(m.get('stage')) == 'دور المجموعات' and str(m.get('date')) == str(date)]
+
+
+def _v58_day_times(date):
+    out = []
+    for m in _v58_day_fixtures(date):
+        tm = str(m.get('time') or '').strip()
+        if tm and tm not in out:
+            out.append(tm)
+    return out
+
+
+def _v56_watch_last_round_text(force=False):
+    snap = _v33_snapshot(False) if '_v33_snapshot' in globals() else {}
+    return (
+        '👀 وش أتابع الجولة الأخيرة؟\n'
+        f"آخر تحديث: {(snap or {}).get('updated_at','-')}\n\n"
+        'اختر التوقيت المطلوب، وسيعرض لك البوت:\n'
+        '🏟️ مباريات هذا التوقيت\n'
+        '📊 ترتيب المجموعة الحالي\n'
+        '📌 وضع المباراتين\n'
+        '🔥 تأثيرها على المجموعة\n'
+        '🌍 تأثيرها على أفضل الثوالث'
+    )
+
+
+def _v56_watch_last_round_keyboard():
+    rows = []
+    for d in V58_LAST_ROUND_DATES:
+        times = _v58_day_times(d)
+        if not times:
+            continue
+        row = []
+        day = V58_DAY_SHORT.get(d, d)
+        for tm in times:
+            label = f'{day} {tm}'
+            row.append(InlineKeyboardButton(label[:28], callback_data=f'mainmenu|watch_time|{d}|{tm}'))
+            if len(row) == 3:
+                rows.append(row); row = []
+        if row:
+            rows.append(row)
+    rows.append([InlineKeyboardButton('⬅️ الرئيسية', callback_data='mainmenu|home')])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v58_watch_time_keyboard(date=None):
+    rows = [[InlineKeyboardButton('🥉 ترتيب أفضل الثوالث الآن', callback_data='v32|thirds')]]
+    rows.append([InlineKeyboardButton('⬅️ أوقات الجولة الأخيرة', callback_data='mainmenu|watch_last_round'), InlineKeyboardButton('⬅️ الرئيسية', callback_data='mainmenu|home')])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v58_match_teams(m):
+    t1 = canonical_team_name((m or {}).get('team1')) or (m or {}).get('team1') or '-'
+    t2 = canonical_team_name((m or {}).get('team2')) or (m or {}).get('team2') or '-'
+    return t1, t2
+
+
+def _v58_match_is_argentina(m):
+    t1, t2 = _v58_match_teams(m)
+    n = _v57_norm_ar(t1 + ' ' + t2) if '_v57_norm_ar' in globals() else (t1 + ' ' + t2)
+    return 'ارجنتين' in n or 'الأرجنتين' in (t1, t2) or 'الأرجنتين' in (t1 + t2)
+
+
+def _v58_team_status_line(team, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    try:
+        info = _v56_team_status_info(team, snap)
+        kind = info.get('kind') or ''
+        possible = set(info.get('possible') or [])
+        if kind == 'first':
+            return '✅ تأهلت كأول المجموعة رسميًا'
+        if kind == 'second':
+            return '✅ تأهلت كثاني المجموعة رسميًا'
+        if kind == 'best_third':
+            return '✅ ضمنت التأهل كأفضل ثالث رسميًا'
+        if kind in ('out',):
+            return '❌ غادر رسميًا'
+        if 2 in possible:
+            return '🔥 تنافس على المركز الثاني'
+        if 3 in possible:
+            return '⏳ ينافس على التأهل أو أفضل الثوالث'
+        if 4 in possible:
+            return '⏳ ينافس لتجنب المغادرة'
+    except Exception:
+        pass
+    return '⏳ ينافس'
+
+
+def _v58_group_table_lines(code, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    rows = _v57_group_rows(code, snap) if '_v57_group_rows' in globals() else []
+    lines = ['📊 ترتيب المجموعة الحالي', '']
+    if not rows:
+        lines.append('لا توجد بيانات كافية لترتيب المجموعة.')
+        return lines
+    for i, r in enumerate(rows, start=1):
+        t = canonical_team_name(r.get('team')) or r.get('team') or '-'
+        pts = r.get('Pts', r.get('pts', r.get('points', 0)))
+        try: pts = int(pts or 0)
+        except Exception: pass
+        lines.append(f'{i}. {t} — {pts} نقاط')
+        lines.append(f'    {_v58_team_status_line(t, snap)}')
+    return lines
+
+
+def _v58_match_state_label(m, score, max_score):
+    if _v58_match_is_argentina(m) and score <= 4:
+        return '⚪ تحصيل حاصل'
+    if score == max_score and score >= 5:
+        return '📺 تابعها'
+    if score >= 4:
+        return '👀 راقبها'
+    return '⚪ تحصيل حاصل'
+
+
+def _v58_match_situation_text(m, label, snap=None):
+    t1, t2 = _v58_match_teams(m)
+    d = _v57_match_importance_detail(m, snap) if '_v57_match_importance_detail' in globals() else {'reason':'تأثيرها حسب ترتيب المجموعة.', 'best_thirds':''}
+    name = f'{t1} × {t2}'
+    if label.startswith('📺'):
+        intro = f'{name}:\nهذه هي المباراة الأهم في هذا التوقيت، لأنها {d.get("reason","تؤثر على حسابات التأهل").replace("تؤثر على:", "تؤثر على").strip()}'
+    elif label.startswith('👀'):
+        intro = f'{name}:\nمباراة مراقبة مهمة، نتيجتها قد تغيّر شكل المنافسة أو تؤثر على المباراة الأخرى في نفس المجموعة.'
+    else:
+        intro = f'{name}:\nمباراة تحصيل حاصل أو تأثيرها الحسابي محدود مقارنة بالمباراة الأخرى في هذا التوقيت.'
+    bt = d.get('best_thirds') or ''
+    if bt and not label.startswith('⚪'):
+        intro += f'\nتأثير أفضل الثوالث: {bt}'
+    return intro
+
+
+def _v58_group_impact_lines(ms, code, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    rows = _v57_group_rows(code, snap) if '_v57_group_rows' in globals() else []
+    leader = canonical_team_name(rows[0].get('team')) if rows else ''
+    second = canonical_team_name(rows[1].get('team')) if len(rows) > 1 else ''
+    third = canonical_team_name(rows[2].get('team')) if len(rows) > 2 else ''
+    lines = ['🔥 تأثير مباراتي هذا التوقيت على المجموعة', '']
+    # الصدارة
+    lines.append('🏆 الصدارة')
+    try:
+        if leader and _v57_is_officially_locked_in_slot(leader, 1, snap):
+            lines.append(f'الصدارة محسومة رسميًا لـ{leader}، لذلك لا يوجد تأثير على المركز الأول.')
+        else:
+            lines.append('الصدارة قد تتأثر حسب نتائج المباراتين وفارق الأهداف.')
+    except Exception:
+        lines.append('الصدارة قد تتأثر حسب نتائج المباراتين وفارق الأهداف.')
+    lines.append('')
+    lines.append('━━━━━━━━━━━━━━━')
+    lines.append('')
+    # المركز الثاني
+    lines.append('🥈 المركز الثاني')
+    contenders = []
+    for r in rows:
+        t = canonical_team_name(r.get('team')) or r.get('team') or ''
+        try:
+            pos = _v57_possible_positions(t, snap) if '_v57_possible_positions' in globals() else set()
+            if 2 in pos and t:
+                contenders.append(t)
+        except Exception:
+            pass
+    if contenders:
+        lines.append('المركز الثاني يتنافس عليه: ' + '، '.join(contenders[:4]) + '.')
+    elif second:
+        lines.append(f'المركز الثاني الحالي عند {second}، ويتحدد حسب نتائج هذا التوقيت.')
+    else:
+        lines.append('المركز الثاني يتحدد حسب نتائج هذا التوقيت.')
+    for m in ms:
+        t1, t2 = _v58_match_teams(m)
+        lines.append(f'• {t1} × {t2}: نتيجتها قد تغيّر صاحب المركز الثاني أو تثبته حسب وضع الفريقين.')
+    lines.append('')
+    lines.append('━━━━━━━━━━━━━━━')
+    lines.append('')
+    # الثالث
+    lines.append('🥉 المركز الثالث في المجموعة')
+    if third:
+        lines.append(f'ثالث المجموعة الحالي: {third}.')
+    lines.append('صاحب المركز الثالث يدخل مقارنة أفضل الثوالث إذا لم يتأهل مباشرة.')
+    lines.append('الخاسر أو المتعثر في مباراة الحسم قد ينتقل غالبًا إلى حسابات أفضل الثوالث، والتعادل يحسمه فارق الأهداف أو الأهداف المسجلة.')
+    return lines
+
+
+def _v58_best_thirds_effect_lines(ms, code, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    lines = ['🌍 تأثيرها على أفضل الثوالث', '']
+    effect_parts = []
+    for m in ms:
+        try:
+            e = _v57_match_best_thirds_effect(m, snap)
+            if e and e not in effect_parts:
+                effect_parts.append(e)
+        except Exception:
+            pass
+    if effect_parts:
+        for e in effect_parts[:2]:
+            lines.append(f'• {e}')
+    else:
+        lines.append('• ثالث هذه المجموعة يُقارن مع ثوالث كل المجموعات.')
+    lines += [
+        '',
+        '• إذا أصبح ثالث المجموعة بـ 4 نقاط: يدخل بقوة في أفضل الثوالث وقد يقترب من الضمان حسب بقية النتائج.',
+        '• إذا بقي ثالث المجموعة بـ 3 نقاط: يبقى تحت الضغط ويحتاج نتائج تخدمه.',
+        '• فارق الأهداف السلبي قد يؤخره خلف ثوالث أخرى.',
+        '',
+        '👇 لمعرفة الترتيب الكامل:',
+        'اضغط زر: 🥉 ترتيب أفضل الثوالث الآن',
+    ]
+    return lines
+
+
+def _v58_watch_time_text(date, tm, force=False):
+    snap = _v33_snapshot(False) if '_v33_snapshot' in globals() else {}
+    ms = [m for m in _v58_day_fixtures(date) if str(m.get('time') or '').strip() == str(tm or '').strip()]
+    day = V58_DAY_SHORT.get(str(date), str(date))
+    lines = [f'⏰ مباريات {tm} — {day}', '', '🏟️ مباريات هذا التوقيت:', '']
+    if not ms:
+        lines.append('لا توجد مباريات في هذا التوقيت.')
+        return '\n'.join(lines).strip()
+    ranked = []
+    for m in ms:
+        try:
+            d = _v57_match_importance_detail(m, snap) if '_v57_match_importance_detail' in globals() else {'score': 0}
+            sc = int(d.get('score') or 0)
+        except Exception:
+            sc = 0
+        ranked.append((sc, m))
+    max_score = max([x[0] for x in ranked] or [0])
+    labels = {}
+    for sc, m in ranked:
+        labels[id(m)] = _v58_match_state_label(m, sc, max_score)
+    # عرض المباريات بترتيب الجدول الأصلي لا بترتيب السكور حتى يبقى واضح.
+    for m in ms:
+        t1, t2 = _v58_match_teams(m)
+        label = labels.get(id(m), '👀 راقبها')
+        lines.append(f'{label} {t1} × {t2}')
+        note = V58_ARGENTINA_MESSI_NOTE if _v58_match_is_argentina(m) else ''
+        if note:
+            lines.append(note)
+        lines.append('')
+    code = _v57_group_code_from_any(ms[0].get('group') if ms else '') if '_v57_group_code_from_any' in globals() else ''
+    lines.append('━━━━━━━━━━━━━━━')
+    lines.append('')
+    lines.extend(_v58_group_table_lines(code, snap))
+    lines.append('')
+    lines.append('━━━━━━━━━━━━━━━')
+    lines.append('')
+    lines.append('📌 وضع المباراتين')
+    lines.append('')
+    # وضع المباراة الأهم أولًا.
+    for sc, m in sorted(ranked, key=lambda x: x[0], reverse=True):
+        lines.append(_v58_match_situation_text(m, labels.get(id(m), ''), snap))
+        lines.append('')
+    lines.append('━━━━━━━━━━━━━━━')
+    lines.append('')
+    lines.extend(_v58_group_impact_lines(ms, code, snap))
+    lines.append('')
+    lines.append('━━━━━━━━━━━━━━━')
+    lines.append('')
+    lines.extend(_v58_best_thirds_effect_lines(ms, code, snap))
+    return '\n'.join(lines).strip()
+
+
+# ---------- راوترات نهائية: مباشر الآن + وش أتابع + لوحة البطولة ----------
+_V58_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _v561_raw_text(update) if '_v561_raw_text' in globals() else str((update.effective_message.text if update.effective_message else '') or '').strip()
+    try:
+        _v54_clear_manual_top_scorers_waiting(context)
+    except Exception:
+        pass
+    if str(raw).strip() == '📺 مباشر الآن':
+        active = _v58_safe_active_live_date()
+        if active and not _v58_live_snapshot_is_fresh(active, max_age=110):
+            await _v58_update_live_day_async(active, force=True, timeout=75)
+        msg = await update.effective_message.reply_text(_v29_live_today_text(active), reply_markup=_v29_live_today_keyboard(active))
+        try:
+            _v49_track_live_message(msg, active)
+        except Exception:
+            pass
+        return
+    if '_v561_is_board_text' in globals() and _v561_is_board_text(raw):
+        await update.effective_message.reply_text(_v562_board_text_for_user(), reply_markup=_v32_board_keyboard())
+        _v55_schedule_board_refresh(context, chat_id=_v562_chat_id(update) if '_v562_chat_id' in globals() else None, notify=False)
+        return
+    if '_v561_is_watch_text' in globals() and _v561_is_watch_text(raw):
+        await update.effective_message.reply_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        return
+    if callable(_V58_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V58_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V58_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    try: await q.answer()
+    except Exception: pass
+    if data == 'mainmenu|live':
+        active = _v58_safe_active_live_date()
+        if active and not _v58_live_snapshot_is_fresh(active, max_age=110):
+            await _v58_update_live_day_async(active, force=True, timeout=75)
+        try:
+            await q.edit_message_text(_v29_live_today_text(active), reply_markup=_v29_live_today_keyboard(active))
+            try: _v49_track_live_message(q.message, active)
+            except Exception: pass
+        except Exception:
+            msg = await q.message.reply_text(_v29_live_today_text(active), reply_markup=_v29_live_today_keyboard(active))
+            try: _v49_track_live_message(msg, active)
+            except Exception: pass
+        return
+    if data == 'mainmenu|watch_last_round':
+        try:
+            await q.edit_message_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        except Exception:
+            await q.message.reply_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        return
+    if data.startswith('mainmenu|watch_time|'):
+        parts = data.split('|', 3)
+        date = parts[2] if len(parts) > 2 else ''
+        tm = parts[3] if len(parts) > 3 else ''
+        txt = _v58_watch_time_text(date, tm)
+        try:
+            await q.edit_message_text(txt, reply_markup=_v58_watch_time_keyboard(date))
+        except Exception:
+            await q.message.reply_text(txt, reply_markup=_v58_watch_time_keyboard(date))
+        return
+    if data in ('mainmenu|board', 'v32|board'):
+        try:
+            await q.edit_message_text(_v562_board_text_for_user(), reply_markup=_v32_board_keyboard())
+        except Exception:
+            await q.message.reply_text(_v562_board_text_for_user(), reply_markup=_v32_board_keyboard())
+        _v55_schedule_board_refresh(context, chat_id=q.message.chat_id if q.message else None, notify=False)
+        return
+    if callable(_V58_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V58_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+_V58_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'board_force':
+        try: await q.answer()
+        except Exception: pass
+        if _v55_schedule_board_refresh(context, chat_id=q.message.chat_id if q.message else None, notify=True):
+            await q.message.reply_text('🔄 بدأ تحديث بيانات البطولة بالخلفية.\nسيتم تحديث النتائج والمباشر واللوحة، وإذا تأخرت احتمالات المغادرة سيتم استخدام آخر كاش لها فقط.')
+        else:
+            await q.message.reply_text(f'⏳ تحديث لوحة البطولة شغال بالفعل من: {V55_BOARD_REFRESH_STARTED_AT or "-"}')
+        return
+    if action == 'watch_last_round':
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        except Exception:
+            await q.message.reply_text(_v56_watch_last_round_text(), reply_markup=_v56_watch_last_round_keyboard())
+        return
+    if callable(_V58_PREV_V32_CALLBACK):
+        return await _V58_PREV_V32_CALLBACK(update, context)
+
+
+_V58_PREV_LIVE_TODAY_CALLBACK = globals().get('live_today_callback')
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    try: await q.answer()
+    except Exception: pass
+    if data == 'noop':
+        return
+    if len(parts) >= 3 and parts[0] == 'livefx' and parts[1] == 'refreshday':
+        d = _normalize_date_arg(parts[2]) if '_normalize_date_arg' in globals() else parts[2]
+        try:
+            await q.message.edit_text(f'⏳ تحديث مباشر الآن {d} من المصدر...', reply_markup=None)
+        except Exception:
+            pass
+        updated, dbg = await _v58_update_live_day_async(d, force=True, timeout=75)
+        txt = _v29_live_today_text(d)
+        try:
+            if '_is_admin' in globals() and _is_admin(q.from_user.id):
+                txt += f"\n\n🔄 تم تحديث {updated} مباراة.\n🔎 " + ' / '.join(list(dbg or [])[-5:])
+        except Exception:
+            pass
+        await q.message.edit_text(txt, reply_markup=_v29_live_today_keyboard(d))
+        return
+    if len(parts) >= 3 and parts[0] == 'livefx' and parts[1] == 'match':
+        # قبل الصورة نحدث نفس كاش اليوم ثم نبني الصورة من نفس المباراة المحدثة.
+        active = _v58_safe_active_live_date()
+        if active and not _v58_live_snapshot_is_fresh(active, max_age=60):
+            await _v58_update_live_day_async(active, force=True, timeout=75)
+    if callable(_V58_PREV_LIVE_TODAY_CALLBACK):
+        return await _V58_PREV_LIVE_TODAY_CALLBACK(update, context)
+
+# ==================== END V58 FINAL CACHE/UPDATES + WATCH-TIME PATCH — FAHAD ====================
+
 if __name__ == "__main__":
     main()
