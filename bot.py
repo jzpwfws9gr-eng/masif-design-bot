@@ -7096,6 +7096,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_آخر"), admin_only(restore_last)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تحديث_احتمالات_المغادرة|تحديث_مغادرة_البطولة|تحديث_المغادرة)(?:\s|$)"), admin_only(v48_refresh_exit_probs_command)))
     app.run_polling()
 
 
@@ -47627,6 +47628,426 @@ async def _v36_send_how_for_team(message, team, force=False):
 
 # ==================== END V47 CLEAN SAFE PATCH — FAHAD ====================
 
+
+
+# ==================== V48 EXIT PROBABILITIES CACHED ADMIN PATCH — FAHAD ====================
+# اعتماد فهد:
+# - زر ❌ احتمالات مغادرة البطولة عند المستخدم لا يحسب مباشرًا ولا يعلق البوت.
+# - المستخدم يرى آخر تحديث محفوظ فقط.
+# - التحديث الثقيل يكون بزر إداري خاص، ويعمل بالخلفية.
+# - لا تحديث تلقائي.
+
+V48_EXIT_PROB_CACHE_FILE = "exit_probabilities_cache.json"
+V48_EXIT_UPDATE_TASK = None
+V48_EXIT_UPDATE_STARTED_AT = ""
+V48_EXIT_UPDATE_LOCK = None
+
+
+def _v48_now_makkah_str():
+    try:
+        return datetime.now(ZoneInfo("Asia/Riyadh")).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        try:
+            return datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return "-"
+
+
+def _v48_load_json(path, default=None):
+    default = {} if default is None else default
+    try:
+        if '_v32_load_json' in globals():
+            return _v32_load_json(path, default)
+    except Exception:
+        pass
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return default
+
+
+def _v48_save_json(path, data):
+    try:
+        if '_v32_save_json' in globals():
+            return _v32_save_json(path, data)
+    except Exception:
+        pass
+    tmp = str(path) + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data or {}, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _v48_team_key(team):
+    try:
+        return simple_key(team)
+    except Exception:
+        return re.sub(r'\W+', '', str(team or '')).strip().lower()
+
+
+def _v48_points(row):
+    try:
+        return int(row.get('Pts') if row.get('Pts') is not None else row.get('points') or row.get('pts') or 0)
+    except Exception:
+        return 0
+
+
+def _v48_played(row):
+    try:
+        return int(row.get('P') if row.get('P') is not None else row.get('played') or 0)
+    except Exception:
+        return 0
+
+
+def _v48_gd(row):
+    try:
+        return int(row.get('GD') if row.get('GD') is not None else row.get('gd') or 0)
+    except Exception:
+        return 0
+
+
+def _v48_group_name(code):
+    try:
+        return _v32_group_name(code)
+    except Exception:
+        try:
+            return _v33_group_label(code)
+        except Exception:
+            return f"المجموعة {code}"
+
+
+def _v48_remaining_count(row):
+    return max(0, 3 - _v48_played(row))
+
+
+def _v48_team_fixture_lines(team, snap):
+    out = []
+    try:
+        fixtures = _v33_remaining_for_team(team, snap) if '_v33_remaining_for_team' in globals() else []
+    except Exception:
+        fixtures = []
+    for m in fixtures[:2]:
+        t1 = m.get('team1') or m.get('home') or ''
+        t2 = m.get('team2') or m.get('away') or ''
+        opp = t2 if t1 == team else (t1 if t2 == team else (t1 or t2))
+        if opp:
+            out.append(f"خسارة {team} أمام {opp}")
+    return out
+
+
+def _v48_simple_team_exit_base(team, snap):
+    code, pos, row, rows = _v33_group_row(team, snap) if '_v33_group_row' in globals() else ('', None, None, [])
+    pts = _v48_points(row or {})
+    played = _v48_played(row or {})
+    rem = max(0, 3 - played)
+    lines = []
+    lines.append(f"📌 أولًا: كيف قد يصبح {team} ثالثًا أو رابعًا؟")
+    if row is None:
+        lines.append("لا توجد بيانات كافية عن ترتيب المجموعة حاليًا.")
+        return lines, pts
+    if rem <= 0:
+        lines.append(f"{team} أنهى مبارياته: {pts} نقاط | لعب: {played}/3")
+        if pos == 3:
+            lines.append("وضعه الحالي: ثالث المجموعة، لذلك يدخل حساب أفضل الثوالث.")
+        elif pos == 4:
+            lines.append("وضعه الحالي: رابع المجموعة، وهذا يعني المغادرة إذا كان الترتيب نهائيًا.")
+        else:
+            lines.append("إذا بقي في مركز تأهل مباشر، لا توجد مغادرة عبر أفضل الثوالث إلا إذا تغيّر الترتيب رسميًا.")
+        target_pts = pts
+        return lines, target_pts
+
+    lose_lines = _v48_team_fixture_lines(team, snap)
+    if lose_lines:
+        for x in lose_lines:
+            lines.append(f"- {x}")
+        lines.append(f"  ➡️ يصبح {team}: {pts} نقاط | لعب: 3/3 إذا خسر كل مبارياته المتبقية")
+    else:
+        lines.append(f"- خسارة مبارياته المتبقية")
+        lines.append(f"  ➡️ يصبح {team}: {pts} نقاط | لعب: 3/3")
+    if rem == 2:
+        lines.append(f"- تعادل مباراة وخسارة مباراة")
+        lines.append(f"  ➡️ يصبح {team}: {pts + 1} نقاط | لعب: 3/3")
+    lines.append("بعدها يتحدد مركزه النهائي حسب نتائج المجموعة، وقد يصبح ثالثًا أو رابعًا.")
+    return lines, pts
+
+
+def _v48_third_candidate_rows(snap):
+    thirds = []
+    try:
+        thirds = list((snap or {}).get('thirds') or [])
+    except Exception:
+        thirds = []
+    if thirds:
+        return thirds
+    try:
+        groups = (snap or {}).get('groups') or {}
+        out = []
+        for code, g in groups.items():
+            rows = (g or {}).get('rows') or []
+            if len(rows) >= 3:
+                r = dict(rows[2]); r['group'] = code; out.append(r)
+        return out
+    except Exception:
+        return []
+
+
+def _v48_other_thirds_blocks(team, snap, target_pts):
+    code = _v33_team_group(team) if '_v33_team_group' in globals() else ''
+    thirds = [dict(x) for x in _v48_third_candidate_rows(snap)]
+    stronger = []
+    equal = []
+    for r in thirds:
+        t = r.get('team') or r.get('name') or '-'
+        g = r.get('group') or r.get('Group') or ''
+        if t == team or g == code:
+            continue
+        pts = _v48_points(r)
+        played = _v48_played(r)
+        rem = max(0, 3 - played)
+        max_pts = pts + rem * 3
+        gd = _v48_gd(r)
+        # الأهم: اللي يتعداه بالنقاط أولًا، ثم اللي يتعادل معه.
+        if max_pts > target_pts:
+            stronger.append((max_pts, pts, played, gd, t, g, rem))
+        elif max_pts == target_pts:
+            equal.append((max_pts, pts, played, gd, t, g, rem))
+    stronger.sort(key=lambda x: (-x[0], -x[1], -x[3], x[4]))
+    equal.sort(key=lambda x: (-x[0], -x[3], x[4]))
+    lines = []
+    lines.append("🥉 ثانيًا: كيف تذهب عليه أفضل الثوالث؟")
+    lines.append("")
+    lines.append(f"إذا أصبح {team} ثالثًا بـ{target_pts} نقاط، فهو يحتاج أن يكون ضمن أفضل 8 ثوالث من أصل 12.")
+    lines.append("")
+    lines.append("🔥 منتخبات قد تتجاوزه بالنقاط:")
+    if not stronger:
+        lines.append("لا يوجد مسار واضح حاليًا لتجاوزه بالنقاط من الثوالث المتاحة.")
+    for i, (_mx, pts, played, gd, t, g, rem) in enumerate(stronger[:8], start=1):
+        if rem > 0:
+            req = "الفوز في مباراة متبقية" if rem == 1 else "الفوز في المباريات المتبقية"
+            become = pts + rem * 3
+        else:
+            req = "هو أمامه حاليًا بالنقاط"
+            become = pts
+        lines.append(f"{i}. {_v48_group_name(g)}")
+        lines.append(f"{req} — {t}")
+        lines.append(f"➡️ {t} قد يصبح ثالثًا بـ{become} نقاط | لعب: 3/3")
+        lines.append(f"➡️ يتقدم على {team} بالنقاط")
+        lines.append("")
+    lines.append("⚖️ منتخبات قد تتعادل معه بالنقاط وتتفوق بالفارق:")
+    if not equal:
+        lines.append("لا يوجد مسار تعادل واضح حاليًا حسب البيانات الحالية.")
+    for i, (_mx, pts, played, gd, t, g, rem) in enumerate(equal[:8], start=1):
+        req = "الفوز في مباراة متبقية" if rem == 1 else ("الفوز في المباريات المتبقية" if rem > 1 else "يبقى على نفس رصيده")
+        lines.append(f"{i}. {_v48_group_name(g)}")
+        lines.append(f"{req} — {t}")
+        lines.append(f"➡️ {t} قد يصل إلى {target_pts} نقاط | لعب: 3/3")
+        lines.append(f"➡️ يحتاج فارق أهداف أو أهداف مسجلة أفضل من {team}")
+        lines.append("")
+    lines.append("📊 النتيجة:")
+    lines.append(f"إذا صار أمام {team} 8 منتخبات ثالثة أفضل منه، يغادر البطولة رغم أنه ثالث.")
+    lines.append("")
+    lines.append("⚠️ هذا سيناريو محتمل، وليس استبعادًا رسميًا.")
+    return lines
+
+
+def _v48_build_exit_text_for_team(team, snap=None, updated_at=None):
+    team = _v33_find_team(team) if '_v33_find_team' in globals() else team
+    if not team:
+        return "⚠️ لم يتم التعرف على المنتخب."
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    updated_at = updated_at or _v48_now_makkah_str()
+    lines = [f"❌ احتمالات مغادرة البطولة — {team}", f"آخر تحديث: {updated_at} بتوقيت مكة", ""]
+    lines.append(f"{team} قد يغادر البطولة بطريقتين:")
+    lines.append("1. أن ينهي المجموعة في المركز الرابع.")
+    lines.append("2. أن ينهي المجموعة ثالثًا، لكنه لا يكون ضمن أفضل 8 ثوالث من أصل 12.")
+    lines.append("")
+    base, target_pts = _v48_simple_team_exit_base(team, snap)
+    lines.extend(base)
+    lines.append("")
+    lines.extend(_v48_other_thirds_blocks(team, snap, target_pts))
+    return "\n".join(lines).strip()
+
+
+def _v48_load_exit_cache():
+    data = _v48_load_json(V48_EXIT_PROB_CACHE_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _v48_save_exit_cache(data):
+    _v48_save_json(V48_EXIT_PROB_CACHE_FILE, data or {})
+
+
+def _v48_get_cached_exit_text(team):
+    team = _v33_find_team(team) if '_v33_find_team' in globals() else team
+    data = _v48_load_exit_cache()
+    teams = data.get('teams') or {}
+    item = teams.get(team) or teams.get(_v48_team_key(team))
+    if isinstance(item, dict) and item.get('text'):
+        return item.get('text')
+    updated = data.get('updated_at') or '-'
+    return (
+        f"⚠️ لم يتم تحديث احتمالات مغادرة البطولة لهذا المنتخب بعد.\n\n"
+        f"آخر تحديث محفوظ: {updated}\n"
+        "سيتم عرضها بعد تحديث الإدارة."
+    )
+
+
+def _v48_update_exit_probabilities_all():
+    updated_at = _v48_now_makkah_str()
+    snap = _v33_snapshot(True) if '_v33_snapshot' in globals() else {}
+    teams = list(globals().get('WORLD_CUP_TEAMS') or [])
+    if not teams:
+        try:
+            teams = [t for _c, arr in WORLD_CUP_GROUPS for t in arr]
+        except Exception:
+            teams = []
+    cache = {"updated_at": updated_at, "teams": {}, "count": 0}
+    for team in teams:
+        try:
+            txt = _v48_build_exit_text_for_team(team, snap, updated_at)
+            cache['teams'][team] = {"text": txt, "updated_at": updated_at}
+            cache['teams'][_v48_team_key(team)] = {"text": txt, "updated_at": updated_at}
+            cache['count'] += 1
+        except Exception as e:
+            cache['teams'][team] = {"text": f"⚠️ تعذر تجهيز احتمالات مغادرة البطولة — {team}\nالسبب: {type(e).__name__}", "updated_at": updated_at}
+    _v48_save_exit_cache(cache)
+    return cache
+
+
+async def _v48_refresh_exit_probs_bg(bot, chat_id):
+    global V48_EXIT_UPDATE_TASK, V48_EXIT_UPDATE_STARTED_AT, V48_EXIT_UPDATE_LOCK
+    try:
+        if V48_EXIT_UPDATE_LOCK is None:
+            V48_EXIT_UPDATE_LOCK = asyncio.Lock()
+        async with V48_EXIT_UPDATE_LOCK:
+            data = await asyncio.to_thread(_v48_update_exit_probabilities_all)
+            try:
+                await bot.send_message(chat_id=chat_id, text=f"✅ تم تحديث احتمالات مغادرة البطولة\nآخر تحديث: {data.get('updated_at','-')} بتوقيت مكة\nعدد المنتخبات: {data.get('count',0)}")
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            await bot.send_message(chat_id=chat_id, text=f"❌ تعذر تحديث احتمالات مغادرة البطولة\n{type(e).__name__}: {str(e)[:220]}")
+        except Exception:
+            pass
+    finally:
+        V48_EXIT_UPDATE_TASK = None
+        V48_EXIT_UPDATE_STARTED_AT = ""
+
+
+async def v48_refresh_exit_probs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global V48_EXIT_UPDATE_TASK, V48_EXIT_UPDATE_STARTED_AT
+    msg = update.effective_message
+    if V48_EXIT_UPDATE_TASK and not V48_EXIT_UPDATE_TASK.done():
+        await msg.reply_text(f"⏳ تحديث احتمالات المغادرة شغال بالفعل من: {V48_EXIT_UPDATE_STARTED_AT or '-'}")
+        return
+    V48_EXIT_UPDATE_STARTED_AT = _v48_now_makkah_str()
+    await msg.reply_text("⏳ بدأ تحديث احتمالات مغادرة البطولة بالخلفية...\nتقدر تستخدم البوت عادي.")
+    try:
+        V48_EXIT_UPDATE_TASK = context.application.create_task(_v48_refresh_exit_probs_bg(context.bot, msg.chat_id))
+    except Exception:
+        V48_EXIT_UPDATE_TASK = asyncio.create_task(_v48_refresh_exit_probs_bg(context.bot, msg.chat_id))
+
+
+# زر احتمالات مغادرة البطولة داخل أزرار كيف تتأهل — يعرض آخر كاش فقط.
+try:
+    _V48_PREV_HOW_KEYBOARD = _v33_how_qualify_keyboard
+except Exception:
+    _V48_PREV_HOW_KEYBOARD = None
+
+def _v33_how_qualify_keyboard(team):
+    team = _v33_find_team(team) if '_v33_find_team' in globals() else team
+    key = _v33_team_button_key(team) if '_v33_team_button_key' in globals() else _v48_team_key(team)
+    try:
+        kb = _V48_PREV_HOW_KEYBOARD(team) if _V48_PREV_HOW_KEYBOARD else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    cb = f"v32|exit_cached|{key}"
+    exists = any(getattr(btn, 'callback_data', '') == cb for row in rows for btn in row)
+    if not exists:
+        # قبل تفاصيل المجموعة/الرجوع إن أمكن.
+        insert_at = max(0, len(rows) - 2)
+        rows.insert(insert_at, [InlineKeyboardButton("❌ احتمالات مغادرة البطولة", callback_data=cb)])
+    return InlineKeyboardMarkup(rows)
+
+
+try:
+    _V48_PREV_V32_CALLBACK = v32_callback
+except Exception:
+    _V48_PREV_V32_CALLBACK = None
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'exit_cached' and len(parts) >= 3:
+        try: await q.answer()
+        except Exception: pass
+        team = _v33_team_from_button_key(parts[2]) if '_v33_team_from_button_key' in globals() else parts[2]
+        text = _v48_get_cached_exit_text(team)
+        try:
+            await q.edit_message_text(text[:3900], reply_markup=_v33_how_qualify_keyboard(team))
+        except Exception:
+            await q.message.reply_text(text[:3900], reply_markup=_v33_how_qualify_keyboard(team))
+        return
+    if _V48_PREV_V32_CALLBACK:
+        return await _V48_PREV_V32_CALLBACK(update, context)
+
+
+# زر تحديث احتمالات المغادرة في الإدارة.
+try:
+    _V48_PREV_ADMIN_KEYBOARD = _v38e_admin_keyboard
+except Exception:
+    _V48_PREV_ADMIN_KEYBOARD = None
+
+def _v38e_admin_keyboard():
+    try:
+        kb = _V48_PREV_ADMIN_KEYBOARD() if _V48_PREV_ADMIN_KEYBOARD else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    exists = any(getattr(btn, 'callback_data', '') == 'v32adm|refresh_exit_probs' for row in rows for btn in row)
+    if not exists:
+        rows.append([InlineKeyboardButton("🔄 تحديث احتمالات المغادرة", callback_data="v32adm|refresh_exit_probs")])
+    return InlineKeyboardMarkup(rows)
+
+
+try:
+    _V48_PREV_ADMIN_CALLBACK = v32_admin_callback
+except Exception:
+    _V48_PREV_ADMIN_CALLBACK = None
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    parts = (q.data or '').split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'refresh_exit_probs':
+        try: await q.answer()
+        except Exception: pass
+        if not is_admin_user(update):
+            await q.message.reply_text('هذا الخيار للمشرفين فقط 🔒'); return
+        global V48_EXIT_UPDATE_TASK, V48_EXIT_UPDATE_STARTED_AT
+        if V48_EXIT_UPDATE_TASK and not V48_EXIT_UPDATE_TASK.done():
+            await q.message.reply_text(f"⏳ تحديث احتمالات المغادرة شغال بالفعل من: {V48_EXIT_UPDATE_STARTED_AT or '-'}")
+            return
+        V48_EXIT_UPDATE_STARTED_AT = _v48_now_makkah_str()
+        await q.message.reply_text("⏳ بدأ تحديث احتمالات مغادرة البطولة بالخلفية...\nتقدر تستخدم البوت عادي.")
+        try:
+            V48_EXIT_UPDATE_TASK = context.application.create_task(_v48_refresh_exit_probs_bg(context.bot, q.message.chat_id))
+        except Exception:
+            V48_EXIT_UPDATE_TASK = asyncio.create_task(_v48_refresh_exit_probs_bg(context.bot, q.message.chat_id))
+        return
+    if _V48_PREV_ADMIN_CALLBACK:
+        return await _V48_PREV_ADMIN_CALLBACK(update, context)
+
+# ==================== END V48 EXIT PROBABILITIES CACHED ADMIN PATCH — FAHAD ====================
 
 if __name__ == "__main__":
     main()
