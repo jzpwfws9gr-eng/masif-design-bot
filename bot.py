@@ -13669,6 +13669,9 @@ def main():
 
     # أساسيات
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start))
+    # V60.1: أمر حالة التحديث كان معرفًا لكن غير مربوط في main الفعلي بعد تعدد تعريفات main.
+    # نخليه قبل بقية الأوامر عشان يرد فورًا من الكاش ولا يدخل أي تحديث ثقيل.
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:حالة_التحديث|حاله_التحديث|status_update|تحديث_الحالة_الان)(?:\s|$)"), admin_only(v60_update_status_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:من_انا|معرفي)"), who_am_i))
     app.add_handler(MessageHandler(filters.Document.ALL, remember_last_file))
 
