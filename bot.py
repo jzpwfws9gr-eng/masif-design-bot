@@ -53597,5 +53597,166 @@ def _v602_clean_text(txt):
 
 # ==================== END V60.2 ====================
 
+
+# ==================== V60.3 — استرجاع مسارات القديم للأزرار والتفاصيل ====================
+# اعتماد فهد:
+# - مباشر الآن يرجع مثل القديم: مباريات اليوم كأزرار، والضغط يفتح تفاصيل المباراة.
+# - لا يوجد "تأثير" داخل تفاصيل مباشر الآن.
+# - السحب الحقيقي يكون في updater.py، والضغط يقرأ من الكاش فقط.
+# - نتائج اليوم/البطولة من ESPN هي المصدر الخام، ومنها يُبنى مباشر الآن والنتائج.
+
+def _v603_cache_raw_value(key, default=None):
+    try:
+        data = _v60_load_cache()
+        raw = data.get('raw') if isinstance(data.get('raw'), dict) else {}
+        item = raw.get(key) if isinstance(raw, dict) else None
+        if isinstance(item, dict) and 'value' in item:
+            return item.get('value')
+    except Exception:
+        pass
+    return default
+
+
+def _v603_get_live_payload():
+    val = _v603_cache_raw_value('live_matches', {})
+    return val if isinstance(val, dict) else {}
+
+
+def _v603_live_matches():
+    payload = _v603_get_live_payload()
+    matches = payload.get('matches') if isinstance(payload.get('matches'), list) else []
+    if matches:
+        return matches
+    # fallback آمن: يبني الأزرار من جدول البطولة فقط بدون سحب ESPN
+    out = []
+    try:
+        d = _v40_active_live_date() if '_v40_active_live_date' in globals() else (_v29_active_fixture_date() if '_v29_active_fixture_date' in globals() else None)
+        rows = _v40_live_rows(d) if '_v40_live_rows' in globals() else []
+        for m in rows or []:
+            mid = str(m.get('id') or f"{m.get('date')}|{m.get('team1')}|{m.get('team2')}")
+            t1 = canonical_team_name(m.get('team1')) or m.get('team1') or ''
+            t2 = canonical_team_name(m.get('team2')) or m.get('team2') or ''
+            out.append({
+                'id': mid, 'team1': t1, 'team2': t2, 'date': m.get('date'), 'time': m.get('time'),
+                'label': f'⏳ {t1} × {t2}',
+                'detail': f'🏟️ {t1} × {t2}\n📌 الحالة: لم تبدأ / لم تُحدّث بعد\n⏰ الوقت: {m.get("time") or "-"}\n\n⏳ تفاصيل المباراة ستظهر بعد تجهيز الكاش من خدمة التحديث.',
+            })
+    except Exception:
+        pass
+    return out
+
+
+def _v603_live_menu_text():
+    payload = _v603_get_live_payload()
+    cached_text = _v60_cache_text('live', '📺 مباشر الآن')
+    if 'لا يوجد كاش جاهز' not in cached_text:
+        return cached_text
+    title = payload.get('title') if isinstance(payload, dict) else ''
+    updated = payload.get('updated_at') if isinstance(payload, dict) else ''
+    lines = ['📺 مباشر الآن' + (f' — {title}' if title else ''), 'اختر مباراة لعرض التفاصيل:']
+    if updated:
+        lines.insert(1, f'آخر تحديث: {updated}')
+    if not _v603_live_matches():
+        lines += ['', 'لا توجد مباريات في اليوم النشط حاليًا.']
+    return '\n'.join(lines).strip()
+
+
+def _v603_live_keyboard():
+    rows = []
+    for m in _v603_live_matches():
+        label = str(m.get('label') or f"{m.get('team1','')} × {m.get('team2','')}").strip()[:62]
+        mid = str(m.get('id') or '')
+        if mid:
+            rows.append([InlineKeyboardButton(label, callback_data=f'v603live|match|{mid}')])
+    if not rows:
+        rows.append([InlineKeyboardButton('لا توجد مباريات في مباشر الآن', callback_data='noop')])
+    rows.append([InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v603_live_detail(mid):
+    mid = str(mid or '')
+    for m in _v603_live_matches():
+        if str(m.get('id') or '') == mid:
+            detail = str(m.get('detail') or '').strip()
+            if detail:
+                return detail
+            t1 = m.get('team1') or ''
+            t2 = m.get('team2') or ''
+            return f'🏟️ {t1} × {t2}\n📌 الحالة: لم تُجهز التفاصيل بعد.\n⏰ الوقت: {m.get("time") or "-"}'
+    return 'تعذر العثور على تفاصيل المباراة في الكاش الحالي.'
+
+
+def _v603_live_back_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ رجوع لمباشر الآن', callback_data='mainmenu|live')]])
+
+
+_V603_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'mainmenu|live':
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v603_live_menu_text(), reply_markup=_v603_live_keyboard())
+        except Exception:
+            await q.message.reply_text(_v603_live_menu_text(), reply_markup=_v603_live_keyboard())
+        return
+    if data.startswith('v603live|match|'):
+        try: await q.answer()
+        except Exception: pass
+        mid = data.split('|', 2)[2]
+        try:
+            await q.edit_message_text(_v603_live_detail(mid), reply_markup=_v603_live_back_keyboard())
+        except Exception:
+            await q.message.reply_text(_v603_live_detail(mid), reply_markup=_v603_live_back_keyboard())
+        return
+    # توافق مع أزرار القديم livefx|match|id إن ظهرت من كاش/قوائم قديمة
+    if data.startswith('livefx|match|'):
+        try: await q.answer()
+        except Exception: pass
+        parts = data.split('|')
+        mid = parts[2] if len(parts) > 2 else ''
+        try:
+            await q.edit_message_text(_v603_live_detail(mid), reply_markup=_v603_live_back_keyboard())
+        except Exception:
+            await q.message.reply_text(_v603_live_detail(mid), reply_markup=_v603_live_back_keyboard())
+        return
+    if data.startswith('livefx|refreshday|'):
+        try: await q.answer('التحديث يعمل بالخلفية كل فترة ✅')
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v603_live_menu_text(), reply_markup=_v603_live_keyboard())
+        except Exception:
+            await q.message.reply_text(_v603_live_menu_text(), reply_markup=_v603_live_keyboard())
+        return
+    if callable(_V603_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V603_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+_V603_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _v561_raw_text(update) if '_v561_raw_text' in globals() else str((update.effective_message.text if update.effective_message else '') or '')
+    if 'مباشر' in str(raw or ''):
+        await update.effective_message.reply_text(_v603_live_menu_text(), reply_markup=_v603_live_keyboard())
+        return
+    if callable(_V603_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V603_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V603_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _v561_raw_text(update) if '_v561_raw_text' in globals() else str((update.effective_message.text if update.effective_message else '') or '')
+    if 'مباشر' in str(raw or ''):
+        await update.effective_message.reply_text(_v603_live_menu_text(), reply_markup=_v603_live_keyboard())
+        return
+    if callable(_V603_PREV_TEXT_STATE_ROUTER):
+        return await _V603_PREV_TEXT_STATE_ROUTER(update, context)
+
+# ==================== END V60.3 ====================
+
 if __name__ == "__main__":
     main()
