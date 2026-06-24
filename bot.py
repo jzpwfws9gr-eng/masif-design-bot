@@ -53881,5 +53881,173 @@ def _v60_status_text():
 
 # ==================== END V60.5 ====================
 
+
+# ==================== V60.6 — رد فوري لمباشر الآن قبل أي سحب ====================
+# سببها: في V60.5 رجعنا السحب القديم، لكن بعض أزرار مباشر الآن كانت تدخل على مسار قديم يسحب قبل ما يرد.
+# هنا نثبت المسار: زر مباشر الآن يرد فورًا بقائمة مباريات اليوم، وضغط المباراة يرسل رسالة انتظار فورًا ثم يسحب.
+
+def _v606_live_text_keyboard():
+    try:
+        d = _v29_active_fixture_date() if '_v29_active_fixture_date' in globals() else None
+        text = _v29_live_today_text(d) if '_v29_live_today_text' in globals() else 'اختر مباراة للمتابعة المباشرة:'
+        kb = _v29_live_today_keyboard(d) if '_v29_live_today_keyboard' in globals() else InlineKeyboardMarkup([])
+        return text, kb
+    except Exception as e:
+        return f'📺 مباشر الآن\nتعذر تجهيز قائمة المباريات مؤقتًا.\n{type(e).__name__}: {str(e)[:180]}', InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')]])
+
+
+async def _v606_send_live_menu_from_query(q):
+    text, kb = _v606_live_text_keyboard()
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    try:
+        await q.edit_message_text(text, reply_markup=kb)
+    except Exception:
+        try:
+            await q.message.reply_text(text, reply_markup=kb)
+        except Exception:
+            pass
+
+
+async def _v606_send_live_menu_from_message(message):
+    text, kb = _v606_live_text_keyboard()
+    await message.reply_text(text, reply_markup=kb)
+
+
+async def _v606_send_match_detail(q, mid):
+    try:
+        await q.answer('جاري تجهيز المباراة...')
+    except Exception:
+        pass
+    m = _fixture_by_id(mid) if '_fixture_by_id' in globals() else None
+    if not m:
+        try:
+            await q.message.reply_text('لم أجد المباراة في جدول البطولة.')
+        except Exception:
+            pass
+        return
+    if '_has_unknown' in globals() and _has_unknown(m):
+        try:
+            await q.message.reply_text('أطراف المباراة لم تتحدد بعد.')
+        except Exception:
+            pass
+        return
+    team1, team2 = m.get('team1'), m.get('team2')
+    date_hint = (_v28_espn_date(m.get('date')) if '_v28_espn_date' in globals() else m.get('date'))
+    wait = None
+    try:
+        wait = await q.message.reply_text(f'⏳ أجهز بطاقة {team1} × {team2} من ESPN...')
+    except Exception:
+        pass
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(fetch_live_match_data, team1, team2, 'espn', date_hint), timeout=18)
+    except Exception as e:
+        data = None
+        err = f'{type(e).__name__}: {str(e)[:180]}'
+    else:
+        err = ''
+    if not data:
+        txt = f'تعذر جلب المباراة من ESPN حاليًا ❌\n{team1} × {team2}'
+        if err:
+            txt += f'\n\nالسبب: {err}'
+        try:
+            if wait:
+                await wait.edit_text(txt)
+            else:
+                await q.message.reply_text(txt)
+        except Exception:
+            pass
+        return
+    try:
+        path = render_live_match_card(data, 'ESPN') if 'render_live_match_card' in globals() else None
+        cap = build_live_caption(data, 'ESPN') if 'build_live_caption' in globals() else str(data)
+        if path and 'send_photo_path_markup' in globals():
+            kb = source_keyboard(None, {'kind': 'live', 'team1': team1, 'team2': team2, 'date_hint': date_hint}) if 'source_keyboard' in globals() else None
+            await send_photo_path_markup(q.message, path, cap, kb)
+            try:
+                if wait:
+                    await wait.delete()
+            except Exception:
+                pass
+        else:
+            if wait:
+                await wait.edit_text(cap)
+            else:
+                await q.message.reply_text(cap)
+    except Exception as e:
+        cap = build_live_caption(data, 'ESPN') if 'build_live_caption' in globals() else str(data)
+        txt = f'تم جلب البيانات لكن تعذر تصميم البطاقة ❌\n{type(e).__name__}: {str(e)[:180]}\n\n{cap}'
+        try:
+            if wait:
+                await wait.edit_text(txt)
+            else:
+                await q.message.reply_text(txt)
+        except Exception:
+            pass
+
+
+_V606_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'mainmenu|live':
+        return await _v606_send_live_menu_from_query(q)
+    if data.startswith('livefx|match|'):
+        parts = data.split('|')
+        mid = parts[2] if len(parts) > 2 else ''
+        return await _v606_send_match_detail(q, mid)
+    if data.startswith('v603live|match|'):
+        parts = data.split('|')
+        mid = parts[2] if len(parts) > 2 else ''
+        return await _v606_send_match_detail(q, mid)
+    if data.startswith('livefx|refreshday|'):
+        return await _v606_send_live_menu_from_query(q)
+    if _v605_is_removed_exit_callback(data) if '_v605_is_removed_exit_callback' in globals() else False:
+        return await _v605_removed_exit_reply(q)
+    if callable(_V606_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V606_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+_V606_PREV_LIVE_TODAY_CALLBACK = globals().get('live_today_callback')
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data.startswith('livefx|match|'):
+        parts = data.split('|')
+        mid = parts[2] if len(parts) > 2 else ''
+        return await _v606_send_match_detail(q, mid)
+    if data.startswith('livefx|refreshday|'):
+        return await _v606_send_live_menu_from_query(q)
+    try:
+        await q.answer()
+    except Exception:
+        pass
+
+
+_V606_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _v561_raw_text(update) if '_v561_raw_text' in globals() else str((update.effective_message.text if update.effective_message else '') or '')
+    if str(raw or '').strip() == '📺 مباشر الآن' or 'مباشر الآن' in str(raw or ''):
+        return await _v606_send_live_menu_from_message(update.effective_message)
+    if callable(_V606_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V606_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V606_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _v561_raw_text(update) if '_v561_raw_text' in globals() else str((update.effective_message.text if update.effective_message else '') or '')
+    if str(raw or '').strip() == '📺 مباشر الآن' or 'مباشر الآن' in str(raw or ''):
+        return await _v606_send_live_menu_from_message(update.effective_message)
+    if callable(_V606_PREV_TEXT_STATE_ROUTER):
+        return await _V606_PREV_TEXT_STATE_ROUTER(update, context)
+
+# ==================== END V60.6 ====================
+
 if __name__ == "__main__":
     main()
