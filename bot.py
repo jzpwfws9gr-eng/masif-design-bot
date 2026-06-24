@@ -13765,7 +13765,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/المغادرين(?:\s|$)"), eliminated_list_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/حذف_مغادر(?:\s|$)"), admin_only(eliminated_remove_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مغادر(?:\s|$)"), admin_only(eliminated_add_command)))
-    app.add_handler(CallbackQueryHandler(public_menu_callback, pattern=r"^mainmenu\|"))
+    app.add_handler(CallbackQueryHandler(public_menu_callback, pattern=r"^(?:mainmenu|watch608)\|"))
     app.add_handler(CallbackQueryHandler(public_status_callback, pattern=r"^status\|"))
     app.add_handler(CallbackQueryHandler(status_picker_callback, pattern=r"^spick\|"))
     app.add_handler(CallbackQueryHandler(highlights_callback, pattern=r"^hls\|"))
