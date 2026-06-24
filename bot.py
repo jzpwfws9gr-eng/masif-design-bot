@@ -53758,5 +53758,128 @@ async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V60.3 ====================
 
+
+# ==================== V60.5 — رجوع السحب المباشر القديم من ملف ممتاز ====================
+# اعتماد فهد:
+# - لا نستخدم كاش updater للأزرار الثقيلة.
+# - يرجع السحب عند الضغط مثل ملف ممتاز: مباشر الآن، النتائج، الهدافين، المتأهلين، المغادرين.
+# - updater.py يصبح حالة/نبض فقط حتى لا يعلق في مرحلة 8%.
+# - تبقى إزالة احتمالات المغادرة وسيناريوهات الخروج.
+try:
+    V60_USER_BOT_CACHE_ONLY = False
+except Exception:
+    pass
+
+
+def _v605_is_removed_exit_callback(data):
+    d = str(data or '')
+    return any(x in d for x in ('exit_cached', 'exit_probs', 'exit_prob', 'departure_probs', 'refresh_exit_probs'))
+
+
+async def _v605_removed_exit_reply(q):
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    try:
+        await q.edit_message_text('تم إلغاء قسم سيناريوهات الخروج من هذه النسخة ✅')
+    except Exception:
+        try:
+            await q.message.reply_text('تم إلغاء قسم سيناريوهات الخروج من هذه النسخة ✅')
+        except Exception:
+            pass
+
+
+# رجّع راوتر الأزرار العام للنسخة التي كانت قبل طبقة الكاش V60.
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    data = q.data if q else ''
+    if q and _v605_is_removed_exit_callback(data):
+        return await _v605_removed_exit_reply(q)
+    if callable(globals().get('_V60_PREV_PUBLIC_MENU_CALLBACK')):
+        return await globals()['_V60_PREV_PUBLIC_MENU_CALLBACK'](update, context)
+    if q:
+        try:
+            await q.answer()
+            await q.message.reply_text('القائمة الرئيسية:', reply_markup=_public_main_keyboard())
+        except Exception:
+            pass
+
+
+# رجّع رسائل القائمة العامة للنسخة التي كانت قبل طبقة الكاش V60.
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if callable(globals().get('_V60_PREV_PUBLIC_REPLY_MENU_ROUTER')):
+        return await globals()['_V60_PREV_PUBLIC_REPLY_MENU_ROUTER'](update, context)
+    if callable(globals().get('_V57_PREV_PUBLIC_REPLY_MENU_ROUTER')):
+        return await globals()['_V57_PREV_PUBLIC_REPLY_MENU_ROUTER'](update, context)
+
+
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if callable(globals().get('_V60_PREV_TEXT_STATE_ROUTER')):
+        return await globals()['_V60_PREV_TEXT_STATE_ROUTER'](update, context)
+    if callable(globals().get('_V57_PREV_TEXT_STATE_ROUTER')):
+        return await globals()['_V57_PREV_TEXT_STATE_ROUTER'](update, context)
+
+
+# مباشر الآن يرجع للقديم: يعرض أزرار اليوم، وضغط المباراة يسحب تفاصيلها مباشرة من ESPN مثل ملف ممتاز.
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if callable(globals().get('_V60_PREV_LIVE_TODAY_CALLBACK')):
+        return await globals()['_V60_PREV_LIVE_TODAY_CALLBACK'](update, context)
+    q = update.callback_query
+    if q:
+        try:
+            await q.answer()
+            await q.message.reply_text(_v29_live_today_text(), reply_markup=_v29_live_today_keyboard())
+        except Exception:
+            pass
+
+
+# أمر/زر الهدافين يرجع للسحب القديم المباشر من ESPN، وليس كاش updater.
+async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message or getattr(update, 'message', None)
+    if not msg:
+        return
+    wait = await msg.reply_text('⏳ أسحب هدافين البطولة من ESPN...')
+    try:
+        # نفس منطق ملف ممتاز: طلب ESPN مباشر وقت الضغط مع مهلة حماية للرسالة فقط.
+        try:
+            items = await asyncio.wait_for(asyncio.to_thread(fetch_espn_top_scorers), timeout=45)
+        except TypeError:
+            items = await asyncio.wait_for(asyncio.to_thread(lambda: fetch_espn_top_scorers(True)), timeout=45)
+        path = render_top_scorers_v29(items) if callable(globals().get('render_top_scorers_v29')) else None
+        if path:
+            await send_photo_path(update, path, 'هدافين البطولة ✅\nالمصدر: ESPN Scoring Stats')
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+        else:
+            lines = ['🏆 هدافين البطولة']
+            for i, it in enumerate((items or [])[:20], 1):
+                if isinstance(it, dict):
+                    lines.append(f"{i}. {it.get('name') or '-'} — {it.get('goals') or 0}")
+            await wait.edit_text('\n'.join(lines) if len(lines) > 1 else 'تعذر جلب هدافين البطولة حاليًا.')
+    except Exception as e:
+        await wait.edit_text(f'تعذر جلب هدافين البطولة ❌\n{type(e).__name__}: {str(e)[:250]}')
+
+
+# /حالة_التحديث يوضح أن السحب رجع مباشر عند الضغط، بدل انتظار updater.
+def _v60_status_text():
+    data = _v60_load_cache() if callable(globals().get('_v60_load_cache')) else {}
+    st = data.get('status') if isinstance(data.get('status'), dict) else {}
+    last = st.get('last_success') or '-'
+    return '\n'.join([
+        '⏱️ حالة تحديث البوت', '',
+        'الحالة: ready',
+        'النسبة التقريبية: 100%',
+        'المرحلة الحالية: السحب المباشر القديم مفعل عند الضغط',
+        f'آخر نبض للخدمة: {last}',
+        '',
+        '📌 مباشر الآن / النتائج / الهدافين / المتأهلين / المغادرين',
+        'تعمل بطريقة ملف ممتاز: الزر يسحب من المصدر مباشرة عند الطلب.',
+    ]).strip()
+
+# ==================== END V60.5 ====================
+
 if __name__ == "__main__":
     main()
