@@ -52671,5 +52671,257 @@ async def v63_goal_alerts_job(context):
 
 # ==================== END V67 MATCH ALERTS AUTO + EVENTS PATCH ====================
 
+
+# ==================== V68 STRICT SLOT SOURCE PATCH — FAHAD ====================
+# اعتماد فهد:
+# - دور الـ32 لا يأخذ الاسم من "قائمة المتأهلين" فقط.
+# - يثبت الاسم فقط من حسبة مركز رسمية 100٪: أول / ثاني / أفضل ثالث مع مسار محدد.
+# - أثناء وجود مباراة مباشرة في نفس المجموعة لا نعتمد المركز كرسمي من جدول live؛ ننتظر النهاية أو ضمان رياضي مستقل.
+# - لا نعتبر المجموعة مكتملة إذا فيها مباراة مباشرة أو مجدولة، حتى لو remaining صار 0 في snapshot.
+
+V68_GROUP_STATE_CACHE = {}
+
+
+def _v68_group_code_from_fixture(m):
+    try:
+        g = str((m or {}).get('group') or '')
+        for code in list('ABCDEFGHIJKL'):
+            ar = _v33_group_ar(code) if '_v33_group_ar' in globals() else code
+            if ar and ar in g:
+                return code
+    except Exception:
+        pass
+    return ''
+
+
+def _v68_group_fixtures(code):
+    out = []
+    try:
+        for m in (globals().get('TOURNAMENT_FIXTURES') or []):
+            if str((m or {}).get('stage') or '') != 'دور المجموعات':
+                continue
+            if _v68_group_code_from_fixture(m) == str(code or '').upper():
+                out.append(m)
+    except Exception:
+        pass
+    return out
+
+
+def _v68_fixture_bucket(m, force=False):
+    """يعيد complete/live/scheduled بشكل محافظ."""
+    try:
+        obj = _v32_result_for_fixture(m, force=force) if '_v32_result_for_fixture' in globals() else None
+        if isinstance(obj, dict):
+            if obj.get('_v40_bucket'):
+                return str(obj.get('_v40_bucket'))
+            if '_v40_match_bucket' in globals():
+                return _v40_match_bucket(obj, m)
+            st = str(obj.get('status') or obj.get('minute') or '').lower()
+            if any(x in st for x in ('final', 'انته', 'نهاية المباراة', 'full')):
+                return 'complete'
+            if any(x in st for x in ('live', 'مباشر', "'", 'الشوط')):
+                return 'live'
+            if '_patch6_numeric_score' in globals() and _patch6_numeric_score(obj):
+                # لو فيه نتيجة رقمية بدون حالة نهائية، لا نجزم أنها مكتملة.
+                return 'live' if st else 'scheduled'
+    except Exception:
+        pass
+    return 'scheduled'
+
+
+def _v68_group_state(code, force=False):
+    try:
+        key = str(code or '').upper()
+        now = time.time() if 'time' in globals() else 0
+        cached = V68_GROUP_STATE_CACHE.get(key)
+        if (not force) and isinstance(cached, dict) and now - float(cached.get('ts') or 0) < 25:
+            return dict(cached)
+        buckets = []
+        for m in _v68_group_fixtures(key):
+            buckets.append(_v68_fixture_bucket(m, force=force))
+        data = {
+            'buckets': buckets,
+            'has_live': any(b == 'live' for b in buckets),
+            'has_scheduled': any(b == 'scheduled' for b in buckets),
+            'all_complete': bool(buckets) and all(b == 'complete' for b in buckets),
+        }
+        V68_GROUP_STATE_CACHE[key] = dict(data, ts=now)
+        return data
+    except Exception:
+        return {'buckets': [], 'has_live': False, 'has_scheduled': True, 'all_complete': False}
+
+
+# المجموعة لا تعتبر مكتملة إلا إذا كل مبارياتها نهائية فعلًا.
+def _v66_group_complete(code, rows=None, snap=None):
+    try:
+        st = _v68_group_state(code, force=False)
+        if st.get('all_complete'):
+            return True
+        if st.get('has_live') or st.get('has_scheduled'):
+            return False
+    except Exception:
+        pass
+    try:
+        rows = rows or _v61_group_rows(code, snap)
+        return bool(rows) and all(_v66_row_played(r) >= 3 for r in rows[:4])
+    except Exception:
+        return False
+
+
+def _v68_final_group_results(code, snap=None):
+    """نتائج المواجهات المباشرة الرسمية فقط؛ لا تدخل المباراة المباشرة في تثبيت المركز."""
+    res = []
+    try:
+        for m in _v68_group_fixtures(code):
+            if _v68_fixture_bucket(m, force=False) != 'complete':
+                continue
+            obj = _v32_result_for_fixture(m, force=False) if '_v32_result_for_fixture' in globals() else None
+            if not isinstance(obj, dict):
+                continue
+            if '_patch6_numeric_score' in globals() and not _patch6_numeric_score(obj):
+                continue
+            t1 = canonical_team_name((m or {}).get('team1')) if 'canonical_team_name' in globals() else (m or {}).get('team1')
+            t2 = canonical_team_name((m or {}).get('team2')) if 'canonical_team_name' in globals() else (m or {}).get('team2')
+            try:
+                s1 = int(obj.get('score1') if obj.get('score1') is not None else obj.get('home_score'))
+                s2 = int(obj.get('score2') if obj.get('score2') is not None else obj.get('away_score'))
+            except Exception:
+                try:
+                    s1 = int(obj.get('score1') or 0); s2 = int(obj.get('score2') or 0)
+                except Exception:
+                    continue
+            if t1 and t2:
+                res.append({'team1': t1, 'team2': t2, 'score1': s1, 'score2': s2})
+    except Exception:
+        pass
+    if res:
+        return res
+    # fallback: لو ما قدرنا نقرأ fixtures، نستخدم النتائج القديمة فقط عند عدم وجود live في المجموعة.
+    try:
+        if not _v68_group_state(code, False).get('has_live'):
+            return _v62_group_results(code, snap) if '_v62_group_results' in globals() else []
+    except Exception:
+        pass
+    return []
+
+
+# حماية إضافية: لا نثبت الأول/الثاني إذا في المجموعة مباراة مباشرة، حتى لا نأخذ جدول live كأنه نهائي.
+def _v66_guaranteed_first(team, code, rows, snap=None):
+    try:
+        if _v68_group_state(code, False).get('has_live'):
+            return False
+        rows = rows or _v61_group_rows(code, snap)
+        code, pos, row, rows2 = _v33_group_row(team, snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {}))
+        rows = rows2 or rows
+        if not row:
+            return False
+        if _v66_group_complete(code, rows, snap):
+            return int(pos or 0) == 1
+        if int(pos or 0) != 1:
+            return False
+        pts = _v66_row_pts(row)
+        results = _v68_final_group_results(code, snap)
+        possible_ties = []
+        for other in rows or []:
+            ot = (other or {}).get('team')
+            if not ot or ot == team:
+                continue
+            mx = _v66_max_pts(other)
+            if mx > pts:
+                return False
+            if mx == pts:
+                possible_ties.append(ot)
+        for subset in _v66_subsets(possible_ties):
+            if not _v66_team_leads_h2h_set(team, subset, results):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _v66_guaranteed_second(team, code, rows, snap=None):
+    try:
+        if _v68_group_state(code, False).get('has_live'):
+            return False
+        rows = rows or _v61_group_rows(code, snap)
+        code, pos, row, rows2 = _v33_group_row(team, snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {}))
+        rows = rows2 or rows
+        if not row:
+            return False
+        if _v66_group_complete(code, rows, snap):
+            return int(pos or 0) == 2
+        if int(pos or 0) != 2:
+            return False
+        first_team = (rows[0] or {}).get('team') if rows else ''
+        if not first_team or first_team == team or not _v66_guaranteed_first(first_team, code, rows, snap):
+            return False
+        pts = _v66_row_pts(row)
+        results = _v68_final_group_results(code, snap)
+        possible_ties = []
+        for other in rows or []:
+            ot = (other or {}).get('team')
+            if not ot or ot in (team, first_team):
+                continue
+            mx = _v66_max_pts(other)
+            if mx > pts:
+                return False
+            if mx == pts:
+                possible_ties.append(ot)
+        for subset in _v66_subsets(possible_ties):
+            if not _v66_team_leads_h2h_set(team, subset, results):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+# مصدر دور الـ32: لا يعتمد على مجرد التأهل، بل على هذا الوسم فقط.
+def _v68_official_slot_rank(team, snap=None):
+    try:
+        snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+        code, pos, row, rows = _v33_group_row(team, snap)
+        if not row:
+            return ''
+        if int(pos or 0) == 1 and _v66_guaranteed_first(team, code, rows, snap):
+            return 'الأول'
+        if int(pos or 0) == 2 and _v66_guaranteed_second(team, code, rows, snap):
+            return 'الثاني'
+        if int(pos or 0) == 3 and _v61_is_official_best_third(team, row, snap):
+            # أفضل ثالث مؤهل، لكن تثبيت المباراة نفسها يحتاج قفل مسارات الثوالث.
+            return 'أفضل ثالث'
+    except Exception:
+        pass
+    return ''
+
+
+def _v61_rank_label_for_team(team, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    try:
+        return _v68_official_slot_rank(team, snap) or 'لم يُحسم بعد'
+    except Exception:
+        return 'لم يُحسم بعد'
+
+
+def _v61_resolve_pos_slot(code, pos, snap):
+    rows = _v61_group_rows(code, snap)
+    team = ''
+    try:
+        team = (rows[int(pos)-1] or {}).get('team') or ''
+    except Exception:
+        team = ''
+    expected = 'الأول' if int(pos) == 1 else 'الثاني'
+    try:
+        official_rank = _v68_official_slot_rank(team, snap)
+        confirmed = bool(team and _v61_is_official_qualified(team, snap) and official_rank == expected)
+    except Exception:
+        confirmed = False
+    return {
+        'kind': 'pos', 'code': code, 'pos': int(pos), 'phrase': _v61_pos_phrase(code, pos),
+        'team': team if confirmed else '', 'predicted': team or '', 'confirmed': confirmed,
+        'status': '✅ متأهل رسميًا' if confirmed else '',
+    }
+
+# ==================== END V68 STRICT SLOT SOURCE PATCH ====================
+
 if __name__ == "__main__":
     main()
