@@ -13785,6 +13785,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:منتخبي|منتخبي_المفضل)(?:\s|$)"), v32_favorite_team_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:جدول_مختصر|جدول_اليوم_مختصر)(?:\s|$)"), v32_short_today_command))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:ادارة|إدارة)(?:\s|$)"), admin_only(v32_admin_panel_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:هدافين_يدوي|تحديث_هدافين_يدوي|اضافة_هدافين_يدوي|إضافة_هدافين_يدوي)(?:\s|$)"), admin_only(v61_manual_scorers_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اذاعة|إذاعة)(?:\s|$)"), admin_only(v32_broadcast_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:مركز_التنبيهات|مركز_تنبيهات)(?:\s|$)"), admin_only(v32_alert_center_command)))
     app.add_handler(CallbackQueryHandler(v32_callback, pattern=r"^v32\|"))
@@ -49469,6 +49470,758 @@ async def fantasy_menu_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return await _V608_PREV_FANTASY_MENU_CALLBACK(update, context)
 
 # ==================== END V60.8 SAFE ALL-IN-ONE PATCH — FAHAD ====================
+
+
+
+# ==================== V61 FAHAD FINAL AGREEMENTS PATCH ====================
+# تعديلات معتمدة بدون لمس باقي البوت:
+# - أفضل الثوالث بصيغته النهائية.
+# - المتأهلون رسميًا بتفاصيل تحت المنتخب.
+# - زر مباريات دور الـ32 في القائمة الرئيسية ويعرض كل الـ16 مباراة.
+# - الهدافين: وضع تلقائي/يدوي من لوحة الدعم فقط.
+# - احتمالات المركز الثالث مرتبة.
+
+# ---------- أدوات V61 ----------
+def _v61_safe_int(x, default=0):
+    try:
+        return int(float(str(x).strip()))
+    except Exception:
+        return default
+
+
+def _v61_signed(x):
+    try:
+        return f"{int(float(str(x).strip())):+d}"
+    except Exception:
+        s = str(x or '').strip()
+        return s if s else '+0'
+
+
+def _v61_group_letters(codes):
+    out = []
+    for c in list(codes or []):
+        try:
+            out.append(_v33_group_ar(str(c).upper()))
+        except Exception:
+            out.append(str(c).upper())
+    return '/'.join(out)
+
+
+def _v61_group_label_short(code):
+    try:
+        return _v33_group_label(code)
+    except Exception:
+        return f"المجموعة {code}"
+
+
+def _v61_status_text(team, snap=None):
+    try:
+        snap = snap or _v33_snapshot(False)
+        return str((snap.get('status') or {}).get(team, '') or '')
+    except Exception:
+        return ''
+
+
+def _v61_is_official_qualified(team, snap=None):
+    st = _v61_status_text(team, snap)
+    return (('متأهل' in st and 'رسمي' in st) or ('ضمن رسمي' in st))
+
+
+def _v61_is_official_best_third(team, row=None, snap=None):
+    st = _v61_status_text(team, snap)
+    try:
+        st += ' ' + str((row or {}).get('third_status') or '')
+    except Exception:
+        pass
+    return ('أفضل ثالث' in st or 'أفضل الثوالث' in st or 'كأفضل ثالث' in st) and ('رسمي' in st or 'ضمن' in st or 'متأهل' in st)
+
+
+def _v61_now_text(snap=None):
+    try:
+        return str((snap or {}).get('updated_at') or _now_riyadh_text())
+    except Exception:
+        try:
+            return _now_riyadh_text()
+        except Exception:
+            return '-'
+
+
+def _v61_date_line(m):
+    day = str((m or {}).get('day') or '').strip()
+    date = str((m or {}).get('date') or '').strip()
+    time_s = str((m or {}).get('time') or '').strip()
+    # بدون كلمة الموعد حسب الاعتماد.
+    left = ' '.join([x for x in [day, date[:5] if date else ''] if x]).strip()
+    return f"🗓️ {left} — {time_s}".strip(' —')
+
+
+# ---------- أفضل الثوالث — الصيغة المعتمدة ----------
+def _v32_best_thirds_text(force=False):
+    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
+    thirds = list((snap or {}).get('thirds') or [])
+    lines = [
+        '🥉 أفضل الثوالث الآن',
+        '',
+        'النظام: يتأهل أفضل 8 منتخبات أصحاب المركز الثالث من أصل 12 مجموعة.',
+        'يعني كل ثالث مجموعة لا ينافس مجموعته فقط، بل ينافس بقية ثوالث المجموعات على 8 مقاعد فقط.',
+        '',
+        '━━━━━━━━━━━━━━━',
+        f"آخر تحديث: {_v61_now_text(snap)}",
+        '',
+    ]
+    if not thirds:
+        lines.append('لا توجد بيانات كافية حتى الآن.')
+        return '\n'.join(lines).strip()
+
+    inside = thirds[:8]
+    outside = thirds[8:]
+    official_count = 0
+    for r in inside:
+        if _v61_is_official_best_third(r.get('team') or '', r, snap):
+            official_count += 1
+    lines.append(f'✅ داخل أفضل الثوالث حاليًا: {len(inside)}/8')
+    lines.append(f'🏁 ضمن التأهل رسميًا كأفضل ثالث: {official_count}/8')
+    lines.append('')
+
+    lines.append('✅ داخلين حاليًا:')
+    lines.append('')
+    for i, r in enumerate(inside, start=1):
+        team = r.get('team') or '-'
+        g = r.get('group') or ''
+        pts = _v61_safe_int(r.get('Pts', r.get('points', 0)))
+        played = _v61_safe_int(r.get('P', r.get('played', 0)))
+        gd = _v61_signed(r.get('GD', r.get('gd', 0)))
+        gf = _v61_safe_int(r.get('GF', r.get('gf', 0)))
+        state = '🏁 ضمن التأهل رسميًا كأفضل ثالث' if _v61_is_official_best_third(team, r, snap) else '✅ داخل أفضل الثوالث حاليًا'
+        lines.append(f'{i}. {team} — {_v61_group_label_short(g)}')
+        lines.append(f'   النقاط: {pts} | لعب: {played}/3 | الفارق: {gd} | الأهداف: {gf}')
+        lines.append(f'   الحالة: {state}')
+        lines.append('')
+
+    lines.append('❌ خارجين حاليًا:')
+    if not outside:
+        lines.append('لا يوجد خارجون حاليًا.')
+    for i, r in enumerate(outside, start=9):
+        team = r.get('team') or '-'
+        g = r.get('group') or ''
+        pts = _v61_safe_int(r.get('Pts', r.get('points', 0)))
+        played = _v61_safe_int(r.get('P', r.get('played', 0)))
+        gd = _v61_signed(r.get('GD', r.get('gd', 0)))
+        gf = _v61_safe_int(r.get('GF', r.get('gf', 0)))
+        lines.append(f'{i}. {team} — {_v61_group_label_short(g)}')
+        lines.append(f'   النقاط: {pts} | لعب: {played}/3 | الفارق: {gd} | الأهداف: {gf}')
+        lines.append('   الحالة: ❌ خارج أفضل الثوالث حاليًا')
+        lines.append('')
+
+    lines += [
+        '━━━━━━━━━━━━━━━',
+        '✅ الدخول الحالي لا يعني التأهل الرسمي، لأن الترتيب قد يتغير بعد نتائج بقية المجموعات.',
+        '',
+        'إذا ضمن منتخب التأهل حسابيًا كأفضل ثالث، تظهر حالته:',
+        '🏁 ضمن التأهل رسميًا كأفضل ثالث',
+        '',
+        'أفضل 8 ثوالث من أصل 12 يتأهلون لدور الـ32، والخصم يتحدد حسب جدول FIFA الرسمي لتوزيع أفضل الثوالث.',
+    ]
+    return '\n'.join(lines).strip()
+
+
+# ---------- المتأهلون رسميًا — التفاصيل تحت المنتخب ----------
+def _v61_rank_label_for_team(team, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    try:
+        code, pos, row, rows = _v33_group_row(team, snap)
+        # إذا المجموعة مكتملة يكون المركز نهائيًا.
+        g = ((snap.get('groups') or {}).get(code) or {})
+        complete = bool(g.get('remaining') == 0 or all(_v61_safe_int((rr or {}).get('P')) >= 3 for rr in (rows or [])[:4]))
+        if complete and pos:
+            return {1:'الأول', 2:'الثاني', 3:'الثالث', 4:'الرابع'}.get(int(pos), str(pos))
+        # إذا الحالة أفضل ثالث رسمي.
+        if _v61_is_official_best_third(team, None, snap):
+            return 'أفضل ثالث'
+        # نعرض المركز الحالي فقط إذا كان منصوصًا عليه ضمن نصوص قديمة، وإلا نحافظ على الدقة.
+        st = _v61_status_text(team, snap)
+        if 'المركز الأول' in st or 'الأول' in st:
+            return 'الأول'
+        if 'المركز الثاني' in st or 'الثاني' in st:
+            return 'الثاني'
+    except Exception:
+        pass
+    return 'لم يُحسم بعد'
+
+
+def _v61_qualified_text(force=False):
+    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else {}
+    try:
+        teams = list(_v32_calculated_qualified() or [])
+    except Exception:
+        teams = list((snap or {}).get('qualified') or [])
+    lines = ['✅ المتأهلون رسميًا لدور الـ32', '']
+    if not teams:
+        lines.append('لا يوجد حتى الآن.')
+    for i, team in enumerate(teams, start=1):
+        best_third = _v61_is_official_best_third(team, None, snap)
+        status_line = '✅ تأهل رسميًا كأفضل ثالث' if best_third else '✅ تأهل رسميًا'
+        lines.append(f'{i}. {team}')
+        lines.append(f'   {status_line}')
+        lines.append(f'   📌 المركز: {_v61_rank_label_for_team(team, snap)}')
+        lines.append('')
+    lines.append('━━━━━━━━━━━━━━━')
+    lines.append('✅ هذه القائمة تعرض فقط المنتخبات التي ضمنت التأهل حسابيًا.')
+    return '\n'.join(lines).strip()
+
+
+# ---------- دور الـ32 — يظهر دائمًا ويعرض كل الـ16 ----------
+def _v33_round32_has_official_match(snap=None):
+    return True
+
+
+V61_R32_SLOTS = [
+    ('R32-1',  ('pos','A',2), ('pos','B',2)),
+    ('R32-2',  ('pos','C',1), ('pos','F',2)),
+    ('R32-3',  ('pos','E',1), ('third','ABCDF')),
+    ('R32-4',  ('pos','F',1), ('pos','C',2)),
+    ('R32-5',  ('pos','E',2), ('pos','I',2)),
+    ('R32-6',  ('pos','I',1), ('third','CDFGH')),
+    ('R32-7',  ('pos','A',1), ('third','CEFHI')),
+    ('R32-8',  ('pos','L',1), ('third','EHIJK')),
+    ('R32-9',  ('pos','G',1), ('third','AEHIJ')),
+    ('R32-10', ('pos','D',1), ('third','BEFIJ')),
+    ('R32-11', ('pos','H',1), ('pos','J',2)),
+    ('R32-12', ('pos','K',2), ('pos','L',2)),
+    ('R32-13', ('pos','B',1), ('third','EFGIJ')),
+    ('R32-14', ('pos','D',2), ('pos','G',2)),
+    ('R32-15', ('pos','J',1), ('pos','H',2)),
+    ('R32-16', ('pos','K',1), ('third','DEIJL')),
+]
+
+
+def _v61_r32_fixture(mid):
+    for m in (globals().get('TOURNAMENT_FIXTURES') or []):
+        if str(m.get('id') or '') == mid:
+            return m
+    return {'id': mid, 'day': '', 'date': '', 'time': '', 'stage': 'دور الـ32'}
+
+
+def _v61_group_rows(code, snap):
+    try:
+        return (((snap.get('groups') or {}).get(code) or {}).get('rows') or [])
+    except Exception:
+        return []
+
+
+def _v61_pos_phrase(code, pos):
+    ar = _v33_group_ar(code) if '_v33_group_ar' in globals() else code
+    return ('أول' if int(pos) == 1 else 'ثاني') + f' المجموعة {ar}'
+
+
+def _v61_resolve_pos_slot(code, pos, snap):
+    rows = _v61_group_rows(code, snap)
+    team = ''
+    try:
+        team = (rows[int(pos)-1] or {}).get('team') or ''
+    except Exception:
+        team = ''
+    confirmed = bool(team and _v61_is_official_qualified(team, snap))
+    return {
+        'kind': 'pos', 'code': code, 'pos': int(pos), 'phrase': _v61_pos_phrase(code, pos),
+        'team': team if confirmed else '', 'predicted': team or '', 'confirmed': confirmed,
+        'status': '✅ متأهلة رسميًا' if confirmed else '',
+    }
+
+
+def _v61_third_assignment(snap):
+    try:
+        groups = [r.get('group') for r in (snap.get('thirds') or [])[:8] if r.get('group')]
+        if len(groups) >= 8 and '_v33_assign_thirds_to_slots' in globals():
+            # ترجع group_third -> winner_slot. نقلبها إلى winner_slot -> third_group.
+            mp = _v33_assign_thirds_to_slots(groups) or {}
+            return {v: k for k, v in mp.items() if v and k}
+    except Exception:
+        pass
+    return {}
+
+
+def _v61_resolve_third_slot(candidates, snap):
+    cand = ''.join([c for c in str(candidates or '').upper() if c.isalpha()])
+    slot_to_third = _v61_third_assignment(snap)
+    # نحدد خانة الفائز من مفاتيح المرشحين، إن وجدت في الخريطة المعتمدة.
+    winner_slot = ''
+    try:
+        for k, vals in (globals().get('V33_THIRD_SLOT_CANDIDATES') or {}).items():
+            if ''.join(vals) == cand:
+                winner_slot = k
+                break
+    except Exception:
+        pass
+    third_group = slot_to_third.get(winner_slot) if winner_slot else ''
+    third_row = _v33_third_row_for_group(third_group, snap) if third_group and '_v33_third_row_for_group' in globals() else None
+    team = (third_row or {}).get('team') or ''
+    confirmed = bool(team and _v61_is_official_best_third(team, third_row, snap))
+    return {
+        'kind': 'third', 'candidates': cand, 'phrase': f"أفضل ثالث من {_v61_group_letters(cand)}",
+        'team': team if confirmed else '', 'predicted': team or '', 'confirmed': confirmed,
+        'status': '✅ متأهلة رسميًا كأفضل ثالث' if confirmed else '',
+    }
+
+
+def _v61_resolve_slot(slot, snap):
+    if slot[0] == 'pos':
+        return _v61_resolve_pos_slot(slot[1], slot[2], snap)
+    return _v61_resolve_third_slot(slot[1], snap)
+
+
+def _v61_r32_rows(force=False):
+    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else {}
+    rows = []
+    for idx, (mid, s1, s2) in enumerate(V61_R32_SLOTS, start=1):
+        m = _v61_r32_fixture(mid)
+        a = _v61_resolve_slot(s1, snap)
+        b = _v61_resolve_slot(s2, snap)
+        complete = bool(a.get('confirmed') and b.get('confirmed'))
+        one_side = bool(a.get('confirmed') ^ b.get('confirmed'))
+        if complete:
+            group = 'complete'
+        elif one_side:
+            group = 'one'
+        else:
+            group = 'none'
+        rows.append({'idx': idx, 'fixture': m, 'a': a, 'b': b, 'group': group})
+    return rows
+
+
+def _v61_r32_main_line(r):
+    a, b = r['a'], r['b']
+    if r['group'] == 'complete':
+        return f"{r['idx']}. {a.get('team')} × {b.get('team')}"
+    if r['group'] == 'one':
+        team = a.get('team') if a.get('confirmed') else b.get('team')
+        return f"{r['idx']}. {team} × لم يتحدد"
+    return f"{r['idx']}. {a.get('phrase')} × {b.get('phrase')}"
+
+
+def _v61_r32_row_lines(r):
+    a, b, m = r['a'], r['b'], r['fixture']
+    lines = [_v61_r32_main_line(r)]
+    if r['group'] == 'complete':
+        lines.append(f"   {a.get('status') or '✅ متأهلة رسميًا'}: {a.get('team')}") if False else None
+        lines.append(f"   ✅ {a.get('team')}: {'متأهلة رسميًا كأفضل ثالث' if a.get('kind') == 'third' else 'متأهلة رسميًا'}")
+        lines.append(f"   ✅ {b.get('team')}: {'متأهلة رسميًا كأفضل ثالث' if b.get('kind') == 'third' else 'متأهلة رسميًا'}")
+    elif r['group'] == 'one':
+        confirmed = a if a.get('confirmed') else b
+        waiting = b if a.get('confirmed') else a
+        lines.append(f"   ✅ {confirmed.get('team')}: {'متأهلة رسميًا كأفضل ثالث' if confirmed.get('kind') == 'third' else 'متأهلة رسميًا'}")
+        lines.append(f"   ⏳ {waiting.get('phrase')}")
+        if waiting.get('predicted'):
+            lines.append(f"   🔎 المتوقع حاليًا: {waiting.get('predicted')}")
+    # إذا لم يتحدد أي طرف، نكتفي بسطر الخانة + التاريخ.
+    dl = _v61_date_line(m)
+    if dl:
+        lines.append(f"   {dl}")
+    return lines
+
+
+def _v33_round32_text(force=False):
+    rows = _v61_r32_rows(force)
+    complete = [r for r in rows if r['group'] == 'complete']
+    one = [r for r in rows if r['group'] == 'one']
+    none = [r for r in rows if r['group'] == 'none']
+    lines = ['🏟️ مباريات دور الـ32', '', f'✅ مواجهات اكتمل طرفاها: {len(complete)}/16']
+    if complete:
+        lines += ['', '━━━━━━━━━━━━━━━', '✅ المواجهات المؤكدة رسميًا:', '']
+        for r in complete:
+            lines.extend(_v61_r32_row_lines(r)); lines.append('')
+    if one:
+        lines += ['━━━━━━━━━━━━━━━', '🟡 المواجهات التي اكتمل أحد طرفيها:', '']
+        for r in one:
+            lines.extend(_v61_r32_row_lines(r)); lines.append('')
+    if none:
+        lines += ['━━━━━━━━━━━━━━━', '⚪ مواجهات لم تتحدد بعد:', '']
+        for r in none:
+            lines.extend(_v61_r32_row_lines(r)); lines.append('')
+    return '\n'.join(lines).strip()
+
+
+def _v32_board_keyboard():
+    rows = [
+        [InlineKeyboardButton('🏁 سباق التأهل', callback_data='v32|race')],
+        [InlineKeyboardButton('🥉 أفضل الثوالث', callback_data='v32|thirds'), InlineKeyboardButton('🔥 مباريات الحسم', callback_data='v32|decisive')],
+        [InlineKeyboardButton('✅ المتأهلون', callback_data='v32|qualified'), InlineKeyboardButton('❌ المغادرون', callback_data='v32|eliminated')],
+        [InlineKeyboardButton('🏟️ مباريات دور الـ32', callback_data='v32|r32')],
+        [InlineKeyboardButton('📊 ترتيب المجموعات', callback_data='mainmenu|groups')],
+        [InlineKeyboardButton('🔄 تحديث الآن', callback_data='v32|board_force'), InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+# القائمة الرئيسية: زر دور الـ32 ظاهر دائمًا.
+_V61_PREV_PUBLIC_MAIN_KEYBOARD = globals().get('_public_main_keyboard')
+def _public_main_keyboard():
+    try:
+        kb = _V61_PREV_PUBLIC_MAIN_KEYBOARD() if callable(_V61_PREV_PUBLIC_MAIN_KEYBOARD) else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    # إزالة النسخ القديمة من زر دور الـ32 ثم إضافة الاسم المعتمد.
+    clean = []
+    for row in rows:
+        nr = []
+        for btn in row:
+            t = str(getattr(btn, 'text', '') or '')
+            d = str(getattr(btn, 'callback_data', '') or '')
+            if 'دور الـ32' in t or 'دور 32' in t or d == 'v32|r32' or d == 'mainmenu|r32':
+                continue
+            nr.append(btn)
+        if nr:
+            clean.append(nr)
+    insert_at = 3 if len(clean) >= 3 else len(clean)
+    clean.insert(insert_at, [InlineKeyboardButton('🏟️ مباريات دور الـ32', callback_data='v32|r32')])
+    return InlineKeyboardMarkup(clean)
+
+
+_V61_PREV_PUBLIC_REPLY_KEYBOARD = globals().get('_public_main_reply_keyboard')
+def _public_main_reply_keyboard():
+    try:
+        kb = _V61_PREV_PUBLIC_REPLY_KEYBOARD() if callable(_V61_PREV_PUBLIC_REPLY_KEYBOARD) else ReplyKeyboardMarkup([[]])
+        rows = [list(r) for r in (getattr(kb, 'keyboard', None) or [])]
+    except Exception:
+        rows = []
+    # PTB قد يخزن KeyboardButton أو نصوص؛ نحافظ على النصوص.
+    out = []
+    exists = False
+    for row in rows:
+        nr = []
+        for btn in row:
+            txt = str(getattr(btn, 'text', btn) or '')
+            if txt == '🏟️ مباريات دور الـ32':
+                exists = True
+            # نحذف "مواجهات" القديمة لو وجدت.
+            if 'مواجهات دور الـ32' in txt:
+                continue
+            nr.append(btn)
+        if nr:
+            out.append(nr)
+    if not exists:
+        idx = 3 if len(out) >= 3 else len(out)
+        out.insert(idx, ['🏟️ مباريات دور الـ32'])
+    return ReplyKeyboardMarkup(out, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder='اختر من القائمة')
+
+
+# ---------- الهدافين: تلقائي/يدوي داخل الدعم ----------
+V61_TOP_SCORERS_MODE_FILE = 'top_scorers_mode_state.json'
+
+
+def _v61_load_scorers_mode():
+    try:
+        return _v33_safe_load_json(V61_TOP_SCORERS_MODE_FILE, {'mode': 'auto', 'manual_items': [], 'updated_at': ''})
+    except Exception:
+        if os.path.exists(V61_TOP_SCORERS_MODE_FILE):
+            try:
+                with open(V61_TOP_SCORERS_MODE_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {'mode': 'auto', 'manual_items': [], 'updated_at': ''}
+
+
+def _v61_save_scorers_mode(data):
+    data = data or {}
+    data.setdefault('mode', 'auto')
+    data.setdefault('manual_items', [])
+    data.setdefault('updated_at', '')
+    try:
+        return _v33_safe_save_json(V61_TOP_SCORERS_MODE_FILE, data)
+    except Exception:
+        with open(V61_TOP_SCORERS_MODE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _v61_parse_manual_scorers(text):
+    body = str(text or '')
+    body = re.sub(r'^/(?:تحديث_هدافين_يدوي|هدافين_يدوي|اضافة_هدافين_يدوي|إضافة_هدافين_يدوي)\s*', '', body, flags=re.I).strip()
+    items = []
+    for line in body.splitlines():
+        line = normalize_name(line)
+        if not line or line.startswith('/'):
+            continue
+        # يدعم: مبابي 5 فرنسا | مبابي|فرنسا|5 | مبابي - فرنسا - 5
+        parts = [p.strip() for p in re.split(r'[|،,\-–—]+', line) if p.strip()]
+        name = team = ''
+        goals = None
+        if len(parts) >= 3:
+            # نبحث عن الرقم أينما وجد.
+            for p in parts:
+                if re.fullmatch(r'\d{1,2}', p):
+                    goals = int(p); break
+            non = [p for p in parts if not re.fullmatch(r'\d{1,2}', p)]
+            if non:
+                name = non[0]
+            if len(non) >= 2:
+                team = canonical_team_name(non[1]) or non[1]
+        else:
+            m = re.match(r'(.+?)\s+(\d{1,2})(?:\s+(.+))?$', line)
+            if m:
+                name = normalize_name(m.group(1)); goals = int(m.group(2)); team = canonical_team_name(m.group(3) or '') or normalize_name(m.group(3) or '')
+        if name and goals is not None:
+            items.append({'name': name, 'team': team or '-', 'played': '', 'goals': goals})
+    items.sort(key=lambda x: (-int(x.get('goals') or 0), str(x.get('name') or '')))
+    return items
+
+
+def _v61_scorers_mode_text():
+    data = _v61_load_scorers_mode()
+    mode = data.get('mode') or 'auto'
+    label = 'تلقائي' if mode == 'auto' else 'يدوي'
+    lines = ['🏆 الهدافين', f'الحالة الحالية: {label}', '']
+    if mode == 'auto':
+        lines.append('البوت يأخذ الهدافين من المصدر الرئيسي.')
+    else:
+        lines.append('البوت يعرض الهدافين اليدويين كاحتياط مؤقت.')
+        items = data.get('manual_items') or []
+        if items:
+            lines.append('')
+            lines.append('القائمة اليدوية الحالية:')
+            for i, it in enumerate(items[:15], start=1):
+                lines.append(f"{i}. {it.get('name')} — {it.get('team','-')} — {it.get('goals',0)}")
+    lines.append('')
+    lines.append('للتحديث اليدوي أرسل:')
+    lines.append('/هدافين_يدوي')
+    lines.append('مبابي 5 فرنسا')
+    lines.append('ميسي 4 الأرجنتين')
+    return '\n'.join(lines).strip()
+
+
+def _v61_scorers_mode_keyboard():
+    data = _v61_load_scorers_mode(); mode = data.get('mode') or 'auto'
+    toggle = '🔁 تحويل إلى يدوي' if mode == 'auto' else '🔁 رجوع للتلقائي'
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(toggle, callback_data='v32adm|scorers_toggle')],
+        [InlineKeyboardButton('🧹 مسح الهدافين اليدوي', callback_data='v32adm|scorers_manual_clear')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='v32adm|panel')],
+    ])
+
+
+_V61_PREV_ADMIN_KEYBOARD = globals().get('_v38e_admin_keyboard')
+def _v38e_admin_keyboard():
+    try:
+        kb = _V61_PREV_ADMIN_KEYBOARD() if callable(_V61_PREV_ADMIN_KEYBOARD) else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    exists = any(str(getattr(btn, 'callback_data', '') or '') == 'v32adm|scorers_mode' for row in rows for btn in row)
+    if not exists:
+        data = _v61_load_scorers_mode(); mode = 'تلقائي' if (data.get('mode') or 'auto') == 'auto' else 'يدوي'
+        rows.append([InlineKeyboardButton(f'🏆 وضع الهدافين: {mode}', callback_data='v32adm|scorers_mode')])
+    return InlineKeyboardMarkup(rows)
+
+
+_V61_PREV_SEND_TOP_SCORERS = globals().get('_v41_send_working_top_scorers')
+async def _v41_send_working_top_scorers(message):
+    data = _v61_load_scorers_mode()
+    if (data.get('mode') or 'auto') == 'manual':
+        items = list(data.get('manual_items') or [])
+        if not items:
+            await message.reply_text('⚠️ وضع الهدافين يدوي، لكن لا توجد قائمة يدوية محفوظة. حدّثها من لوحة الدعم.')
+            return
+        try:
+            path = _v47_render_unique_top_scorers(items) if '_v47_render_unique_top_scorers' in globals() else render_top_scorers_v29(items)
+        except Exception:
+            path = render_top_scorers_v29(items)
+        await send_photo_path(message, path, 'هدافو البطولة ✅\nالمصدر: يدوي من الدعم')
+        return
+    if callable(_V61_PREV_SEND_TOP_SCORERS):
+        return await _V61_PREV_SEND_TOP_SCORERS(message)
+    await message.reply_text('تعذر جلب هدافي البطولة حاليًا.')
+
+
+async def _v39_send_top_scorers(message):
+    await _v41_send_working_top_scorers(message)
+
+async def _v38f_send_espn_top_scorers(message):
+    await _v41_send_working_top_scorers(message)
+
+async def _v38_send_fresh_espn_top_scorers(message):
+    await _v41_send_working_top_scorers(message)
+
+async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _v41_send_working_top_scorers(update.message)
+
+
+async def v61_manual_scorers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_user(update):
+        await update.effective_message.reply_text('هذا الخيار للمشرفين فقط 🔒')
+        return
+    items = _v61_parse_manual_scorers(update.effective_message.text or '')
+    if not items:
+        await update.effective_message.reply_text('اكتبها كذا:\n/هدافين_يدوي\nمبابي 5 فرنسا\nميسي 4 الأرجنتين')
+        return
+    data = _v61_load_scorers_mode()
+    data['mode'] = 'manual'
+    data['manual_items'] = items
+    data['updated_at'] = _v61_now_text({})
+    _v61_save_scorers_mode(data)
+    await update.effective_message.reply_text(f'✅ تم تحديث الهدافين يدويًا وتفعيل الوضع اليدوي.\nعدد الأسماء: {len(items)}', reply_markup=_v61_scorers_mode_keyboard())
+
+
+# ---------- احتمالات المركز الثالث — ترتيب معتمد ----------
+def _v33_how_thirds_text(team):
+    team = _v33_find_team(team) or team
+    if not team:
+        return 'ما عرفت المنتخب.'
+    snap = _v33_snapshot(False)
+    code = _v33_team_group(team)
+    case = _v37_third_case_info(team, snap) if '_v37_third_case_info' in globals() else None
+    target_pts = None
+    if case:
+        target_pts = case.get('pts')
+    else:
+        try:
+            target_pts, case = _v37_target_third_points(team, snap)
+        except Exception:
+            target_pts, case = None, None
+    lines = [f'🥉 احتمالات المركز الثالث وتحليله — {team}', '']
+    if target_pts is None:
+        lines.append(f'لا يوجد مسار واضح حاليًا يجعل {team} ثالث {_v33_group_label(code)} ببيانات كافية.')
+        lines.append('إذا تغيّرت النتائج وظهر مسار ثالث، سيحسبه البوت تلقائيًا.')
+        return '\n'.join(lines).strip()
+    lines.append('📌 الخلاصة:')
+    lines.append(f'المنتخب {team} يستطيع حسابيًا إنهاء {_v33_group_label(code)} في المركز الثالث، ثم يدخل حسابات أفضل الثوالث.')
+    lines.append('')
+    lines.append('━━━━━━━━━━━━━━━')
+    if case:
+        reqs = _v38_scenario_required_lines(team, case.get('scenario') or {}, snap, max_lines=6) if '_v38_scenario_required_lines' in globals() else []
+        if reqs:
+            lines.append('🛣️ مثال لمسار ممكن:')
+            lines.append('')
+            for i, r in enumerate(reqs, start=1):
+                lines.append(f'{i}. {r}')
+            lines.append('')
+        rows_case = ((case.get('case') or {}).get('rows') or (case.get('scenario') or {}).get('rows') or [])[:4]
+        if rows_case:
+            lines.append('📊 الترتيب في هذا السيناريو:')
+            for i, rr in enumerate(rows_case, start=1):
+                p = _v61_safe_int(rr.get('Pts'))
+                word = _v49_points_word(p) if '_v49_points_word' in globals() else 'نقاط'
+                lines.append(f"{i}. {rr.get('team')} — {p} {word}")
+            lines.append('')
+            lines.append(f'📌 لماذا يصبح المنتخب {team} ثالثًا؟')
+            lines.append(_v39_why_third(team, rows_case) if '_v39_why_third' in globals() else 'بسبب كسر التعادل مثل فارق الأهداف أو الأهداف المسجلة.')
+            lines.append('')
+    lines.append('━━━━━━━━━━━━━━━')
+    lines.append(f'🥉 وضع {team} في أفضل الثوالث:')
+    lines.append('')
+    try:
+        lines.extend(_v37_third_path_summary_block(team, int(target_pts or 0), snap))
+    except Exception:
+        lines.append('⚠️ تفاصيل مقارنة أفضل الثوالث غير متوفرة حاليًا.')
+    return '\n'.join(lines).strip()
+
+
+# ---------- راوترات نهائية ----------
+_V61_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in ('r32', 'round32'):
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v33_round32_text(False), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')]]))
+        except Exception:
+            await q.message.reply_text(_v33_round32_text(False), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')]]))
+        return
+    if action == 'qualified':
+        try: await q.answer()
+        except Exception: pass
+        await q.edit_message_text(_v61_qualified_text(False), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]]))
+        return
+    if action == 'thirds':
+        try: await q.answer()
+        except Exception: pass
+        await q.edit_message_text(_v32_best_thirds_text(False), reply_markup=_v32_board_keyboard())
+        return
+    if action == 'thirds_force':
+        try: await q.answer()
+        except Exception: pass
+        await q.edit_message_text(_v32_best_thirds_text(True), reply_markup=_v32_board_keyboard())
+        return
+    if callable(_V61_PREV_V32_CALLBACK):
+        return await _V61_PREV_V32_CALLBACK(update, context)
+
+
+_V61_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'mainmenu|r32':
+        try: await q.answer()
+        except Exception: pass
+        await q.edit_message_text(_v33_round32_text(False), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')]]))
+        return
+    if callable(_V61_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V61_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+_V61_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt == '🏟️ مباريات دور الـ32':
+        await update.effective_message.reply_text(_v33_round32_text(False), reply_markup=_public_main_reply_keyboard())
+        return
+    if txt in ('✅ المتأهلون', '✅ المتأهلون رسميًا'):
+        await update.effective_message.reply_text(_v61_qualified_text(False), reply_markup=_public_main_reply_keyboard())
+        return
+    if txt == '🥉 أفضل الثوالث':
+        await update.effective_message.reply_text(_v32_best_thirds_text(False), reply_markup=_public_main_reply_keyboard())
+        return
+    if callable(_V61_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V61_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V61_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt == '🏟️ مباريات دور الـ32':
+        await update.effective_message.reply_text(_v33_round32_text(False), reply_markup=_public_main_reply_keyboard())
+        return
+    if callable(_V61_PREV_TEXT_STATE_ROUTER):
+        return await _V61_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+_V61_PREV_ADMIN_CALLBACK = globals().get('v32_admin_callback')
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in ('scorers_mode', 'scorers_toggle', 'scorers_manual_clear'):
+        try: await q.answer()
+        except Exception: pass
+        if not is_admin_user(update):
+            await q.message.reply_text('هذا الخيار للمشرفين فقط 🔒')
+            return
+        mode_data = _v61_load_scorers_mode()
+        if action == 'scorers_toggle':
+            mode_data['mode'] = 'manual' if (mode_data.get('mode') or 'auto') == 'auto' else 'auto'
+            mode_data['updated_at'] = _v61_now_text({})
+            _v61_save_scorers_mode(mode_data)
+        elif action == 'scorers_manual_clear':
+            mode_data['manual_items'] = []
+            mode_data['updated_at'] = _v61_now_text({})
+            _v61_save_scorers_mode(mode_data)
+        await q.edit_message_text(_v61_scorers_mode_text(), reply_markup=_v61_scorers_mode_keyboard())
+        return
+    if callable(_V61_PREV_ADMIN_CALLBACK):
+        return await _V61_PREV_ADMIN_CALLBACK(update, context)
+
+# ==================== END V61 FAHAD FINAL AGREEMENTS PATCH ====================
 
 if __name__ == "__main__":
     main()
