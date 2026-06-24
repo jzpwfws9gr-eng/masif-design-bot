@@ -50223,5 +50223,340 @@ async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ==================== END V61 FAHAD FINAL AGREEMENTS PATCH ====================
 
+
+# ==================== V61.1 HOTFIX: highlights no-freeze safe pagination ====================
+# إصلاح فهد: الملخصات كانت ممكن تعلق بسبب مسارات قديمة تعرض كل الملخصات مرة واحدة.
+# هذا الهوتفكس يعزل الملخصات فقط: صفحات خفيفة + أزرار URL + بدون روابط داخل callback_data.
+
+V61_HIGHLIGHTS_PAGE_SIZE = 8
+
+
+def _v61_highlights_rows(stage_key=None, team=None):
+    data = _load_highlights() if '_load_highlights' in globals() else {}
+    rows = []
+    for key, item in (data or {}).items():
+        if not isinstance(item, dict) or not item.get('url'):
+            continue
+        t1 = item.get('team1') or ''
+        t2 = item.get('team2') or ''
+        url = item.get('url') or ''
+        if team:
+            q = simple_key(team)
+            if q not in simple_key(t1) and q not in simple_key(t2):
+                continue
+        if stage_key and stage_key != 'all':
+            stg = item.get('stage') or ''
+            # فلترة بسيطة فقط، بدون البحث الثقيل في كل جدول المباريات.
+            sk = _v32_stage_key(stg) if '_v32_stage_key' in globals() else 'all'
+            if sk == 'all':
+                # أغلب الملخصات القديمة بلا stage، نخليها تظهر في كامل البطولة فقط ولا نثقل البحث.
+                if stage_key != 'all':
+                    continue
+            elif sk != stage_key:
+                continue
+        rows.append((key, item))
+    return sorted(rows, key=lambda kv: str((kv[1] or {}).get('updated_at') or ''), reverse=True)
+
+
+def _v61_highlights_home_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('🆕 آخر الملخصات', callback_data='v32|hls_last|0')],
+        [InlineKeyboardButton('🏆 كامل البطولة', callback_data='v32|hls_stage|all|0')],
+        [InlineKeyboardButton('🔎 بحث عن ملخص', callback_data='v32|hls_search_help')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+
+def _v61_paginated_highlights_keyboard(rows, callback_prefix, page=0):
+    try:
+        page = max(0, int(page or 0))
+    except Exception:
+        page = 0
+    total = len(rows or [])
+    start = page * V61_HIGHLIGHTS_PAGE_SIZE
+    chunk = (rows or [])[start:start + V61_HIGHLIGHTS_PAGE_SIZE]
+    kb = []
+    if not chunk:
+        kb.append([InlineKeyboardButton('لا توجد ملخصات', callback_data='v32|hls_home')])
+    for key, item in chunk:
+        label = f"🎥 {item.get('team1','')} × {item.get('team2','')}".strip()
+        url = item.get('url') or ''
+        # زر URL مباشر: ما نحط الرابط في callback_data نهائيًا.
+        if re.match(r'https?://', url, re.I):
+            kb.append([InlineKeyboardButton(label[:60], url=url)])
+        else:
+            kb.append([InlineKeyboardButton(label[:60], callback_data=f'v32|hls_show|{key}')])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton('⬅️ السابق', callback_data=f'{callback_prefix}|{page-1}'))
+    if start + V61_HIGHLIGHTS_PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton('التالي ➡️', callback_data=f'{callback_prefix}|{page+1}'))
+    if nav:
+        kb.append(nav)
+    kb.append([InlineKeyboardButton('⬅️ رجوع للملخصات', callback_data='v32|hls_home')])
+    return InlineKeyboardMarkup(kb)
+
+
+def _v61_highlights_page_title(page, total, title='🎬 ملخصات المباريات'):
+    pages = max(1, (total + V61_HIGHLIGHTS_PAGE_SIZE - 1) // V61_HIGHLIGHTS_PAGE_SIZE)
+    return f"{title}\n\nالصفحة {page + 1}/{pages} — المعروض {min(V61_HIGHLIGHTS_PAGE_SIZE, max(0, total - page*V61_HIGHLIGHTS_PAGE_SIZE))} من {total}"
+
+
+# نستبدل الدالة القديمة حتى أي مسار قديم ما يرسل كل الملخصات مرة واحدة.
+def _highlights_keyboard(page=0):
+    rows = _v61_highlights_rows()
+    return _v61_paginated_highlights_keyboard(rows, 'v32|hls_last', page)
+
+
+async def v32_highlights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    text = getattr(update.effective_message, 'text', '') or ''
+    body = _v32_cmd_body(text) if '_v32_cmd_body' in globals() else re.sub(r'^/\S+', '', text).strip()
+    if text.startswith('/بحث') or body:
+        if not body:
+            await update.effective_message.reply_text('اكتبها كذا:\n/بحث_ملخص اليابان')
+            return
+        rows = _v61_highlights_rows(team=body)
+        if not rows:
+            await update.effective_message.reply_text(f'ما لقيت ملخصات لـ: {body}')
+            return
+        await update.effective_message.reply_text(
+            _v61_highlights_page_title(0, len(rows), f'🔎 نتائج البحث عن: {body}'),
+            reply_markup=_v61_paginated_highlights_keyboard(rows, f'v32|hls_search|{simple_key(body)}', 0)
+        )
+        return
+    await update.effective_message.reply_text('🎬 ملخصات المباريات', reply_markup=_v61_highlights_home_keyboard())
+
+
+_V611_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in ('🎬 ملخصات المباريات', '🎞️ ملخصات المباريات'):
+        await update.effective_message.reply_text('🎬 ملخصات المباريات', reply_markup=_v61_highlights_home_keyboard())
+        return
+    if callable(_V611_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V611_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V611_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in ('🎬 ملخصات المباريات', '🎞️ ملخصات المباريات'):
+        await update.effective_message.reply_text('🎬 ملخصات المباريات', reply_markup=_v61_highlights_home_keyboard())
+        return
+    if callable(_V611_PREV_TEXT_STATE_ROUTER):
+        return await _V611_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+_V611_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    if (q.data or '') == 'mainmenu|highlights':
+        try: await q.answer()
+        except Exception: pass
+        await q.edit_message_text('🎬 ملخصات المباريات', reply_markup=_v61_highlights_home_keyboard())
+        return
+    if callable(_V611_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V611_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+async def highlights_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # توافق للمسارات القديمة hls|... لكن بدون إنشاء لوحة ضخمة.
+    q = update.callback_query
+    if not q:
+        return
+    try: await q.answer()
+    except Exception: pass
+    parts = (q.data or '').split('|')
+    if len(parts) >= 3 and parts[1] == 'show':
+        item = (_load_highlights() or {}).get(parts[2])
+        if not item:
+            await q.message.reply_text('الملخص غير موجود أو تم حذفه.')
+            return
+        url = item.get('url') or ''
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton('🎥 فتح الملخص', url=url)]]) if re.match(r'https?://', url, re.I) else None
+        await q.message.reply_text(f"🎞️ ملخص مباراة {item.get('team1')} × {item.get('team2')}", reply_markup=kb)
+        return
+    rows = _v61_highlights_rows()
+    await q.edit_message_text(_v61_highlights_page_title(0, len(rows)), reply_markup=_v61_paginated_highlights_keyboard(rows, 'v32|hls_last', 0))
+
+
+_V611_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in {'hls_home','hls_last','hls_stage','hls_search_help','hls_search','hls_show'}:
+        try: await q.answer()
+        except Exception: pass
+        if action == 'hls_home':
+            await q.edit_message_text('🎬 ملخصات المباريات', reply_markup=_v61_highlights_home_keyboard())
+            return
+        if action == 'hls_last':
+            page = int(parts[2]) if len(parts) > 2 and str(parts[2]).isdigit() else 0
+            rows = _v61_highlights_rows()
+            await q.edit_message_text(_v61_highlights_page_title(page, len(rows), '🆕 آخر الملخصات'), reply_markup=_v61_paginated_highlights_keyboard(rows, 'v32|hls_last', page))
+            return
+        if action == 'hls_stage':
+            sk = parts[2] if len(parts) > 2 else 'all'
+            page = int(parts[3]) if len(parts) > 3 and str(parts[3]).isdigit() else 0
+            rows = _v61_highlights_rows(stage_key=sk)
+            title = _v32_stage_title(sk) if '_v32_stage_title' in globals() else 'كامل البطولة'
+            await q.edit_message_text(_v61_highlights_page_title(page, len(rows), f'🎥 {title}'), reply_markup=_v61_paginated_highlights_keyboard(rows, f'v32|hls_stage|{sk}', page))
+            return
+        if action == 'hls_search_help':
+            await q.edit_message_text('🔎 بحث عن ملخص\n\nاكتب الأمر مع اسم المنتخب، مثال:\n/بحث_ملخص اليابان', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ رجوع', callback_data='v32|hls_home')]]))
+            return
+        if action == 'hls_search' and len(parts) >= 4:
+            key = parts[2]
+            page = int(parts[3]) if str(parts[3]).isdigit() else 0
+            rows = _v61_highlights_rows(team=key)
+            await q.edit_message_text(_v61_highlights_page_title(page, len(rows), f'🔎 نتائج البحث: {key}'), reply_markup=_v61_paginated_highlights_keyboard(rows, f'v32|hls_search|{key}', page))
+            return
+        if action == 'hls_show' and len(parts) >= 3:
+            item = (_load_highlights() or {}).get(parts[2])
+            if not item:
+                await q.message.reply_text('الملخص غير موجود أو تم حذفه.')
+                return
+            url = item.get('url') or ''
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton('🎥 فتح الملخص', url=url)], [InlineKeyboardButton('⬅️ رجوع', callback_data='v32|hls_home')]]) if re.match(r'https?://', url, re.I) else InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ رجوع', callback_data='v32|hls_home')]])
+            await q.message.reply_text(f"🎞️ ملخص مباراة {item.get('team1')} × {item.get('team2')}", reply_markup=kb)
+            return
+    if callable(_V611_PREV_V32_CALLBACK):
+        return await _V611_PREV_V32_CALLBACK(update, context)
+
+# ==================== END V61.1 HOTFIX ====================
+
 if __name__ == "__main__":
     main()
+
+# ==================== V61.2 FAHAD R32 FORMAT + CONFIRMED RANK PATCH ====================
+# اعتماد فهد الأخير:
+# - لا يظهر اسم منتخب كطرف ثابت في دور الـ32 إلا إذا كان متأهلًا ومركزه محسومًا.
+# - إزالة أرقام مباريات دور الـ32 من العرض.
+# - فصل أفضل ثالث إلى: الطرف الثاني + المجموعات المحتملة.
+# - إضافة تنويه قصير للتوقعات الحالية.
+
+
+def _v612_candidates_text(candidates):
+    letters = []
+    for c in str(candidates or '').upper():
+        if not c.isalpha():
+            continue
+        try:
+            letters.append(_v33_group_ar(c))
+        except Exception:
+            letters.append(c)
+    return ' / '.join(letters)
+
+
+def _v612_rank_matches_slot(team, code, pos, snap=None):
+    """يتأكد أن مركز المنتخب محسوم ويطابق خانة دور الـ32، وليس مجرد متأهل رسميًا."""
+    if not team or not _v61_is_official_qualified(team, snap):
+        return False
+    try:
+        label = _v61_rank_label_for_team(team, snap)
+    except Exception:
+        label = 'لم يُحسم بعد'
+    expected = 'الأول' if int(pos) == 1 else 'الثاني'
+    return label == expected
+
+
+def _v61_resolve_pos_slot(code, pos, snap):
+    rows = _v61_group_rows(code, snap)
+    team = ''
+    try:
+        team = (rows[int(pos)-1] or {}).get('team') or ''
+    except Exception:
+        team = ''
+    confirmed = bool(_v612_rank_matches_slot(team, code, pos, snap))
+    return {
+        'kind': 'pos', 'code': code, 'pos': int(pos), 'phrase': _v61_pos_phrase(code, pos),
+        'team': team if confirmed else '', 'predicted': team or '', 'confirmed': confirmed,
+        'status': '✅ متأهلة رسميًا' if confirmed else '',
+    }
+
+
+def _v612_slot_waiting_label(slot, side_word='الثاني'):
+    if slot.get('kind') == 'third':
+        return [
+            f'   ⏳ الطرف {side_word}: أفضل ثالث',
+            f"   📍 المجموعات المحتملة: {_v612_candidates_text(slot.get('candidates'))}",
+        ]
+    return [f"   ⏳ الطرف {side_word}: {slot.get('phrase')}"]
+
+
+def _v61_r32_main_line(r):
+    a, b = r['a'], r['b']
+    if r['group'] == 'complete':
+        return f"{a.get('team')} × {b.get('team')}"
+    if r['group'] == 'one':
+        team = a.get('team') if a.get('confirmed') else b.get('team')
+        return f"{team} × لم يتحدد"
+    # لم يتحدد أي طرف: إذا كان أحد الطرفين أفضل ثالث لا نطول سطر المواجهة.
+    if a.get('kind') == 'third' and b.get('kind') != 'third':
+        return f"لم يتحدد × {b.get('phrase')}"
+    if b.get('kind') == 'third' and a.get('kind') != 'third':
+        return f"{a.get('phrase')} × لم يتحدد"
+    return f"{a.get('phrase')} × {b.get('phrase')}"
+
+
+def _v61_r32_row_lines(r):
+    a, b, m = r['a'], r['b'], r['fixture']
+    lines = [_v61_r32_main_line(r)]
+    if r['group'] == 'complete':
+        lines.append(f"   ✅ {a.get('team')}: {'متأهلة رسميًا كأفضل ثالث' if a.get('kind') == 'third' else 'متأهلة رسميًا'}")
+        lines.append(f"   ✅ {b.get('team')}: {'متأهلة رسميًا كأفضل ثالث' if b.get('kind') == 'third' else 'متأهلة رسميًا'}")
+    elif r['group'] == 'one':
+        confirmed = a if a.get('confirmed') else b
+        waiting = b if a.get('confirmed') else a
+        waiting_side = 'الثاني' if a.get('confirmed') else 'الأول'
+        lines.append(f"   ✅ {confirmed.get('team')}: {'متأهلة رسميًا كأفضل ثالث' if confirmed.get('kind') == 'third' else 'متأهلة رسميًا'}")
+        lines.extend(_v612_slot_waiting_label(waiting, waiting_side))
+        if waiting.get('predicted'):
+            lines.append(f"   🔎 المتوقع حاليًا: {waiting.get('predicted')}")
+    else:
+        # لم يتحدد أي طرف: نضيف تفاصيل أفضل ثالث فقط حتى لا نخرب سطر المواجهة.
+        if a.get('kind') == 'third':
+            lines.extend(_v612_slot_waiting_label(a, 'الأول'))
+        if b.get('kind') == 'third':
+            lines.extend(_v612_slot_waiting_label(b, 'الثاني'))
+    dl = _v61_date_line(m)
+    if dl:
+        lines.append(f"   {dl}")
+    return lines
+
+
+def _v33_round32_text(force=False):
+    rows = _v61_r32_rows(force)
+    complete = [r for r in rows if r['group'] == 'complete']
+    one = [r for r in rows if r['group'] == 'one']
+    none = [r for r in rows if r['group'] == 'none']
+    lines = ['🏟️ مباريات دور الـ32', '', f'✅ مواجهات اكتمل طرفاها: {len(complete)}/16']
+    if complete:
+        lines += ['', '━━━━━━━━━━━━━━━', '✅ المواجهات المؤكدة رسميًا:', '']
+        for r in complete:
+            lines.extend(_v61_r32_row_lines(r)); lines.append('')
+    if one:
+        lines += ['━━━━━━━━━━━━━━━', '🟡 المواجهات التي اكتمل أحد طرفيها:', '']
+        for r in one:
+            lines.extend(_v61_r32_row_lines(r)); lines.append('')
+    if none:
+        lines += ['━━━━━━━━━━━━━━━', '⚪ مواجهات لم تتحدد بعد:', '']
+        for r in none:
+            lines.extend(_v61_r32_row_lines(r)); lines.append('')
+    lines += [
+        '━━━━━━━━━━━━━━━',
+        '🔎 التوقعات الحالية حسب ترتيب أفضل الثوالث وجدول FIFA لمواجهات دور الـ32، وقد تتغير لاحقًا.'
+    ]
+    return '\n'.join(lines).strip()
+
+# ==================== END V61.2 FAHAD R32 FORMAT + CONFIRMED RANK PATCH ====================
