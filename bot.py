@@ -13787,6 +13787,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:ادارة|إدارة)(?:\s|$)"), admin_only(v32_admin_panel_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:هدافين_يدوي|تحديث_هدافين_يدوي|اضافة_هدافين_يدوي|إضافة_هدافين_يدوي)(?:\s|$)"), admin_only(v61_manual_scorers_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اذاعة|إذاعة)(?:\s|$)"), admin_only(v32_broadcast_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تحديث_القائمة|تحديث_القائمه)(?:\s|$)"), admin_only(v62_update_menu_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:مركز_التنبيهات|مركز_تنبيهات)(?:\s|$)"), admin_only(v32_alert_center_command)))
     app.add_handler(CallbackQueryHandler(v32_callback, pattern=r"^v32\|"))
     app.add_handler(CallbackQueryHandler(v32_admin_callback, pattern=r"^v32adm\|"))
@@ -13799,6 +13800,15 @@ def main():
     try:
         if getattr(app, "job_queue", None):
             app.job_queue.run_repeating(v49_live_auto_refresh_job, interval=V49_LIVE_REFRESH_INTERVAL, first=20, name="v49_live_refresh")
+    except Exception:
+        pass
+
+    # V63 — تنبيهات الأهداف الاختيارية كل 45 ثانية.
+    try:
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تنبيهات_الأهداف|تنبيهات_الاهداف|اشعارات_الأهداف|اشعارات_الاهداف)(?:\s|$)"), v63_goal_alerts_command))
+        app.add_handler(CallbackQueryHandler(v63_goal_alerts_callback, pattern=r"^v63goal\|"))
+        if getattr(app, "job_queue", None):
+            app.job_queue.run_repeating(v63_goal_alerts_job, interval=V63_GOAL_ALERT_INTERVAL, first=35, name="v63_goal_alerts")
     except Exception:
         pass
 
@@ -50435,9 +50445,6 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V61.1 HOTFIX ====================
 
-if __name__ == "__main__":
-    main()
-
 # ==================== V61.2 FAHAD R32 FORMAT + CONFIRMED RANK PATCH ====================
 # اعتماد فهد الأخير:
 # - لا يظهر اسم منتخب كطرف ثابت في دور الـ32 إلا إذا كان متأهلًا ومركزه محسومًا.
@@ -50560,3 +50567,669 @@ def _v33_round32_text(force=False):
     return '\n'.join(lines).strip()
 
 # ==================== END V61.2 FAHAD R32 FORMAT + CONFIRMED RANK PATCH ====================
+
+
+# ==================== V62 FAHAD FINAL RANK/H2H + MENU REFRESH PATCH ====================
+# اعتماد فهد:
+# - كسر التعادل في البطولة: النقاط ثم المواجهات المباشرة ثم فارق الأهداف ثم الأهداف المسجلة.
+# - تعميم الحسبة على تحديد المركز ودور الـ32: لا نثبت المنتخب في دور الـ32 إلا إذا تأهل رسميًا ومركزه محسوم.
+# - إضافة أمر /تحديث_القائمة لإرسال القائمة الرئيسية الجديدة للمستخدمين المحفوظين.
+# - زر دور الـ32 ظاهر في القائمة الرئيسية، ويعرض الخانات إذا المركز غير محسوم.
+
+
+def _v62_group_results(code, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    g = ((snap.get('groups') or {}).get(code) or {})
+    res = list(g.get('results') or [])
+    # بعض النسخ تحفظ النتائج داخل fixtures/finished؛ نحاول قراءة أي نتيجة رقمية مؤكدة.
+    if not res:
+        for m in (g.get('fixtures') or []):
+            try:
+                s1 = m.get('score1'); s2 = m.get('score2')
+                if s1 is None or s2 is None:
+                    continue
+                s1 = int(s1); s2 = int(s2)
+                t1 = canonical_team_name(m.get('team1')) or m.get('team1')
+                t2 = canonical_team_name(m.get('team2')) or m.get('team2')
+                if t1 and t2:
+                    res.append({'team1': t1, 'team2': t2, 'score1': s1, 'score2': s2})
+            except Exception:
+                continue
+    return res
+
+
+def _v62_max_points(row):
+    try:
+        return int(row.get('Pts') or 0) + max(0, 3 - int(row.get('P') or 0)) * 3
+    except Exception:
+        return int(row.get('Pts') or 0)
+
+
+def _v62_h2h_stats(team, opponents, results):
+    st = {'Pts': 0, 'GF': 0, 'GA': 0, 'GD': 0, 'P': 0}
+    opp = set(opponents or [])
+    for r in results or []:
+        t1 = r.get('team1'); t2 = r.get('team2')
+        if team not in (t1, t2):
+            continue
+        other = t2 if t1 == team else t1
+        if other not in opp:
+            continue
+        try:
+            s1 = int(r.get('score1') or 0); s2 = int(r.get('score2') or 0)
+        except Exception:
+            continue
+        gf, ga = (s1, s2) if t1 == team else (s2, s1)
+        st['P'] += 1; st['GF'] += gf; st['GA'] += ga
+        if gf > ga: st['Pts'] += 3
+        elif gf == ga: st['Pts'] += 1
+    st['GD'] = st['GF'] - st['GA']
+    return st
+
+
+def _v62_known_h2h_advantage(team, rival, results):
+    """True إذا المنتخب ضمن التفوق على منافس مباشر معروف عند تساوي النقاط."""
+    a = _v62_h2h_stats(team, [rival], results)
+    b = _v62_h2h_stats(rival, [team], results)
+    # لازم تكون المواجهة لعبت فعليًا.
+    if a.get('P', 0) <= 0:
+        return False
+    return (a['Pts'], a['GD'], a['GF']) > (b['Pts'], b['GD'], b['GF'])
+
+
+def _v62_guaranteed_first(team, code, rows, snap=None):
+    """حسم المركز الأول بشكل محافظ حسب النظام: نقاط ثم مواجهة مباشرة."""
+    row = next((r for r in (rows or []) if r.get('team') == team), None)
+    if not row:
+        return False
+    pts = int(row.get('Pts') or 0)
+    results = _v62_group_results(code, snap)
+    for other in (rows or []):
+        ot = other.get('team')
+        if not ot or ot == team:
+            continue
+        mx = _v62_max_points(other)
+        if mx > pts:
+            return False
+        if mx == pts and not _v62_known_h2h_advantage(team, ot, results):
+            return False
+    return True
+
+
+def _v62_guaranteed_second(team, code, rows, snap=None):
+    """حسم المركز الثاني محافظًا: لا يثبت إلا إذا لا يمكنه الأول ولا يمكنه النزول عن الثاني."""
+    row = next((r for r in (rows or []) if r.get('team') == team), None)
+    if not row:
+        return False
+    pts = int(row.get('Pts') or 0)
+    results = _v62_group_results(code, snap)
+    # إذا ضمن الأول، ليس ثانيًا.
+    if _v62_guaranteed_first(team, code, rows, snap):
+        return False
+    # عدد الفرق التي يمكن أن تنهي فوقه أو تتساوى معه بدون أفضلية مباشرة له.
+    danger = 0
+    for other in (rows or []):
+        ot = other.get('team')
+        if not ot or ot == team:
+            continue
+        other_pts = int(other.get('Pts') or 0)
+        mx = _v62_max_points(other)
+        if other_pts > pts or mx > pts:
+            danger += 1
+        elif mx == pts and not _v62_known_h2h_advantage(team, ot, results):
+            danger += 1
+    return danger <= 1
+
+
+def _v61_rank_label_for_team(team, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    try:
+        code, pos, row, rows = _v33_group_row(team, snap)
+        if not row:
+            return 'لم يُحسم بعد'
+        g = ((snap.get('groups') or {}).get(code) or {})
+        complete = bool(g.get('remaining') == 0 or all(_v61_safe_int((rr or {}).get('P')) >= 3 for rr in (rows or [])[:4]))
+        if complete and pos:
+            return {1: 'الأول', 2: 'الثاني', 3: 'الثالث', 4: 'الرابع'}.get(int(pos), str(pos))
+        if _v61_is_official_best_third(team, row, snap):
+            return 'أفضل ثالث'
+        # الحسم قبل نهاية المجموعة حسب النظام المعتمد: نقاط ثم مواجهات مباشرة.
+        if int(pos or 0) == 1 and _v62_guaranteed_first(team, code, rows, snap):
+            return 'الأول'
+        if int(pos or 0) == 2 and _v62_guaranteed_second(team, code, rows, snap):
+            return 'الثاني'
+        st = _v61_status_text(team, snap)
+        if ('المركز الأول' in st or 'الأول' in st) and _v62_guaranteed_first(team, code, rows, snap):
+            return 'الأول'
+        if ('المركز الثاني' in st or 'الثاني' in st) and _v62_guaranteed_second(team, code, rows, snap):
+            return 'الثاني'
+    except Exception:
+        pass
+    return 'لم يُحسم بعد'
+
+
+def _v33_round32_has_official_match(snap=None):
+    # الزر ظاهر دائمًا في القائمة الرئيسية حسب اعتماد فهد.
+    return True
+
+
+# تأكيد زر دور الـ32 داخل الكيبورد الرئيسي دائمًا حتى للمستخدمين القدامى عند أي قائمة جديدة.
+_V62_PREV_PUBLIC_MAIN_REPLY_KEYBOARD = globals().get('_public_main_reply_keyboard')
+def _public_main_reply_keyboard():
+    try:
+        kb = _V62_PREV_PUBLIC_MAIN_REPLY_KEYBOARD() if callable(_V62_PREV_PUBLIC_MAIN_REPLY_KEYBOARD) else ReplyKeyboardMarkup([[]])
+        rows = [list(r) for r in (getattr(kb, 'keyboard', None) or [])]
+    except Exception:
+        rows = []
+    out, exists = [], False
+    for row in rows:
+        nr = []
+        for btn in row:
+            txt = str(getattr(btn, 'text', btn) or '')
+            if txt == '🏟️ مباريات دور الـ32':
+                exists = True
+            if 'مواجهات دور الـ32' in txt:
+                continue
+            nr.append(btn)
+        if nr:
+            out.append(nr)
+    if not exists:
+        idx = 3 if len(out) >= 3 else len(out)
+        out.insert(idx, ['🏟️ مباريات دور الـ32'])
+    return ReplyKeyboardMarkup(out, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder='اختر من القائمة')
+
+
+_V62_PREV_PUBLIC_MAIN_KEYBOARD = globals().get('_public_main_keyboard')
+def _public_main_keyboard():
+    try:
+        kb = _V62_PREV_PUBLIC_MAIN_KEYBOARD() if callable(_V62_PREV_PUBLIC_MAIN_KEYBOARD) else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    clean = []
+    for row in rows:
+        nr = []
+        for btn in row:
+            t = str(getattr(btn, 'text', '') or '')
+            d = str(getattr(btn, 'callback_data', '') or '')
+            if 'دور الـ32' in t or 'دور 32' in t or d in ('v32|r32', 'mainmenu|r32'):
+                continue
+            nr.append(btn)
+        if nr:
+            clean.append(nr)
+    clean.insert(3 if len(clean) >= 3 else len(clean), [InlineKeyboardButton('🏟️ مباريات دور الـ32', callback_data='v32|r32')])
+    return InlineKeyboardMarkup(clean)
+
+
+async def v62_update_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يرسل القائمة الرئيسية المحدثة لكل المستخدمين المحفوظين."""
+    data = _v32_load_json(V32_USERS_FILE, {'users': {}}) if '_v32_load_json' in globals() else {'users': {}}
+    users = list((data.get('users') or {}).values())
+    sent = failed = 0
+    for u in users:
+        chat_id = u.get('chat_id') or u.get('user_id')
+        if not chat_id:
+            continue
+        try:
+            await context.bot.send_message(
+                chat_id=int(chat_id),
+                text='تم تحديث القائمة الرئيسية ✅',
+                reply_markup=_public_main_reply_keyboard(),
+            )
+            sent += 1
+            await asyncio.sleep(0.04)
+        except Exception:
+            failed += 1
+    await update.effective_message.reply_text(f'✅ تم إرسال القائمة المحدثة\nوصلت: {sent}\nفشل: {failed}')
+
+
+# أي تفاعل نصي مهم يرجّع المستخدم للقائمة الجديدة إذا طلب القائمة/ستارت أو ضغط زر دور الـ32.
+_V62_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in ('القائمة', 'ابدا', 'ابدأ', 'ستارت', '/start', '🏠 الرئيسية'):
+        await update.effective_message.reply_text('القائمة الرئيسية جاهزة تحت 👇', reply_markup=_public_main_reply_keyboard())
+        return
+    if txt == '🏟️ مباريات دور الـ32':
+        await update.effective_message.reply_text(_v33_round32_text(False), reply_markup=_public_main_reply_keyboard())
+        return
+    if callable(_V62_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V62_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V62_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in ('القائمة', 'ابدا', 'ابدأ', 'ستارت', '/start', '🏠 الرئيسية'):
+        await update.effective_message.reply_text('القائمة الرئيسية جاهزة تحت 👇', reply_markup=_public_main_reply_keyboard())
+        return
+    if txt == '🏟️ مباريات دور الـ32':
+        await update.effective_message.reply_text(_v33_round32_text(False), reply_markup=_public_main_reply_keyboard())
+        return
+    if callable(_V62_PREV_TEXT_STATE_ROUTER):
+        return await _V62_PREV_TEXT_STATE_ROUTER(update, context)
+
+# ==================== END V62 FAHAD FINAL RANK/H2H + MENU REFRESH PATCH ====================
+
+
+# ==================== V63 GOAL ALERTS PATCH — FAHAD ====================
+# اعتماد فهد:
+# - تنبيهات الأهداف اختيارية للمستخدمين.
+# - مستقلة عن "مباشر الآن" وتفحص أسرع: كل 45 ثانية وقت المباريات.
+# - لا ترسل إشعارات إلا للمشتركين.
+# - أول تشغيل يبني خط أساس فقط حتى لا يرسل أهدافًا قديمة.
+
+V63_GOAL_ALERTS_FILE = "goal_alerts_users.json"
+V63_GOAL_ALERTS_STATE_FILE = "goal_alerts_state.json"
+V63_GOAL_ALERT_INTERVAL = 45
+V63_GOAL_ALERTS_RUNNING = False
+
+
+def _v63_json_load(path, default=None):
+    default = {} if default is None else default
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                obj = json.load(f)
+            return obj if isinstance(obj, type(default)) else default
+    except Exception:
+        pass
+    return default
+
+
+def _v63_json_save(path, data):
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data or {}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _v63_now_text():
+    try:
+        return _now_riyadh_text()
+    except Exception:
+        try:
+            return _v49_now_makkah_str()
+        except Exception:
+            return datetime.utcnow().isoformat()
+
+
+def _v63_user_id(update):
+    try:
+        return str(getattr(update.effective_user, 'id', '') or '')
+    except Exception:
+        return ''
+
+
+def _v63_chat_id(update):
+    try:
+        return int(getattr(update.effective_chat, 'id', 0) or 0)
+    except Exception:
+        return 0
+
+
+def _v63_goal_alerts_data():
+    return _v63_json_load(V63_GOAL_ALERTS_FILE, {'users': {}})
+
+
+def _v63_save_goal_alerts_data(data):
+    if not isinstance(data, dict):
+        data = {'users': {}}
+    data.setdefault('users', {})
+    _v63_json_save(V63_GOAL_ALERTS_FILE, data)
+
+
+def _v63_goal_alert_enabled(user_id):
+    data = _v63_goal_alerts_data()
+    item = (data.get('users') or {}).get(str(user_id)) or {}
+    return bool(item.get('enabled'))
+
+
+def _v63_set_goal_alert(update, enabled=True):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    uid = _v63_user_id(update)
+    cid = _v63_chat_id(update)
+    if not uid or not cid:
+        return False
+    data = _v63_goal_alerts_data()
+    users = data.setdefault('users', {})
+    old = users.get(uid) if isinstance(users.get(uid), dict) else {}
+    user = getattr(update, 'effective_user', None)
+    users[uid] = {
+        'user_id': int(uid),
+        'chat_id': int(cid),
+        'enabled': bool(enabled),
+        'first_name': str(getattr(user, 'first_name', '') or old.get('first_name', '') or ''),
+        'username': str(getattr(user, 'username', '') or old.get('username', '') or ''),
+        'joined_at': old.get('joined_at') or _v63_now_text(),
+        'updated_at': _v63_now_text(),
+    }
+    _v63_save_goal_alerts_data(data)
+    return True
+
+
+def _v63_goal_subscribers():
+    data = _v63_goal_alerts_data()
+    out = []
+    for uid, item in (data.get('users') or {}).items():
+        if not isinstance(item, dict) or not item.get('enabled'):
+            continue
+        chat_id = item.get('chat_id') or item.get('user_id')
+        if chat_id:
+            out.append({'uid': str(uid), 'chat_id': int(chat_id)})
+    return out
+
+
+def _v63_goal_alert_text(user_id=None):
+    enabled = _v63_goal_alert_enabled(user_id) if user_id else False
+    status = 'مفعّلة ✅' if enabled else 'متوقفة ❌'
+    lines = [
+        '🔔 تنبيهات الأهداف',
+        '',
+        f'الحالة الحالية: {status}',
+        f'⏱️ الفحص: كل {V63_GOAL_ALERT_INTERVAL} ثانية وقت المباريات',
+        '',
+        'إذا جاء هدف جديد يرسل لك البوت تنبيه بالنتيجة، ومع اسم المسجل والدقيقة إذا وفرها المصدر.',
+    ]
+    return '\n'.join(lines).strip()
+
+
+def _v63_goal_alert_keyboard(user_id=None):
+    enabled = _v63_goal_alert_enabled(user_id) if user_id else False
+    if enabled:
+        row = [InlineKeyboardButton('❌ إيقاف تنبيهات الأهداف', callback_data='v63goal|off')]
+    else:
+        row = [InlineKeyboardButton('✅ تفعيل تنبيهات الأهداف', callback_data='v63goal|on')]
+    return InlineKeyboardMarkup([
+        row,
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+
+async def v63_goal_alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    uid = _v63_user_id(update)
+    await update.effective_message.reply_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
+
+
+async def v63_goal_alerts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    await q.answer()
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    if data == 'v63goal|on':
+        _v63_set_goal_alert(update, True)
+    elif data == 'v63goal|off':
+        _v63_set_goal_alert(update, False)
+    uid = _v63_user_id(update)
+    try:
+        await q.edit_message_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
+    except Exception:
+        await q.message.reply_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
+
+
+# إضافة زر التنبيهات للقوائم الجديدة بدون حذف أي زر قديم.
+_V63_PREV_PUBLIC_MAIN_REPLY_KEYBOARD = globals().get('_public_main_reply_keyboard')
+def _public_main_reply_keyboard():
+    try:
+        kb = _V63_PREV_PUBLIC_MAIN_REPLY_KEYBOARD() if callable(_V63_PREV_PUBLIC_MAIN_REPLY_KEYBOARD) else ReplyKeyboardMarkup([[]])
+        rows = [list(r) for r in (getattr(kb, 'keyboard', None) or [])]
+    except Exception:
+        rows = []
+    exists = False
+    out = []
+    for row in rows:
+        nr = []
+        for btn in row:
+            txt = str(getattr(btn, 'text', btn) or '')
+            if txt == '🔔 تنبيهات الأهداف':
+                exists = True
+            nr.append(btn)
+        if nr:
+            out.append(nr)
+    if not exists:
+        # نحطها بجانب دور الـ32 إذا قدرنا، وإلا صف جديد.
+        inserted = False
+        for row in out:
+            texts = [str(getattr(b, 'text', b) or '') for b in row]
+            if '🏟️ مباريات دور الـ32' in texts and len(row) < 2:
+                row.append('🔔 تنبيهات الأهداف')
+                inserted = True
+                break
+        if not inserted:
+            idx = 4 if len(out) >= 4 else len(out)
+            out.insert(idx, ['🔔 تنبيهات الأهداف'])
+    return ReplyKeyboardMarkup(out, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder='اختر من القائمة')
+
+
+_V63_PREV_PUBLIC_MAIN_KEYBOARD = globals().get('_public_main_keyboard')
+def _public_main_keyboard():
+    try:
+        kb = _V63_PREV_PUBLIC_MAIN_KEYBOARD() if callable(_V63_PREV_PUBLIC_MAIN_KEYBOARD) else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    exists = any(str(getattr(btn, 'callback_data', '') or '') == 'v63goal|menu' or str(getattr(btn, 'text', '') or '') == '🔔 تنبيهات الأهداف' for row in rows for btn in row)
+    if not exists:
+        inserted = False
+        for row in rows:
+            if any(str(getattr(btn, 'text', '') or '') == '🏟️ مباريات دور الـ32' for btn in row) and len(row) < 2:
+                row.append(InlineKeyboardButton('🔔 تنبيهات الأهداف', callback_data='v63goal|menu'))
+                inserted = True
+                break
+        if not inserted:
+            rows.insert(4 if len(rows) >= 4 else len(rows), [InlineKeyboardButton('🔔 تنبيهات الأهداف', callback_data='v63goal|menu')])
+    return InlineKeyboardMarkup(rows)
+
+
+# توجيه زر تنبيهات الأهداف في القائمة الثابتة.
+_V63_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt == '🔔 تنبيهات الأهداف':
+        return await v63_goal_alerts_command(update, context)
+    if callable(_V63_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V63_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V63_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt == '🔔 تنبيهات الأهداف':
+        return await v63_goal_alerts_command(update, context)
+    if callable(_V63_PREV_TEXT_STATE_ROUTER):
+        return await _V63_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+# توجيه الزر الداخلي في القائمة.
+_V63_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'v63goal|menu':
+        await q.answer()
+        uid = _v63_user_id(update)
+        try:
+            await q.edit_message_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
+        except Exception:
+            await q.message.reply_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
+        return
+    if callable(_V63_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V63_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+def _v63_fixture_alert_key(m):
+    try:
+        return _v43_fixture_key(m)
+    except Exception:
+        try:
+            return _v33_fixture_key(m)
+        except Exception:
+            return str(m)
+
+
+def _v63_score_total(obj):
+    try:
+        s1 = int(str((obj or {}).get('score1', '0')).strip())
+        s2 = int(str((obj or {}).get('score2', '0')).strip())
+        return s1 + s2, s1, s2
+    except Exception:
+        return None, None, None
+
+
+def _v63_scorers_from_obj(obj):
+    out = []
+    try:
+        raw = (obj or {}).get('scorers') or []
+        for x in raw:
+            y = _v41_clean_scorer_line(x) if '_v41_clean_scorer_line' in globals() else str(x).strip()
+            if y and y not in out:
+                out.append(y)
+    except Exception:
+        pass
+    return out
+
+
+def _v63_goal_message(m, obj, prev_state, new_scorers=None):
+    t1 = canonical_team_name((m or {}).get('team1')) or (m or {}).get('team1') or ''
+    t2 = canonical_team_name((m or {}).get('team2')) or (m or {}).get('team2') or ''
+    total, s1, s2 = _v63_score_total(obj)
+    old_total = int((prev_state or {}).get('total') or 0)
+    diff = max(1, int(total or 0) - old_total)
+    title = '🚨 هدف جديد!' if diff == 1 else f'🚨 {diff} أهداف جديدة!'
+    lines = [title, '', f'⚽ {t1} {s1} - {s2} {t2}']
+    # الفريق الذي سجل إذا واضح من تغير النتيجة.
+    try:
+        old_s1 = int((prev_state or {}).get('score1') or 0)
+        old_s2 = int((prev_state or {}).get('score2') or 0)
+        if s1 is not None and s2 is not None:
+            if s1 > old_s1 and s2 == old_s2:
+                lines.append(f'✅ الهدف لصالح: {t1}')
+            elif s2 > old_s2 and s1 == old_s1:
+                lines.append(f'✅ الهدف لصالح: {t2}')
+    except Exception:
+        pass
+    new_scorers = list(new_scorers or [])
+    if new_scorers:
+        lines.append('')
+        lines.append('⚽ المسجل:')
+        for sc in new_scorers[:diff]:
+            lines.append(f'- {sc}')
+    else:
+        lines.append('')
+        lines.append('⚽ تم تسجيل هدف جديد')
+    lines.append('')
+    lines.append('🏆 كأس العالم 2026')
+    return '\n'.join(lines).strip()
+
+
+async def _v63_send_goal_alert(context, text):
+    subs = _v63_goal_subscribers()
+    dead = []
+    for sub in subs:
+        try:
+            await context.bot.send_message(chat_id=int(sub['chat_id']), text=text)
+            await asyncio.sleep(0.04)
+        except Exception:
+            # إذا المستخدم موقف البوت/محظور؛ نعطله حتى لا تتكرر المحاولة كل 45 ثانية.
+            dead.append(str(sub.get('uid') or ''))
+    if dead:
+        try:
+            data = _v63_goal_alerts_data()
+            for uid in dead:
+                if uid in (data.get('users') or {}):
+                    data['users'][uid]['enabled'] = False
+                    data['users'][uid]['disabled_reason'] = 'send_failed'
+            _v63_save_goal_alerts_data(data)
+        except Exception:
+            pass
+
+
+async def v63_goal_alerts_job(context):
+    global V63_GOAL_ALERTS_RUNNING
+    if V63_GOAL_ALERTS_RUNNING:
+        return
+    subs = _v63_goal_subscribers()
+    if not subs:
+        return
+    try:
+        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
+            return
+    except Exception:
+        pass
+    active = _v40_active_live_date() if '_v40_active_live_date' in globals() else None
+    if not active:
+        return
+    V63_GOAL_ALERTS_RUNNING = True
+    try:
+        state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
+        matches_state = state.setdefault('matches', {})
+        rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
+        changed = False
+        for m in rows or []:
+            try:
+                if '_has_unknown' in globals() and _has_unknown(m):
+                    continue
+            except Exception:
+                pass
+            key = _v63_fixture_alert_key(m)
+            obj = None
+            try:
+                obj = await asyncio.wait_for(asyncio.to_thread(_v40_fetch_live_for_fixture, m, True), timeout=28)
+            except Exception:
+                obj = None
+            if not isinstance(obj, dict) or ('_patch6_numeric_score' in globals() and not _patch6_numeric_score(obj)):
+                continue
+            total, s1, s2 = _v63_score_total(obj)
+            if total is None:
+                continue
+            scorers = _v63_scorers_from_obj(obj)
+            prev = matches_state.get(key)
+            # أول مشاهدة: نبني خط أساس ولا نرسل هدف قديم.
+            if not isinstance(prev, dict):
+                matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'updated_at': _v63_now_text()}
+                changed = True
+                continue
+            old_total = int(prev.get('total') or 0)
+            if total > old_total:
+                # نحاول نأخذ أسماء الأهداف الجديدة حسب موضعها من قائمة المسجلين.
+                new_scorers = []
+                if scorers:
+                    new_scorers = scorers[old_total:total] if len(scorers) >= total else []
+                text = _v63_goal_message(m, obj, prev, new_scorers)
+                await _v63_send_goal_alert(context, text)
+            # إذا نقصت النتيجة بسبب تصحيح من المصدر، نحدث الخط الأساس بدون إشعار.
+            matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'updated_at': _v63_now_text()}
+            changed = True
+        if changed:
+            state['last_run'] = _v63_now_text()
+            _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
+    finally:
+        V63_GOAL_ALERTS_RUNNING = False
+
+# ==================== END V63 GOAL ALERTS PATCH ====================
+
+if __name__ == "__main__":
+    main()
