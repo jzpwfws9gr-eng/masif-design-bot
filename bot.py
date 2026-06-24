@@ -53487,5 +53487,115 @@ async def public_top_scorers_command(update: Update, context: ContextTypes.DEFAU
 
 # ==================== END V60 — فصل التحديث ====================
 
+
+
+# ==================== V60.2 — تثبيت الكاش الحقيقي وحذف سيناريوهات الخروج ====================
+# اعتماد فهد:
+# - حذف احتمالات المغادرة / سيناريوهات الخروج من النسخة القديمة المعدلة.
+# - بوت المستخدمين يقرأ الكاش فقط.
+# - updater.py يسحب البيانات الحقيقية من ESPN والمصادر الأصلية ويحفظ الكاش.
+# - التحديث التلقائي لا يُلغى.
+
+def _v602_filter_exit_buttons_from_markup(kb):
+    try:
+        rows = []
+        for row in (getattr(kb, 'inline_keyboard', None) or []):
+            new_row = []
+            for btn in row:
+                txt = str(getattr(btn, 'text', '') or '')
+                cb = str(getattr(btn, 'callback_data', '') or '')
+                bad = (
+                    'احتمالات مغادرة' in txt or 'احتمالات المغادرة' in txt or
+                    'سيناريوهات الخروج' in txt or 'الخروج' in txt or
+                    'exit_cached' in cb or 'refresh_exit_probs' in cb or 'exit_prob' in cb
+                )
+                if not bad:
+                    new_row.append(btn)
+            if new_row:
+                rows.append(new_row)
+        return InlineKeyboardMarkup(rows)
+    except Exception:
+        return kb
+
+try:
+    _V602_PREV_HOW_KEYBOARD = _v33_how_qualify_keyboard
+except Exception:
+    _V602_PREV_HOW_KEYBOARD = None
+
+def _v33_how_qualify_keyboard(team):
+    kb = _V602_PREV_HOW_KEYBOARD(team) if callable(_V602_PREV_HOW_KEYBOARD) else InlineKeyboardMarkup([])
+    return _v602_filter_exit_buttons_from_markup(kb)
+
+try:
+    _V602_PREV_ADMIN_KEYBOARD = _v38e_admin_keyboard
+except Exception:
+    _V602_PREV_ADMIN_KEYBOARD = None
+
+def _v38e_admin_keyboard():
+    kb = _V602_PREV_ADMIN_KEYBOARD() if callable(_V602_PREV_ADMIN_KEYBOARD) else InlineKeyboardMarkup([])
+    return _v602_filter_exit_buttons_from_markup(kb)
+
+try:
+    _V602_PREV_V32_CALLBACK = v32_callback
+except Exception:
+    _V602_PREV_V32_CALLBACK = None
+
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    data = q.data if q else ''
+    parts = str(data or '').split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in ('exit_cached', 'exit_probs', 'exit_prob', 'departure_probs'):
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text('تم إلغاء قسم سيناريوهات الخروج من هذه النسخة ✅')
+        except Exception:
+            try: await q.message.reply_text('تم إلغاء قسم سيناريوهات الخروج من هذه النسخة ✅')
+            except Exception: pass
+        return
+    if callable(_V602_PREV_V32_CALLBACK):
+        return await _V602_PREV_V32_CALLBACK(update, context)
+
+try:
+    _V602_PREV_ADMIN_CALLBACK = v32_admin_callback
+except Exception:
+    _V602_PREV_ADMIN_CALLBACK = None
+
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    data = q.data if q else ''
+    parts = str(data or '').split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in ('refresh_exit_probs', 'exit_probs', 'exit_prob'):
+        try: await q.answer()
+        except Exception: pass
+        try: await q.message.reply_text('تم إلغاء تحديث احتمالات المغادرة من هذه النسخة ✅')
+        except Exception: pass
+        return
+    if callable(_V602_PREV_ADMIN_CALLBACK):
+        return await _V602_PREV_ADMIN_CALLBACK(update, context)
+
+async def v51_exit_auto_schedule_job(context):
+    # تم إلغاء احتمالات المغادرة بالكامل — لا جوب تلقائي ولا يدوي.
+    return
+
+async def v48_refresh_exit_probs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text('تم إلغاء احتمالات المغادرة / سيناريوهات الخروج من هذه النسخة ✅')
+
+# إزالة أي إشارة لفظية لزر الخروج من قائمة / كيف تتأهل إن ظهرت من طبقات أقدم.
+def _v602_clean_text(txt):
+    try:
+        lines = []
+        for line in str(txt or '').splitlines():
+            if 'احتمالات مغادرة' in line or 'احتمالات المغادرة' in line or 'سيناريوهات الخروج' in line:
+                continue
+            lines.append(line)
+        return '\n'.join(lines).strip()
+    except Exception:
+        return txt
+
+# ==================== END V60.2 ====================
+
 if __name__ == "__main__":
     main()

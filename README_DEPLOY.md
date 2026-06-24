@@ -1,25 +1,24 @@
-# نسخة المصيف القديمة بعد التحسين V60
+# Masif Old Improved V60.2
 
-هذه النسخة تفصل التحديث الثقيل عن بوت المستخدمين.
+## تشغيل Railway
+Start Command:
 
-## التشغيل في Railway
-
-خدمة بوت المستخدمين:
 ```bash
-python bot.py
+sh -c "python updater.py & python bot.py"
 ```
 
-خدمة التحديث المنفصلة:
-```bash
-python updater.py
-```
+## Variables
+- BOT_TOKEN
+- ADMIN_IDS=678392605
+- MASIF_SHARED_CACHE_FILE=masif_shared_cache.json
+- MASIF_UPDATE_INTERVAL_SECONDS=120
+- MASIF_FIRST_STAGE_TIMEOUT_SECONDS=120
+- MASIF_STAGE_TIMEOUT_SECONDS=120
 
-## المتغيرات
-```bash
-BOT_TOKEN=توكن البوت الحالي
-ADMIN_ID=آيديك في تيليجرام
-MASIF_SHARED_CACHE_FILE=masif_shared_cache.json
-MASIF_UPDATE_INTERVAL_SECONDS=120
-```
-
-ملاحظة: بوت المستخدمين يعرض آخر كاش ولا يسحب الأقسام الثقيلة وقت الضغط.
+## V60.2
+- خدمة التحديث تسحب البيانات الحقيقية من ESPN/المصادر الأصلية وتحفظ الكاش.
+- بوت المستخدمين يقرأ من الكاش فقط ولا يسحب عند الضغط.
+- أول تحديث يعطي كل قسم مهلة دقيقتين.
+- التحديث يمشي بترتيب ثابت: خام ESPN ثم الأقسام الخفيفة ثم الحسابات.
+- التحديث التلقائي مستمر ولم يتم إلغاؤه.
+- تم حذف احتمالات المغادرة/سيناريوهات الخروج بالكامل من هذه النسخة.
