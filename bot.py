@@ -53074,5 +53074,592 @@ async def v63_goal_alerts_job(context):
 
 # ==================== END V69 MATCH ALERTS STARTUP/FIRST-SEEN FIX ====================
 
+
+# ==================== V70 FINAL LIVE/BOARD/HOW/R32/ALERTS PATCH — FAHAD ====================
+# اعتماد فهد النهائي:
+# - تنبيهات المباراة كل 15 ثانية، مع زر إيقاف داخل كل تنبيه.
+# - لا يعاد إرسال أحداث قديمة بعد إعادة تشغيل البوت: أول مشاهدة تبني خط أساس فقط.
+# - مباشر الآن بصيغة مختصرة: تحديث مباشر من ESPN + رموز 🔴 ⏳ ✅.
+# - لوحة البطولة تُحدّث البيانات أولًا وتُحسب المباريات المباشرة ضمن التفصيل والأهداف.
+# - كيف يتأهل: إذا مجموعة المنتخب فيها مباراة مباشرة، يعرض حسابًا مباشرًا مؤقتًا مرتبطًا بمباراتي المجموعة.
+# - دور الـ32: لا يثبت الاسم إلا إذا المكان مؤكد 1000٪، ويعرض التوقع الحالي تحت الخانات غير المحسومة.
+
+try:
+    V63_GOAL_ALERT_INTERVAL = 15
+except Exception:
+    pass
+
+V70_BOARD_TRACKED_MESSAGES = {}
+
+
+def _v70_fixture_teams(m):
+    t1 = canonical_team_name((m or {}).get('team1')) or (m or {}).get('team1') or ''
+    t2 = canonical_team_name((m or {}).get('team2')) or (m or {}).get('team2') or ''
+    return str(t1 or '').strip(), str(t2 or '').strip()
+
+
+def _v70_obj_scores(obj):
+    try:
+        _total, s1, s2 = _v63_score_total(obj)
+        if s1 is not None and s2 is not None:
+            return int(s1), int(s2)
+    except Exception:
+        pass
+    try:
+        return int((obj or {}).get('score1') or 0), int((obj or {}).get('score2') or 0)
+    except Exception:
+        return 0, 0
+
+
+def _v70_minute_text(obj):
+    try:
+        for k in ('minute', 'clock', 'displayClock', 'status'):
+            v = str((obj or {}).get(k) or '').strip()
+            if not v:
+                continue
+            m = re.search(r"(\d{1,3})\s*['’]?", v)
+            if m:
+                return m.group(1) + "'"
+            low = v.lower()
+            if any(x in low for x in ('half', 'ht', 'بين الشوطين')):
+                return 'HT'
+        return ''
+    except Exception:
+        return ''
+
+
+def _v70_bucket_from_obj(obj, m=None):
+    try:
+        if '_v40_match_bucket' in globals():
+            b = _v40_match_bucket(obj, m)
+            if b in ('complete', 'live', 'scheduled'):
+                return b
+    except Exception:
+        pass
+    try:
+        ph = _v67_phase_from_obj(obj) if '_v67_phase_from_obj' in globals() else 'unknown'
+        if ph == 'final':
+            return 'complete'
+        if ph in ('live1', 'live2', 'halftime'):
+            return 'live'
+        return 'scheduled'
+    except Exception:
+        return 'scheduled'
+
+
+def _v70_fetch_fixture_obj(m, force=True, timeout=None):
+    try:
+        if '_v40_fetch_live_for_fixture' in globals():
+            obj = _v40_fetch_live_for_fixture(m, bool(force))
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        pass
+    try:
+        if '_v32_result_for_fixture' in globals():
+            obj = _v32_result_for_fixture(m, force=bool(force))
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        pass
+    return {}
+
+
+def _v70_group_code_for_team(team):
+    try:
+        return _v33_team_group(team)
+    except Exception:
+        try:
+            for code, teams in WORLD_CUP_GROUPS:
+                if any(simple_key(t) == simple_key(team) for t in teams):
+                    return code
+        except Exception:
+            pass
+    return ''
+
+
+def _v70_group_fixtures(code):
+    try:
+        return _v68_group_fixtures(code) if '_v68_group_fixtures' in globals() else []
+    except Exception:
+        return []
+
+
+def _v70_active_fixtures(date_str=None):
+    try:
+        active = _normalize_date_arg(date_str) if date_str else (_v40_active_live_date() if '_v40_active_live_date' in globals() else None)
+    except Exception:
+        active = date_str
+    try:
+        rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
+        return active, list(rows or [])
+    except Exception:
+        return active, []
+
+
+# ---------- مباشر الآن بصيغة الصورة ----------
+def _v29_live_today_text(date_str=None):
+    active, rows = _v70_active_fixtures(date_str)
+    if not active or not rows:
+        return '🔄 تحديث مباشر الآن من ESPN\n\nلا توجد مباريات في مباشر الآن حسب جدول البطولة.'
+    live_lines, scheduled_lines, done_lines = [], [], []
+    for m in rows:
+        try:
+            if '_has_unknown' in globals() and _has_unknown(m):
+                continue
+        except Exception:
+            pass
+        t1, t2 = _v70_fixture_teams(m)
+        obj = _v70_fetch_fixture_obj(m, True)
+        b = _v70_bucket_from_obj(obj, m)
+        s1, s2 = _v70_obj_scores(obj)
+        minute = _v70_minute_text(obj)
+        if b == 'live':
+            live_lines.append(f"🔴 {t1} {s1} - {s2} {t2}" + (f" {minute}" if minute else ''))
+        elif b == 'complete':
+            done_lines.append(f"✅ {t1} {s1} - {s2} {t2}")
+        else:
+            scheduled_lines.append(f"⏳ {t1} × {t2}")
+    lines = ['🔄 تحديث مباشر الآن من ESPN', '']
+    if live_lines:
+        lines.extend(live_lines)
+        lines.append('')
+    if scheduled_lines:
+        lines.extend(scheduled_lines)
+        lines.append('')
+    if done_lines:
+        lines.extend(done_lines)
+    if len(lines) <= 2:
+        lines.append('لا توجد مباريات مباشرة الآن.')
+    return '\n'.join(lines).strip()
+
+
+# ---------- لوحة البطولة: إجبار التحديث + احتساب مباشر فعلي ----------
+_V70_PREV_COUNTED_MATCHES_AND_GOALS = globals().get('_v40_counted_matches_and_goals')
+def _v40_counted_matches_and_goals(force=False):
+    base = {}
+    try:
+        if callable(_V70_PREV_COUNTED_MATCHES_AND_GOALS):
+            base = dict(_V70_PREV_COUNTED_MATCHES_AND_GOALS(bool(force)) or {})
+    except Exception:
+        base = {}
+    completed = int(base.get('completed') or 0)
+    live = int(base.get('live') or 0)
+    goals = int(base.get('goals') or 0)
+    # حماية: إذا المصدر القديم لم يلتقط المباريات المباشرة، نضيفها من live rows مباشرة.
+    try:
+        _active, rows = _v70_active_fixtures()
+        live_keys = set()
+        live_goals = 0
+        for m in rows or []:
+            obj = _v70_fetch_fixture_obj(m, True)
+            b = _v70_bucket_from_obj(obj, m)
+            if b == 'live':
+                key = str((m or {}).get('id') or '') or f"{(m or {}).get('date')}|{(m or {}).get('team1')}|{(m or {}).get('team2')}"
+                live_keys.add(key)
+                s1, s2 = _v70_obj_scores(obj)
+                live_goals += int(s1 or 0) + int(s2 or 0)
+        if len(live_keys) > live:
+            # لا نعرف إن كان base goals حسب نفس المباريات، لكن غالبًا لم يحسبها إذا live=0.
+            if live == 0:
+                goals += live_goals
+            live = len(live_keys)
+    except Exception:
+        pass
+    return {'completed': completed, 'live': live, 'counted': completed + live, 'goals': goals}
+
+
+_V70_PREV_TOURNAMENT_BOARD_TEXT = globals().get('_v32_tournament_board_text')
+def _v32_tournament_board_text(force=False):
+    try:
+        if '_v65_refresh_dynamic_sources' in globals():
+            _v65_refresh_dynamic_sources(force=True, reason='board_v70_live')
+    except Exception:
+        pass
+    if callable(_V70_PREV_TOURNAMENT_BOARD_TEXT):
+        try:
+            txt = _V70_PREV_TOURNAMENT_BOARD_TEXT(True)
+        except Exception:
+            txt = ''
+    else:
+        txt = ''
+    # إذا النص القديم بقي على 0 مباشرة، صحح من الحسبة الجديدة.
+    try:
+        cnt = _v40_counted_matches_and_goals(True)
+        completed = int(cnt.get('completed') or 0)
+        live = int(cnt.get('live') or 0)
+        counted = completed + live
+        goals = int(cnt.get('goals') or 0)
+        if txt:
+            txt = re.sub(r'مباريات البطولة المحتسبة:\s*\d+\s*/', f'مباريات البطولة المحتسبة: {counted} /', txt)
+            txt = re.sub(r'مباريات دور المجموعات المحتسبة:\s*\d+\s*/', f'مباريات دور المجموعات المحتسبة: {counted} /', txt)
+            txt = re.sub(r'تفصيلها:\s*\d+\s*مكتملة\s*\+\s*\d+\s*مباشرة', f'تفصيلها: {completed} مكتملة + {live} مباشرة', txt)
+            txt = re.sub(r'إجمالي الأهداف:\s*\d+', f'إجمالي الأهداف: {goals}', txt)
+            return txt
+    except Exception:
+        pass
+    return txt or '🏆 لوحة البطولة\n\nلا توجد بيانات كافية حاليًا.'
+
+
+def _v39_board_text(force=False):
+    return _v32_tournament_board_text(True)
+
+
+def _v70_track_board_message(msg):
+    try:
+        if not msg:
+            return
+        chat_id = getattr(msg, 'chat_id', None) or getattr(getattr(msg, 'chat', None), 'id', None)
+        message_id = getattr(msg, 'message_id', None)
+        if chat_id and message_id:
+            V70_BOARD_TRACKED_MESSAGES[(int(chat_id), int(message_id))] = {'ts': time.time()}
+    except Exception:
+        pass
+
+
+async def _v70_update_tracked_board_messages(bot):
+    if not V70_BOARD_TRACKED_MESSAGES:
+        return
+    text = _v32_tournament_board_text(True)
+    kb = _v32_board_keyboard() if '_v32_board_keyboard' in globals() else None
+    now = time.time()
+    for key, info in list(V70_BOARD_TRACKED_MESSAGES.items()):
+        chat_id, message_id = key
+        if now - float(info.get('ts') or 0) > 14 * 3600:
+            V70_BOARD_TRACKED_MESSAGES.pop(key, None); continue
+        try:
+            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=kb)
+        except Exception:
+            pass
+
+
+# ---------- تنبيهات المباراة: 15 ثانية + زر إيقاف + خط أساس بعد restart ----------
+def _v70_alert_stop_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton('❌ إيقاف التنبيهات', callback_data='v63goal|off')]])
+
+
+def _v67_disable_footer():
+    return ''
+
+
+async def _v63_send_goal_alert(context, text):
+    subs = _v63_goal_subscribers()
+    dead = []
+    for sub in subs:
+        try:
+            await context.bot.send_message(chat_id=int(sub['chat_id']), text=str(text).strip(), reply_markup=_v70_alert_stop_keyboard())
+            await asyncio.sleep(0.04)
+        except Exception:
+            dead.append(str(sub.get('uid') or ''))
+    if dead:
+        try:
+            data = _v63_goal_alerts_data()
+            users = data.setdefault('users', {})
+            for uid in dead:
+                old = users.get(uid) if isinstance(users.get(uid), dict) else {}
+                users[uid] = dict(old, enabled=False, disabled_reason='send_failed', updated_at=_v63_now_text())
+            _v63_save_goal_alerts_data(data)
+        except Exception:
+            pass
+
+
+async def _v64_goal_alerts_loop(application):
+    global V64_GOAL_ALERT_LOOP_STARTED_AT
+    V64_GOAL_ALERT_LOOP_STARTED_AT = _v63_now_text()
+    try:
+        _v64_goal_alerts_log('fallback_loop_started_v70_15s')
+    except Exception:
+        pass
+    while True:
+        try:
+            ctx = _v64_application_from_context(application=application) if '_v64_application_from_context' in globals() else None
+            if ctx is None:
+                class _Ctx:
+                    pass
+                ctx = _Ctx(); ctx.application = application; ctx.bot = getattr(application, 'bot', None)
+            await v63_goal_alerts_job(ctx)
+        except Exception as e:
+            try:
+                _v64_goal_alerts_log('fallback_loop_error_v70: ' + str(e)[:200])
+            except Exception:
+                pass
+        try:
+            await asyncio.sleep(max(5, int(globals().get('V63_GOAL_ALERT_INTERVAL', 15) or 15)))
+        except Exception:
+            await asyncio.sleep(15)
+
+
+async def v63_goal_alerts_job(context):
+    global V63_GOAL_ALERTS_RUNNING
+    if V63_GOAL_ALERTS_RUNNING:
+        return
+    subs = _v63_goal_subscribers()
+    # حتى لو ما فيه مشتركين، نحدث لوحة البطولة المتعقبة إن وجدت.
+    try:
+        if getattr(context, 'bot', None):
+            await _v70_update_tracked_board_messages(context.bot)
+    except Exception:
+        pass
+    if not subs:
+        return
+    try:
+        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
+            return
+    except Exception:
+        pass
+    active = _v40_active_live_date() if '_v40_active_live_date' in globals() else None
+    if not active:
+        return
+    V63_GOAL_ALERTS_RUNNING = True
+    try:
+        state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
+        matches_state = state.setdefault('matches', {})
+        rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
+        changed = False; checked = 0; alerts = 0
+        for m in rows or []:
+            try:
+                if '_has_unknown' in globals() and _has_unknown(m):
+                    continue
+            except Exception:
+                pass
+            key = _v63_fixture_alert_key(m)
+            obj = {}
+            try:
+                obj = await asyncio.wait_for(asyncio.to_thread(_v70_fetch_fixture_obj, m, True), timeout=28)
+            except Exception as e:
+                try: _v64_goal_alerts_log('job_fetch_failed_v70: ' + str(e)[:140])
+                except Exception: pass
+                obj = {}
+            if not isinstance(obj, dict):
+                obj = {}
+            phase = _v67_phase_from_obj(obj) if '_v67_phase_from_obj' in globals() else 'unknown'
+            s1, s2 = _v70_obj_scores(obj)
+            total = int(s1 or 0) + int(s2 or 0)
+            scorers = _v63_scorers_from_obj(obj) if '_v63_scorers_from_obj' in globals() else []
+            checked += 1
+            prev = matches_state.get(key)
+            # أول مشاهدة بعد إعادة تشغيل/رفع نسخة: خط أساس فقط، لا نرسل بداية ولا أهداف قديمة.
+            if not isinstance(prev, dict) or prev.get('date') != active:
+                matches_state[key] = {
+                    'date': active, 'score1': s1, 'score2': s2, 'total': total,
+                    'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text(),
+                    'baseline_reason': 'first_seen_v70_no_old_events'
+                }
+                changed = True
+                continue
+            old_total = int(prev.get('total') or 0)
+            old_phase = str(prev.get('phase') or '')
+            event_texts = []
+            if old_phase in ('scheduled', 'unknown', '') and phase in ('live1', 'live2'):
+                event_texts.append(_v67_event_message('start', m, obj, prev))
+            if old_phase not in ('halftime', 'final') and phase == 'halftime':
+                event_texts.append(_v67_event_message('halftime', m, obj, prev))
+            if old_phase == 'halftime' and phase in ('live2',):
+                event_texts.append(_v67_event_message('second_half', m, obj, prev))
+            if old_phase != 'final' and phase == 'final':
+                event_texts.append(_v67_event_message('final', m, obj, prev))
+            if total > old_total:
+                new_scorers = []
+                if scorers:
+                    new_scorers = scorers[old_total:total] if len(scorers) >= total else []
+                event_texts.append(_v67_event_message('goal', m, obj, prev, new_scorers))
+            elif total < old_total:
+                event_texts.append(_v67_event_message('cancelled_goal', m, obj, prev))
+            for text in event_texts:
+                text = str(text or '').strip()
+                if text:
+                    await _v63_send_goal_alert(context, text)
+                    alerts += 1
+                    await asyncio.sleep(0.08)
+            matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text()}
+            changed = True
+        state['last_run'] = _v63_now_text(); state['last_checked'] = checked; state['last_alerts'] = alerts
+        if changed or checked or alerts:
+            _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
+        try: _v64_goal_alerts_log(f'job_done_v70 active={active} checked={checked} alerts={alerts}')
+        except Exception: pass
+    except Exception as e:
+        try: _v64_goal_alerts_log('job_error_v70: ' + str(e)[:240])
+        except Exception: pass
+    finally:
+        V63_GOAL_ALERTS_RUNNING = False
+
+
+# ---------- كيف يتأهل: حساب مباشر مؤقت للمجموعة كاملة ----------
+def _v70_live_group_block(team, snap=None):
+    team = _v33_find_team(team) or team
+    code = _v70_group_code_for_team(team)
+    if not code:
+        return ''
+    snap = snap or (_v33_snapshot(True) if '_v33_snapshot' in globals() else {})
+    live_lines = []
+    has_live = False
+    for m in _v70_group_fixtures(code):
+        obj = _v70_fetch_fixture_obj(m, True)
+        b = _v70_bucket_from_obj(obj, m)
+        if b == 'live':
+            has_live = True
+            t1, t2 = _v70_fixture_teams(m)
+            s1, s2 = _v70_obj_scores(obj)
+            minute = _v70_minute_text(obj)
+            live_lines.append(f'🔴 {t1} {s1} - {s2} {t2}' + (f' {minute}' if minute else ''))
+    if not has_live:
+        return ''
+    try:
+        code2, pos, row, rows = _v33_group_row(team, snap)
+    except Exception:
+        pos, row, rows = None, {}, []
+    pos_txt = {1:'الأول',2:'الثاني',3:'الثالث',4:'الرابع'}.get(int(pos or 0), 'غير واضح')
+    pts = _v66_row_pts(row) if '_v66_row_pts' in globals() else int((row or {}).get('Pts') or 0)
+    gd = _v66_row_gd(row) if '_v66_row_gd' in globals() else int((row or {}).get('GD') or 0)
+    played = _v66_row_played(row) if '_v66_row_played' in globals() else int((row or {}).get('P') or 0)
+    lines = [f'✅ كيف يتأهل {team}؟', '', '🔴 مباريات المجموعة قائمة الآن:']
+    lines.extend(live_lines)
+    lines += ['', '📌 حسب النتيجة الحالية لمباريات المجموعة:', f'المركز الحالي: {pos_txt}', f'النقاط: {pts} | الفارق: {gd:+d}', f'لعب: {played}/3', '', '⚠️ هذا حساب مباشر مؤقت، وقد يتغير إذا تغيرت نتيجة أي مباراة في المجموعة.']
+    lines += ['', 'إذا انتهت مباريات المجموعة بهذه النتيجة:']
+    if int(pos or 0) in (1,2):
+        lines.append(f'✅ {team} يتأهل مباشرًا كـ {pos_txt} المجموعة')
+        try:
+            info = _v40_r32_info_for_position(team, int(pos), snap) if '_v40_r32_info_for_position' in globals() else {}
+            slot = info.get('slot') or ''
+            opponent = info.get('opponent') or 'لم يتحدد'
+            date_line = info.get('date_line') or ''
+            lines += ['', '🏟️ خصم دور الـ32 حسب النتيجة الحالية فقط:', str(slot), f'{team} × {opponent}']
+            if date_line:
+                lines += ['', '🗓️ موعد المباراة:', str(date_line)]
+        except Exception:
+            pass
+    elif int(pos or 0) == 3:
+        lines.append(f'🥉 {team} يدخل حسابات أفضل الثوالث حسب النتيجة الحالية')
+    elif int(pos or 0) == 4:
+        lines.append(f'❌ {team} خارج مراكز التأهل حسب النتيجة الحالية')
+    return '\n'.join(lines).strip()
+
+
+_V70_PREV_HOW_QUALIFY_TEXT = globals().get('_v33_how_qualify_text')
+def _v33_how_qualify_text(team, force=False):
+    try:
+        _v65_refresh_dynamic_sources(force=True, reason='how_v70_live_group')
+    except Exception:
+        pass
+    try:
+        block = _v70_live_group_block(team, _v33_snapshot(True) if '_v33_snapshot' in globals() else None)
+        if block:
+            return block
+    except Exception:
+        pass
+    if callable(_V70_PREV_HOW_QUALIFY_TEXT):
+        return _V70_PREV_HOW_QUALIFY_TEXT(team, True)
+    return 'لا توجد بيانات كافية حاليًا.'
+
+
+# ---------- دور الـ32: التوقع الحالي لكل الخانات + عرض مركز المؤكد ----------
+def _v70_slot_rank_text(slot):
+    try:
+        if (slot or {}).get('kind') == 'pos':
+            return 'الأول' if int((slot or {}).get('pos') or 0) == 1 else 'الثاني'
+        if (slot or {}).get('kind') == 'third':
+            return 'أفضل ثالث'
+    except Exception:
+        pass
+    return ''
+
+
+def _v70_slot_pred(slot):
+    return str((slot or {}).get('predicted') or (slot or {}).get('waiting_best_third') or '').strip()
+
+
+def _v70_predicted_match_line(a, b):
+    pa, pb = _v70_slot_pred(a), _v70_slot_pred(b)
+    if pa or pb:
+        return f"   🔎 المتوقع حاليًا: {pa or 'لم يتحدد'} × {pb or 'لم يتحدد'}"
+    return ''
+
+
+def _v61_r32_row_lines(r):
+    a, b, m = r['a'], r['b'], r['fixture']
+    lines = [_v61_r32_main_line(r)]
+    if r['group'] == 'complete':
+        for slot in (a,b):
+            rank = _v70_slot_rank_text(slot)
+            lines.append(f"   ✅ {slot.get('team')}: {'متأهل رسميًا كأفضل ثالث' if slot.get('kind') == 'third' else 'متأهل رسميًا'}")
+            if rank:
+                lines.append(f'   📌 المركز: {rank}')
+    elif r['group'] == 'one':
+        if a.get('confirmed'):
+            confirmed, waiting, waiting_side = a, b, 'الثاني'
+        else:
+            confirmed, waiting, waiting_side = b, a, 'الأول'
+        rank = _v70_slot_rank_text(confirmed)
+        lines.append(f"   ✅ {confirmed.get('team')}: {'متأهل رسميًا كأفضل ثالث' if confirmed.get('kind') == 'third' else 'متأهل رسميًا'}")
+        if rank:
+            lines.append(f'   📌 المركز: {rank}')
+        lines.extend(_v66_slot_waiting_label(waiting, waiting_side))
+        pred = _v70_slot_pred(waiting)
+        if pred:
+            lines.append(f'   🔎 المتوقع حاليًا: {pred}')
+        lines.extend(_v66_best_third_waiting_lines(waiting))
+    else:
+        if a.get('kind') == 'third':
+            lines.extend(_v66_slot_waiting_label(a, 'الأول'))
+            lines.extend(_v66_best_third_waiting_lines(a))
+        if b.get('kind') == 'third':
+            lines.extend(_v66_slot_waiting_label(b, 'الثاني'))
+            lines.extend(_v66_best_third_waiting_lines(b))
+        pred_line = _v70_predicted_match_line(a,b)
+        if pred_line:
+            lines.append(pred_line)
+    dl = _v61_date_line(m)
+    if dl:
+        lines.append(f'   {dl}')
+    return lines
+
+
+# ---------- تتبع لوحة البطولة من الرسائل والأزرار ----------
+_V70_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in ('🏆 لوحة البطولة', '🏆 لوحة البطولة الآن'):
+        msg = await update.effective_message.reply_text(_v32_tournament_board_text(True), reply_markup=_v32_board_keyboard())
+        _v70_track_board_message(msg)
+        return
+    if txt == '📺 مباشر الآن':
+        msg = await update.effective_message.reply_text(_v29_live_today_text(), reply_markup=_v29_live_today_keyboard())
+        try: _v49_track_live_message(msg)
+        except Exception: pass
+        return
+    if callable(_V70_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V70_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V70_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    data = q.data or '' if q else ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'board':
+        try: await q.answer('🔄 تحديث...', show_alert=False)
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v32_tournament_board_text(True), reply_markup=_v32_board_keyboard())
+            _v70_track_board_message(q.message)
+        except Exception:
+            msg = await q.message.reply_text(_v32_tournament_board_text(True), reply_markup=_v32_board_keyboard())
+            _v70_track_board_message(msg)
+        return
+    if action in ('r32','round32'):
+        try: await q.answer('🔄 تحديث...', show_alert=False)
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v33_round32_text(True), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]]))
+        except Exception:
+            await q.message.reply_text(_v33_round32_text(True), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ لوحة البطولة', callback_data='v32|board')]]))
+        return
+    if callable(_V70_PREV_V32_CALLBACK):
+        return await _V70_PREV_V32_CALLBACK(update, context)
+
+# ==================== END V70 FINAL LIVE/BOARD/HOW/R32/ALERTS PATCH — FAHAD ====================
+
 if __name__ == "__main__":
     main()
