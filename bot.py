@@ -7015,7 +7015,13 @@ def main():
     ensure_flags_assets()
     ensure_design_assets()
     load_participants_state()
-    app = ApplicationBuilder().token(TOKEN).build()
+    # V64: نحاول تشغيل حلقة احتياط لتنبيهات الأهداف حتى لو JobQueue غير متوفر.
+    builder = ApplicationBuilder().token(TOKEN)
+    try:
+        builder = builder.post_init(v64_post_init)
+    except Exception:
+        pass
+    app = builder.build()
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:من_انا|معرفي)"), who_am_i))
@@ -13803,14 +13809,22 @@ def main():
     except Exception:
         pass
 
-    # V63 — تنبيهات الأهداف الاختيارية كل 45 ثانية.
+    # V63/V64 — تنبيهات الأهداف الاختيارية كل 45 ثانية.
     try:
         app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تنبيهات_الأهداف|تنبيهات_الاهداف|اشعارات_الأهداف|اشعارات_الاهداف)(?:\s|$)"), v63_goal_alerts_command))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:حالة_تنبيهات_الأهداف|حاله_تنبيهات_الأهداف|حالة_اشعارات_الأهداف|حاله_اشعارات_الأهداف)(?:\s|$)"), admin_only(v64_goal_alerts_status_command)))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اختبار_تنبيه_هدف|اختبار_اشعار_هدف|تجربة_تنبيه_هدف)(?:\s|$)"), admin_only(v64_goal_alerts_test_command)))
         app.add_handler(CallbackQueryHandler(v63_goal_alerts_callback, pattern=r"^v63goal\|"))
+        globals()["V64_GOAL_JOB_QUEUE_SCHEDULED"] = False
         if getattr(app, "job_queue", None):
-            app.job_queue.run_repeating(v63_goal_alerts_job, interval=V63_GOAL_ALERT_INTERVAL, first=35, name="v63_goal_alerts")
-    except Exception:
-        pass
+            app.job_queue.run_repeating(v63_goal_alerts_job, interval=V63_GOAL_ALERT_INTERVAL, first=15, name="v63_goal_alerts")
+            globals()["V64_GOAL_JOB_QUEUE_SCHEDULED"] = True
+    except Exception as e:
+        globals()["V64_GOAL_JOB_QUEUE_SCHEDULED"] = False
+        try:
+            _v64_goal_alerts_log("job_queue_schedule_failed: " + str(e)[:160])
+        except Exception:
+            pass
 
     app.run_polling()
 
@@ -51230,6 +51244,341 @@ async def v63_goal_alerts_job(context):
         V63_GOAL_ALERTS_RUNNING = False
 
 # ==================== END V63 GOAL ALERTS PATCH ====================
+
+
+# ==================== V64 GOAL ALERTS RELIABILITY PATCH — FAHAD ====================
+# الهدف:
+# - إصلاح حالة عدم وصول الإشعار رغم تفعيل التنبيهات قبل الهدف.
+# - بناء خط أساس فور التفعيل بدل انتظار أول دورة كل 45 ثانية.
+# - إضافة حلقة احتياط إذا JobQueue غير متوفر في Railway.
+# - إضافة أوامر فحص/اختبار بدون لمس باقي البوت.
+
+V64_GOAL_ALERT_LOOP_TASK = None
+V64_GOAL_ALERT_LOOP_STARTED_AT = ""
+V64_GOAL_JOB_QUEUE_SCHEDULED = False
+V64_GOAL_ALERTS_DEBUG_FILE = "goal_alerts_debug.log"
+V64_GOAL_ALERTS_BASELINE_LOCK = False
+
+
+def _v64_goal_alerts_log(msg):
+    try:
+        line = f"[{_v63_now_text()}] {str(msg)}\n"
+        with open(V64_GOAL_ALERTS_DEBUG_FILE, "a", encoding="utf-8") as f:
+            f.write(line)
+        try:
+            if os.path.getsize(V64_GOAL_ALERTS_DEBUG_FILE) > 120000:
+                with open(V64_GOAL_ALERTS_DEBUG_FILE, "r", encoding="utf-8") as f:
+                    lines = f.readlines()[-500:]
+                with open(V64_GOAL_ALERTS_DEBUG_FILE, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+class _V64MiniContext:
+    def __init__(self, application=None, bot=None):
+        self.application = application
+        self.bot = bot or getattr(application, "bot", None)
+        self.job_queue = getattr(application, "job_queue", None)
+
+
+def _v64_application_from_context(context):
+    try:
+        return getattr(context, "application", None)
+    except Exception:
+        return None
+
+
+def _v64_context_from_application(application):
+    return _V64MiniContext(application=application, bot=getattr(application, "bot", None))
+
+
+async def _v64_goal_alerts_loop(application):
+    global V64_GOAL_ALERT_LOOP_STARTED_AT
+    V64_GOAL_ALERT_LOOP_STARTED_AT = _v63_now_text()
+    _v64_goal_alerts_log("fallback_loop_started")
+    try:
+        await asyncio.sleep(8)
+    except Exception:
+        pass
+    while True:
+        try:
+            ctx = _v64_context_from_application(application)
+            await v63_goal_alerts_job(ctx)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _v64_goal_alerts_log("fallback_loop_error: " + str(e)[:200])
+        try:
+            await asyncio.sleep(max(20, int(globals().get("V63_GOAL_ALERT_INTERVAL", 45) or 45)))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await asyncio.sleep(45)
+
+
+def _v64_start_goal_alert_loop(application):
+    """تشغيل حلقة احتياط فقط إذا JobQueue غير مجدول."""
+    global V64_GOAL_ALERT_LOOP_TASK
+    try:
+        if globals().get("V64_GOAL_JOB_QUEUE_SCHEDULED"):
+            return False
+        if V64_GOAL_ALERT_LOOP_TASK and not V64_GOAL_ALERT_LOOP_TASK.done():
+            return True
+        loop = asyncio.get_running_loop()
+        V64_GOAL_ALERT_LOOP_TASK = loop.create_task(_v64_goal_alerts_loop(application))
+        return True
+    except Exception as e:
+        _v64_goal_alerts_log("fallback_loop_start_failed: " + str(e)[:160])
+        return False
+
+
+async def v64_post_init(application):
+    try:
+        if not globals().get("V64_GOAL_JOB_QUEUE_SCHEDULED"):
+            _v64_start_goal_alert_loop(application)
+    except Exception as e:
+        _v64_goal_alerts_log("post_init_error: " + str(e)[:160])
+
+
+async def _v64_goal_alerts_build_baseline(application=None, context=None, overwrite=False, reason=""):
+    global V64_GOAL_ALERTS_BASELINE_LOCK
+    if V64_GOAL_ALERTS_BASELINE_LOCK:
+        return False
+    try:
+        subs = _v63_goal_subscribers()
+        if not subs:
+            return False
+        try:
+            if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
+                return False
+        except Exception:
+            pass
+        active = _v40_active_live_date() if '_v40_active_live_date' in globals() else None
+        if not active:
+            return False
+        V64_GOAL_ALERTS_BASELINE_LOCK = True
+        state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
+        matches_state = state.setdefault('matches', {})
+        rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
+        changed = False
+        added = 0
+        for m in rows or []:
+            try:
+                if '_has_unknown' in globals() and _has_unknown(m):
+                    continue
+            except Exception:
+                pass
+            key = _v63_fixture_alert_key(m)
+            if (not overwrite) and isinstance(matches_state.get(key), dict) and matches_state.get(key, {}).get('date') == active:
+                continue
+            obj = None
+            try:
+                obj = await asyncio.wait_for(asyncio.to_thread(_v40_fetch_live_for_fixture, m, True), timeout=24)
+            except Exception as e:
+                _v64_goal_alerts_log('baseline_fetch_failed: ' + str(e)[:140])
+                obj = None
+            if not isinstance(obj, dict) or ('_patch6_numeric_score' in globals() and not _patch6_numeric_score(obj)):
+                continue
+            total, s1, s2 = _v63_score_total(obj)
+            if total is None:
+                continue
+            scorers = _v63_scorers_from_obj(obj)
+            matches_state[key] = {
+                'date': active,
+                'score1': s1,
+                'score2': s2,
+                'total': total,
+                'scorers': scorers,
+                'updated_at': _v63_now_text(),
+                'baseline_reason': reason or ('overwrite' if overwrite else 'missing_only'),
+            }
+            changed = True
+            added += 1
+        if changed:
+            state['last_baseline'] = _v63_now_text()
+            state['last_baseline_reason'] = reason or ''
+            state['last_baseline_matches'] = added
+            _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
+            _v64_goal_alerts_log(f'baseline_saved reason={reason} overwrite={overwrite} matches={added}')
+        return changed
+    finally:
+        V64_GOAL_ALERTS_BASELINE_LOCK = False
+
+
+async def v63_goal_alerts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    await q.answer()
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    app = _v64_application_from_context(context)
+    try:
+        if app is not None:
+            _v64_start_goal_alert_loop(app)
+    except Exception:
+        pass
+    if data == 'v63goal|on':
+        _v63_set_goal_alert(update, True)
+        try:
+            asyncio.create_task(_v64_goal_alerts_build_baseline(application=app, context=context, overwrite=True, reason='enabled'))
+        except Exception as e:
+            _v64_goal_alerts_log('baseline_task_failed: ' + str(e)[:160])
+    elif data == 'v63goal|off':
+        _v63_set_goal_alert(update, False)
+    uid = _v63_user_id(update)
+    try:
+        await q.edit_message_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
+    except Exception:
+        await q.message.reply_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
+
+
+async def v63_goal_alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    app = _v64_application_from_context(context)
+    try:
+        if app is not None:
+            _v64_start_goal_alert_loop(app)
+    except Exception:
+        pass
+    uid = _v63_user_id(update)
+    if uid and _v63_goal_alert_enabled(uid):
+        try:
+            asyncio.create_task(_v64_goal_alerts_build_baseline(application=app, context=context, overwrite=False, reason='menu_open_missing_only'))
+        except Exception:
+            pass
+    await update.effective_message.reply_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
+
+
+async def v64_goal_alerts_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        app = _v64_application_from_context(context)
+        if app is not None:
+            _v64_start_goal_alert_loop(app)
+    except Exception:
+        pass
+    data = _v63_goal_alerts_data()
+    users = data.get('users') or {}
+    enabled = [u for u in users.values() if isinstance(u, dict) and u.get('enabled')]
+    state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
+    active = ''
+    try:
+        active = _v40_active_live_date() if '_v40_active_live_date' in globals() else ''
+    except Exception:
+        active = ''
+    lines = [
+        '🔔 حالة تنبيهات الأهداف',
+        '',
+        f'المشتركين المفعّلين: {len(enabled)}',
+        f'JobQueue: {"مجدول ✅" if globals().get("V64_GOAL_JOB_QUEUE_SCHEDULED") else "حلقة احتياط/غير مجدول"}',
+        f'حلقة الاحتياط: {"تعمل ✅" if (globals().get("V64_GOAL_ALERT_LOOP_TASK") and not globals().get("V64_GOAL_ALERT_LOOP_TASK").done()) else "متوقفة"}',
+        f'بدأت الاحتياط: {globals().get("V64_GOAL_ALERT_LOOP_STARTED_AT") or "-"}',
+        f'التاريخ النشط: {active or "-"}',
+        f'آخر تشغيل: {state.get("last_run") or "-"}',
+        f'آخر خط أساس: {state.get("last_baseline") or "-"}',
+        f'مباريات محفوظة: {len(state.get("matches") or {})}',
+        '',
+        'للتجربة:',
+        '/اختبار_تنبيه_هدف',
+    ]
+    await update.effective_message.reply_text('\n'.join(lines).strip())
+
+
+async def v64_goal_alerts_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    text = '\n'.join([
+        '🚨 اختبار تنبيه هدف',
+        '',
+        '⚽ هذا تنبيه تجريبي للتأكد أن رسائل الأهداف توصلك.',
+        '',
+        'إذا وصلت هذه الرسالة فالإرسال شغال ✅',
+    ])
+    await update.effective_message.reply_text(text)
+
+
+async def v63_goal_alerts_job(context):
+    global V63_GOAL_ALERTS_RUNNING
+    if V63_GOAL_ALERTS_RUNNING:
+        return
+    subs = _v63_goal_subscribers()
+    if not subs:
+        return
+    try:
+        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
+            return
+    except Exception:
+        pass
+    active = _v40_active_live_date() if '_v40_active_live_date' in globals() else None
+    if not active:
+        return
+    V63_GOAL_ALERTS_RUNNING = True
+    try:
+        state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
+        matches_state = state.setdefault('matches', {})
+        rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
+        changed = False
+        checked = 0
+        alerts = 0
+        for m in rows or []:
+            try:
+                if '_has_unknown' in globals() and _has_unknown(m):
+                    continue
+            except Exception:
+                pass
+            key = _v63_fixture_alert_key(m)
+            obj = None
+            try:
+                obj = await asyncio.wait_for(asyncio.to_thread(_v40_fetch_live_for_fixture, m, True), timeout=28)
+            except Exception as e:
+                _v64_goal_alerts_log('job_fetch_failed: ' + str(e)[:140])
+                obj = None
+            if not isinstance(obj, dict) or ('_patch6_numeric_score' in globals() and not _patch6_numeric_score(obj)):
+                continue
+            total, s1, s2 = _v63_score_total(obj)
+            if total is None:
+                continue
+            checked += 1
+            scorers = _v63_scorers_from_obj(obj)
+            prev = matches_state.get(key)
+            if not isinstance(prev, dict) or prev.get('date') != active:
+                matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'updated_at': _v63_now_text(), 'baseline_reason': 'job_first_seen'}
+                changed = True
+                continue
+            old_total = int(prev.get('total') or 0)
+            if total > old_total:
+                new_scorers = []
+                if scorers:
+                    new_scorers = scorers[old_total:total] if len(scorers) >= total else []
+                text = _v63_goal_message(m, obj, prev, new_scorers)
+                await _v63_send_goal_alert(context, text)
+                alerts += 1
+            matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'updated_at': _v63_now_text()}
+            changed = True
+        state['last_run'] = _v63_now_text()
+        state['last_checked'] = checked
+        state['last_alerts'] = alerts
+        if changed:
+            _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
+        if checked or alerts:
+            _v64_goal_alerts_log(f'job_done active={active} checked={checked} alerts={alerts}')
+    except Exception as e:
+        _v64_goal_alerts_log('job_error: ' + str(e)[:240])
+    finally:
+        V63_GOAL_ALERTS_RUNNING = False
+
+# ==================== END V64 GOAL ALERTS RELIABILITY PATCH ====================
 
 if __name__ == "__main__":
     main()
