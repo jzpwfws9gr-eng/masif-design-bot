@@ -1,17 +1,20 @@
 import os, json, time, asyncio, traceback, re
 from datetime import datetime, timedelta
 
-# خدمة التحديث المنفصلة V60.3
-# الفكرة: نفس مسارات السحب القديمة السريعة من ESPN، لكن في الخلفية.
-# بوت المستخدمين يقرأ الكاش فقط ولا يسحب من ESPN وقت الضغط.
+# خدمة التحديث المنفصلة V60.4
+# اعتماد فهد:
+# - رجعنا طريقة السحب الأولى من ملف "ممتتتاز .py" كما هي عبر دوال bot.py الأصلية.
+# - لا يوجد Timeout خارجي يوقف المرحلة بعد دقيقتين؛ كل دالة تأخذ وقتها مثل القديم.
+# - يبقى timeout الداخلي لطلبات ESPN كما في الكود القديم فقط، عشان الطلب الواحد ما يعلق للأبد.
+# - بوت المستخدمين لا يسحب من ESPN وقت الضغط؛ يقرأ الكاش فقط.
 os.environ.setdefault('MASIF_USER_BOT_CACHE_ONLY', '0')
 import bot
 
 CACHE_FILE = os.environ.get('MASIF_SHARED_CACHE_FILE', 'masif_shared_cache.json')
 INTERVAL = int(os.environ.get('MASIF_UPDATE_INTERVAL_SECONDS', '120'))
 LOCK_FILE = os.environ.get('MASIF_UPDATE_LOCK_FILE', 'masif_update.lock')
-FIRST_STAGE_TIMEOUT = int(os.environ.get('MASIF_FIRST_STAGE_TIMEOUT_SECONDS', '120'))
-STAGE_TIMEOUT = int(os.environ.get('MASIF_STAGE_TIMEOUT_SECONDS', '120'))
+FIRST_STAGE_TIMEOUT = int(os.environ.get('MASIF_FIRST_STAGE_TIMEOUT_SECONDS', '0'))  # V60.4 لا يستخدم كمهلة خارجية
+STAGE_TIMEOUT = int(os.environ.get('MASIF_STAGE_TIMEOUT_SECONDS', '0'))  # V60.4 لا يستخدم كمهلة خارجية
 
 
 def now_makkah(fmt='%Y-%m-%d %H:%M:%S'):
@@ -72,8 +75,11 @@ def existing_text(key):
         return ''
 
 
-async def run_sync_with_timeout(func, timeout):
-    return await asyncio.wait_for(asyncio.to_thread(func), timeout=int(timeout))
+async def run_sync_with_timeout(func, timeout=None):
+    # V60.4: لا نستخدم wait_for هنا، لأن المستخدم طلب إلغاء مهلة الدقائق التي توقف التحديث.
+    # بما أن updater.py يعمل كعملية منفصلة عن bot.py، لو طالت مرحلة التحديث لا تعلق بوت المستخدمين.
+    # كل طلب ESPN داخليًا عنده timeout من دوال النسخة القديمة نفسها.
+    return await asyncio.to_thread(func)
 
 
 def _safe_int(x, default=0):
@@ -416,7 +422,8 @@ def _top_scorers_text():
     items = []
     if callable(getattr(bot, 'fetch_espn_top_scorers', None)):
         try:
-            items = bot.fetch_espn_top_scorers(True) or []
+            # الدالة الأصلية في ملف ممتاز بدون باراميتر. لا نمرر force حتى لا يصير TypeError/قراءة غلط.
+            items = bot.fetch_espn_top_scorers() or []
         except Exception:
             items = []
     if not items:
@@ -448,7 +455,11 @@ def _call_text(name, fallback):
     fn = getattr(bot, name, None)
     if not callable(fn):
         return fallback
-    return fn(True)
+    # بعض دوال ملف ممتاز تستقبل force وبعضها لا. نحافظ على الاثنين بدون كسر.
+    try:
+        return fn(True)
+    except TypeError:
+        return fn()
 
 
 async def refresh_stage(key, title, pct, fn, timeout, block=True, raw=False):
@@ -490,7 +501,8 @@ async def refresh_all_once(first_run=False):
     def groups_block():
         return _groups_text(groups_holder.get('groups'))
 
-    # ترتيب مهم: بيانات ESPN الخام أولًا، ثم الكاشات، ثم الحسابات.
+    # ترتيب مهم: نفس طريقة ملف ممتاز: بيانات ESPN الخام أولًا، ثم الكاشات، ثم الحسابات.
+    # لا توجد مهلة خارجية توقف المرحلة؛ الدوال الأصلية هي التي تتحكم بمهل طلبات ESPN.
     stages = [
         ('matches_today', '📡 سحب مباريات اليوم من ESPN', 8, source_today, False, True),
         ('results_by_date', '📡 سحب نتائج مباريات البطولة', 16, source_previous, False, True),
@@ -513,7 +525,7 @@ async def refresh_all_once(first_run=False):
 
 
 async def main_loop():
-    print('Masif old updater V60.3 started. interval=', INTERVAL, 'stage_timeout=', STAGE_TIMEOUT, 'first_timeout=', FIRST_STAGE_TIMEOUT, flush=True)
+    print('Masif old updater V60.4 started. interval=', INTERVAL, 'stage_timeout=', STAGE_TIMEOUT, 'first_timeout=', FIRST_STAGE_TIMEOUT, flush=True)
     first_run = not bool((load_cache().get('status') or {}).get('last_success'))
     while True:
         try:
