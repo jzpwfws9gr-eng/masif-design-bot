@@ -13655,7 +13655,13 @@ def main():
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
     ensure_flags_assets()
     ensure_design_assets()
-    app = ApplicationBuilder().token(TOKEN).build()
+    # V69: نحتاج post_init لتشغيل حلقة تنبيهات المباراة الاحتياطية إذا JobQueue غير متوفر في Railway.
+    builder = ApplicationBuilder().token(TOKEN)
+    try:
+        builder = builder.post_init(v64_post_init)
+    except Exception:
+        pass
+    app = builder.build()
 
     # أساسيات
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start))
@@ -52922,6 +52928,151 @@ def _v61_resolve_pos_slot(code, pos, snap):
     }
 
 # ==================== END V68 STRICT SLOT SOURCE PATCH ====================
+
+
+# ==================== V69 MATCH ALERTS STARTUP/FIRST-SEEN FIX — FAHAD ====================
+# إصلاح عاجل:
+# - بعض بيئات Railway لا توفر JobQueue؛ لذلك نربط post_init في main ونشغل حلقة احتياط تلقائيًا.
+# - إذا أول فحص شاف المباراة بدأت بالفعل، لا يكتفي بخط أساس صامت؛ يرسل تنبيه بداية المباراة مرة واحدة.
+# - يستمر نفس نظام تنبيهات المباراة: بداية / بين الشوطين / بداية الثاني / نهاية / هدف / إلغاء هدف.
+
+
+def _v69_should_send_first_seen_start(phase, obj=None):
+    try:
+        ph = str(phase or '')
+        if ph == 'live1':
+            return True
+        # إذا المصدر قال live بدون تحديد الشوط لكن الدقيقة صغيرة، اعتبرها بداية.
+        blob = ''
+        try:
+            blob = _v67_status_blob(obj) if '_v67_status_blob' in globals() else str((obj or {}).get('status') or '')
+        except Exception:
+            blob = str((obj or {}).get('status') or '')
+        m = re.search(r"(\d{1,3})\s*['’]?", str(blob))
+        if m and int(m.group(1)) <= 15 and ph in ('live1', 'live2', 'unknown'):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+async def v63_goal_alerts_job(context):
+    global V63_GOAL_ALERTS_RUNNING
+    if V63_GOAL_ALERTS_RUNNING:
+        return
+    subs = _v63_goal_subscribers()
+    if not subs:
+        try:
+            _v64_goal_alerts_log('job_skip_no_subscribers')
+        except Exception:
+            pass
+        return
+    try:
+        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
+            return
+    except Exception:
+        pass
+    active = _v40_active_live_date() if '_v40_active_live_date' in globals() else None
+    if not active:
+        return
+    V63_GOAL_ALERTS_RUNNING = True
+    try:
+        state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
+        matches_state = state.setdefault('matches', {})
+        rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
+        changed = False
+        checked = 0
+        alerts = 0
+        for m in rows or []:
+            try:
+                if '_has_unknown' in globals() and _has_unknown(m):
+                    continue
+            except Exception:
+                pass
+            key = _v63_fixture_alert_key(m)
+            obj = None
+            try:
+                obj = await asyncio.wait_for(asyncio.to_thread(_v40_fetch_live_for_fixture, m, True), timeout=28)
+            except Exception as e:
+                try:
+                    _v64_goal_alerts_log('job_fetch_failed_v69: ' + str(e)[:140])
+                except Exception:
+                    pass
+                obj = None
+            if not isinstance(obj, dict) or ('_patch6_numeric_score' in globals() and not _patch6_numeric_score(obj)):
+                continue
+            total, s1, s2 = _v63_score_total(obj)
+            if total is None:
+                continue
+            checked += 1
+            scorers = _v63_scorers_from_obj(obj)
+            phase = _v67_phase_from_obj(obj) if '_v67_phase_from_obj' in globals() else 'unknown'
+            prev = matches_state.get(key)
+            event_texts = []
+
+            # أول مشاهدة للمباراة: لا نرسل أهداف قديمة، لكن نرسل بداية المباراة إذا كانت للتو live.
+            if not isinstance(prev, dict) or prev.get('date') != active:
+                if _v69_should_send_first_seen_start(phase, obj):
+                    event_texts.append(_v67_event_message('start', m, obj, {'total': total, 'score1': s1, 'score2': s2, 'phase': 'scheduled'}))
+                elif phase == 'halftime':
+                    event_texts.append(_v67_event_message('halftime', m, obj, {'total': total, 'score1': s1, 'score2': s2, 'phase': 'live1'}))
+                # إذا أول مشاهدة final لا نرسل نهاية مباراة قديمة حتى لا نزعج عند إعادة التشغيل.
+                for text in event_texts:
+                    await _v63_send_goal_alert(context, text)
+                    alerts += 1
+                    await asyncio.sleep(0.08)
+                matches_state[key] = {
+                    'date': active, 'score1': s1, 'score2': s2, 'total': total,
+                    'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text(),
+                    'baseline_reason': 'first_seen_v69_with_start_check'
+                }
+                changed = True
+                continue
+
+            old_total = int(prev.get('total') or 0)
+            old_phase = str(prev.get('phase') or '')
+            if old_phase in ('scheduled', 'unknown', '') and phase in ('live1', 'live2'):
+                event_texts.append(_v67_event_message('start', m, obj, prev))
+            if old_phase not in ('halftime', 'final') and phase == 'halftime':
+                event_texts.append(_v67_event_message('halftime', m, obj, prev))
+            if old_phase == 'halftime' and phase in ('live2',):
+                event_texts.append(_v67_event_message('second_half', m, obj, prev))
+            if old_phase != 'final' and phase == 'final':
+                event_texts.append(_v67_event_message('final', m, obj, prev))
+            if total > old_total:
+                new_scorers = []
+                if scorers:
+                    new_scorers = scorers[old_total:total] if len(scorers) >= total else []
+                event_texts.append(_v67_event_message('goal', m, obj, prev, new_scorers))
+            elif total < old_total:
+                event_texts.append(_v67_event_message('cancelled_goal', m, obj, prev))
+            for text in event_texts:
+                await _v63_send_goal_alert(context, text)
+                alerts += 1
+                await asyncio.sleep(0.08)
+            matches_state[key] = {
+                'date': active, 'score1': s1, 'score2': s2, 'total': total,
+                'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text()
+            }
+            changed = True
+        state['last_run'] = _v63_now_text()
+        state['last_checked'] = checked
+        state['last_alerts'] = alerts
+        if changed or checked or alerts:
+            _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
+        try:
+            _v64_goal_alerts_log(f'job_done_v69 active={active} checked={checked} alerts={alerts}')
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            _v64_goal_alerts_log('job_error_v69: ' + str(e)[:240])
+        except Exception:
+            pass
+    finally:
+        V63_GOAL_ALERTS_RUNNING = False
+
+# ==================== END V69 MATCH ALERTS STARTUP/FIRST-SEEN FIX ====================
 
 if __name__ == "__main__":
     main()
