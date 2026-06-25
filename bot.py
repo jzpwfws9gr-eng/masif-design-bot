@@ -53866,127 +53866,251 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== END V75 PERFORMANCE + FAST ALERTS + COMPACT STATS PATCH — FAHAD ====================
 
 
-# ==================== V77 SAFE HARD DISABLE WAITING STATES — FAHAD ====================
-# مبني على V75 فقط: لا يغير التشغيل ولا يلف كل الروترات بشكل ثقيل.
-# الهدف: إغلاق حالات انتظار كيف يتأهل/حاسبة التأهل القديمة بدون كسر البوت.
+# ==================== V76 HARD DISABLE HEAVY QUALIFICATION STATES — FAHAD ====================
+# إصلاح مهم: لا يكفي حذف الأزرار؛ لازم نلغي حالات الانتظار والكولباكات والأوامر القديمة.
+# هذا يمنع رسالة "جاري تجهيز حسابات التأهل" نهائيًا بعد كتابة اسم منتخب.
 
-V77_DISABLED_TEXTS = set(globals().get('V75_DISABLED_FEATURE_TEXTS', set())) | {
-    '🔎 كيف يتأهل منتخبك؟', '🔎 كيف يتأهل منتخبك',
-    '✅ كيف تتأهل', '✅ كيف تتأهل؟', '✅ كيف يتأهل', '✅ كيف يتأهل؟',
-    '🏁 سباق التأهل', '🏁 سباق التاهل',
-    '🔥 مباريات الحسم', 'مباريات الحسم',
-    '❓ ماذا يحتاج منتخبك', '❓ ماذا يحتاج منتخبك؟',
-    '🧮 حاسبة التأهل', 'حاسبة التأهل',
-    '🧮 ماذا يحتاج منتخبك', '🧮 ماذا يحتاج منتخبك؟',
+V76_DISABLED_HEAVY_TEXTS = set(globals().get('V75_DISABLED_FEATURE_TEXTS', set())) | {
+    '🔎 كيف يتأهل منتخبك؟', '🔎 كيف يتأهل منتخبك', '✅ كيف تتأهل', '✅ كيف تتأهل؟',
+    '✅ كيف يتأهل؟', '✅ كيف يتأهل', '❓ ماذا يحتاج منتخبك', '❓ ماذا يحتاج منتخبك؟',
+    '🧮 ماذا يحتاج منتخبك', '🧮 ماذا يحتاج منتخبك؟', '🔥 مباريات الحسم', '🏁 سباق التأهل',
+    '🧮 حاسبة التأهل', 'حاسبة التأهل', 'ماذا يحتاج', 'ماذا يحتاج؟', 'كيف يتأهل', 'كيف تتأهل',
 }
-V77_DISABLED_ACTIONS = set(globals().get('V75_DISABLED_ACTIONS', set())) | {
-    'race', 'race_group', 'race_pdf', 'group',
-    'decisive', 'decisive_force',
-    'needs_pick', 'needs_team',
-    'how_start', 'how_team', 'how_details',
-    'calc_start', 'calc_run', 'calc', 'pdf',
+V76_DISABLED_HEAVY_ACTIONS = set(globals().get('V75_DISABLED_ACTIONS', set())) | {
+    'race', 'race_group', 'group', 'decisive', 'decisive_force', 'needs_pick', 'needs_team',
+    'how_start', 'how_team', 'how_details', 'calc_start', 'calc_run', 'calc', 'pdf', 'race_pdf'
 }
-V77_HEAVY_STATES = {'how', 'calc', 'needs', 'team_needs', 'how_start', 'calc_start', 'needs_pick'}
-V77_WAIT_KEYS = ('v33_waiting', 'waiting_mode', 'v32_waiting', 'v34_waiting', 'v36_waiting', 'v38_waiting', 'v61_waiting')
+V76_WAIT_KEYS = ('v33_waiting', 'waiting_mode', 'v32_waiting', 'v34_waiting', 'v36_waiting', 'v38_waiting', 'v61_waiting')
+V76_DISABLED_STATES = {'how', 'calc', 'needs', 'team_needs', 'how_start', 'calc_start', 'needs_pick'}
 
 
-def _v77_disabled_text():
-    return 'تم تعطيل حسابات التأهل الثقيلة مؤقتًا لتسريع البوت.\n\nاستخدم الأزرار السريعة: مباشر الآن، التأهل والمغادرة، أفضل الثوالث، ودور الـ32.'
-
-
-def _v77_clear_heavy_waiting(context=None):
+def _v76_clear_heavy_states(context):
     try:
         ud = getattr(context, 'user_data', None)
         if isinstance(ud, dict):
-            for k in V77_WAIT_KEYS:
+            for k in V76_WAIT_KEYS:
                 ud.pop(k, None)
     except Exception:
         pass
 
 
-def _v77_has_heavy_waiting(context=None):
+def _v76_has_heavy_state(context):
     try:
         ud = getattr(context, 'user_data', None)
         if not isinstance(ud, dict):
             return False
-        for k in V77_WAIT_KEYS:
+        for k in V76_WAIT_KEYS:
             v = ud.get(k)
-            if isinstance(v, str) and normalize_name(v).strip() in V77_HEAVY_STATES:
+            if isinstance(v, str) and normalize_name(v).strip() in V76_DISABLED_STATES:
                 return True
-        return False
+            if v in (True, 1) and ('waiting' in k):
+                return True
     except Exception:
-        return False
+        pass
+    return False
 
-# إذا حاول كود قديم يفتح حالة انتظار كيف يتأهل/حاسبة التأهل، نتجاهلها.
+
+def _v33_how_start_text():
+    return _v75_disabled_feature_text()
+
+
+def _v33_calc_start_text():
+    return _v75_disabled_feature_text()
+
+
+async def _v76_disabled_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _v76_clear_heavy_states(context)
+    msg = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
+    if msg:
+        await msg.reply_text(_v75_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+
+# الأوامر النصية الثقيلة: تعطيل كامل حتى لو استُخدمت من مشرف أو مستخدم.
+v32_qualification_race_command = _v76_disabled_command
+v32_qualification_pdf_command = _v76_disabled_command
+v32_decisive_matches_command = _v76_disabled_command
+v32_team_needs_command = _v76_disabled_command
+
+
+# آخر طبقة روتنج: تمنع أي حالة قديمة من تشغيل كيف يتأهل بعد كتابة اسم منتخب.
+_V76_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try: _v32_track_user(update)
+    except Exception: pass
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in V76_DISABLED_HEAVY_TEXTS:
+        _v76_clear_heavy_states(context)
+        await update.effective_message.reply_text(_v75_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+        return
+    if callable(_V76_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V76_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V76_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try: _v32_track_user(update)
+    except Exception: pass
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in V76_DISABLED_HEAVY_TEXTS or _v76_has_heavy_state(context):
+        _v76_clear_heavy_states(context)
+        await update.effective_message.reply_text(_v75_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+        return
+    if callable(_V76_PREV_TEXT_STATE_ROUTER):
+        return await _V76_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+_V76_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    try: _v32_track_user(update)
+    except Exception: pass
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    low_data = normalize_name(data).strip()
+    if (action in V76_DISABLED_HEAVY_ACTIONS or action.startswith(('how', 'calc', 'needs', 'race', 'decisive'))
+        or any(x in low_data for x in ('how_', 'calc_', 'needs_', 'decisive', 'race'))):
+        _v76_clear_heavy_states(context)
+        try: await q.answer('تم تعطيله لتسريع البوت', show_alert=False)
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v75_disabled_feature_text(), reply_markup=_public_main_keyboard())
+        except Exception:
+            await q.message.reply_text(_v75_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+        return
+    if callable(_V76_PREV_V32_CALLBACK):
+        return await _V76_PREV_V32_CALLBACK(update, context)
+
+# ==================== END V76 HARD DISABLE HEAVY QUALIFICATION STATES — FAHAD ====================
+
+
+# ==================== V78 SAFE START + HARD STOP HEAVY CALCS — FAHAD ====================
+# إصلاح فهد: V76/V77 كسرت التشغيل بسبب التفاف زائد على الروترات.
+# هنا نعتمد على V75 الشغالة ونقفل الحسابات الثقيلة من جذورها فقط، بدون لمس start أو تشغيل البوت.
+
+V78_DISABLED_FEATURES = {
+    'how', 'calc', 'needs', 'team_needs', 'how_start', 'calc_start', 'needs_pick',
+    'race', 'race_group', 'race_pdf', 'decisive', 'decisive_force',
+}
+V78_WAIT_KEYS = ('v33_waiting', 'waiting_mode', 'v32_waiting', 'v34_waiting', 'v36_waiting', 'v38_waiting', 'v61_waiting', 'v76_waiting', 'v77_waiting')
+V78_DISABLED_TEXTS = {
+    '✅ كيف تتأهل', '✅ كيف تتأهل؟', '✅ كيف يتأهل', '✅ كيف يتأهل؟', 'كيف يتأهل', 'كيف تتأهل',
+    '🏁 سباق التأهل', '🏁 سباق التاهل',
+    '🔥 مباريات الحسم', 'مباريات الحسم',
+    '❓ ماذا يحتاج منتخبك', '❓ ماذا يحتاج منتخبك؟', 'ماذا يحتاج', 'ماذا يحتاج؟',
+    '🧮 حاسبة التأهل', 'حاسبة التأهل', '🧮 ماذا يحتاج منتخبك', '🧮 ماذا يحتاج منتخبك؟',
+}
+
+def _v78_disabled_text():
+    return 'تم تعطيل حسابات التأهل الثقيلة لتسريع البوت.\n\nاستخدم الأزرار السريعة: مباشر الآن، التأهل والمغادرة، أفضل الثوالث، ودور الـ32.'
+
+
+def _v78_clear_heavy_states(context=None):
+    try:
+        ud = getattr(context, 'user_data', None)
+        if isinstance(ud, dict):
+            for k in V78_WAIT_KEYS:
+                ud.pop(k, None)
+    except Exception:
+        pass
+
+
+def _v78_has_heavy_state(context=None):
+    try:
+        ud = getattr(context, 'user_data', None)
+        if not isinstance(ud, dict):
+            return False
+        for k in V78_WAIT_KEYS:
+            v = ud.get(k)
+            if isinstance(v, str) and normalize_name(v).strip() in V78_DISABLED_FEATURES:
+                return True
+            if v in (True, 1) and ('waiting' in str(k)):
+                return True
+    except Exception:
+        pass
+    return False
+
+# قفل جذري: أي محاولة قديمة لتفعيل حالة انتظار كيف يتأهل/حاسبة التأهل يتم تجاهلها.
 def _v33_set_waiting_state(context, state):
     try:
         st = normalize_name(state).strip()
-        if st in V77_HEAVY_STATES:
-            _v77_clear_heavy_waiting(context)
+        if st in V78_DISABLED_FEATURES:
+            _v78_clear_heavy_states(context)
             return
         context.user_data['v33_waiting'] = state
     except Exception:
         pass
 
-# نصوص البداية القديمة ترجع رسالة التعطيل بدل تفعيل الحساب.
+# قفل جذري للنصوص والدوال الثقيلة حتى لو وصلها الطلب من روت قديم.
 def _v33_how_start_text():
-    return _v77_disabled_text()
-
+    return _v78_disabled_text()
 
 def _v33_calc_start_text():
-    return _v77_disabled_text()
+    return _v78_disabled_text()
 
+def _v36_team_info_wait_text():
+    return _v78_disabled_text()
 
-async def _v77_disabled_command(update, context):
-    _v77_clear_heavy_waiting(context)
+def _v33_how_qualify_text(team, force=False):
+    return _v78_disabled_text()
+
+async def _v36_send_how_for_team(message, team, force=False):
     try:
-        msg = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
-        if msg:
-            await msg.reply_text(_v77_disabled_text(), reply_markup=_public_main_reply_keyboard())
+        await message.reply_text(_v78_disabled_text(), reply_markup=_public_main_reply_keyboard())
     except Exception:
         pass
 
-# تعطيل الأوامر النصية الثقيلة إن استُخدمت مباشرة.
-v32_qualification_race_command = _v77_disabled_command
-v32_qualification_pdf_command = _v77_disabled_command
-v32_decisive_matches_command = _v77_disabled_command
-v32_team_needs_command = _v77_disabled_command
+async def _v78_disabled_command(update, context):
+    _v78_clear_heavy_states(context)
+    try:
+        msg = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
+        if msg:
+            await msg.reply_text(_v78_disabled_text(), reply_markup=_public_main_reply_keyboard())
+    except Exception:
+        pass
 
+# الأوامر النصية الثقيلة لا تعمل نهائيًا.
+v32_qualification_race_command = _v78_disabled_command
+v32_qualification_pdf_command = _v78_disabled_command
+v32_decisive_matches_command = _v78_disabled_command
+v32_team_needs_command = _v78_disabled_command
 
-_V77_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+# طبقة حماية خفيفة جدًا: لا نلف start ولا نشغل روترات ثقيلة، فقط نمنع النصوص/الحالات الثقيلة.
+_V78_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
 async def public_reply_menu_router(update, context):
-    try: _v32_track_user(update)
-    except Exception: pass
-    msg = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
-    txt = normalize_name(getattr(msg, 'text', '') or '').strip()
-    # الرجوع للقائمة يمسح أي حالة انتظار قديمة.
-    if txt in ('القائمة', 'ستارت', 'ابدا', 'ابدأ', 'المصيف'):
-        _v77_clear_heavy_waiting(context)
-    if txt in V77_DISABLED_TEXTS:
-        _v77_clear_heavy_waiting(context)
-        await msg.reply_text(_v77_disabled_text(), reply_markup=_public_main_reply_keyboard())
-        return
-    if callable(_V77_PREV_PUBLIC_REPLY_MENU_ROUTER):
-        return await _V77_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+    try:
+        msg = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
+        txt = normalize_name(getattr(msg, 'text', '') or '').strip()
+        if txt in ('القائمة', 'ستارت', 'ابدا', 'ابدأ', 'المصيف'):
+            _v78_clear_heavy_states(context)
+        if txt in V78_DISABLED_TEXTS:
+            _v78_clear_heavy_states(context)
+            await msg.reply_text(_v78_disabled_text(), reply_markup=_public_main_reply_keyboard())
+            return
+    except Exception:
+        pass
+    if callable(_V78_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V78_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
 
-
-_V77_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+_V78_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
 async def text_state_router(update, context):
-    try: _v32_track_user(update)
-    except Exception: pass
-    msg = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
-    txt = normalize_name(getattr(msg, 'text', '') or '').strip()
-    if txt in ('القائمة', 'ستارت', 'ابدا', 'ابدأ', 'المصيف'):
-        _v77_clear_heavy_waiting(context)
-    if txt in V77_DISABLED_TEXTS or _v77_has_heavy_waiting(context):
-        _v77_clear_heavy_waiting(context)
-        await msg.reply_text(_v77_disabled_text(), reply_markup=_public_main_reply_keyboard())
-        return
-    if callable(_V77_PREV_TEXT_STATE_ROUTER):
-        return await _V77_PREV_TEXT_STATE_ROUTER(update, context)
+    try:
+        msg = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
+        txt = normalize_name(getattr(msg, 'text', '') or '').strip()
+        if txt in ('القائمة', 'ستارت', 'ابدا', 'ابدأ', 'المصيف'):
+            _v78_clear_heavy_states(context)
+        if txt in V78_DISABLED_TEXTS or _v78_has_heavy_state(context):
+            _v78_clear_heavy_states(context)
+            await msg.reply_text(_v78_disabled_text(), reply_markup=_public_main_reply_keyboard())
+            return
+    except Exception:
+        pass
+    if callable(_V78_PREV_TEXT_STATE_ROUTER):
+        return await _V78_PREV_TEXT_STATE_ROUTER(update, context)
 
-
-_V77_PREV_V32_CALLBACK = globals().get('v32_callback')
+_V78_PREV_V32_CALLBACK = globals().get('v32_callback')
 async def v32_callback(update, context):
     q = getattr(update, 'callback_query', None)
     if not q:
@@ -53995,20 +54119,25 @@ async def v32_callback(update, context):
     parts = data.split('|')
     action = parts[1] if len(parts) > 1 else ''
     low = normalize_name(data).strip()
-    if action in V77_DISABLED_ACTIONS or action.startswith(('how', 'calc', 'needs', 'race', 'decisive')) or any(x in low for x in ('how_', 'calc_', 'needs_', 'race', 'decisive')):
-        _v77_clear_heavy_waiting(context)
-        try: await q.answer('تم تعطيله لتسريع البوت', show_alert=False)
-        except Exception: pass
+    if (action in V78_DISABLED_FEATURES or action.startswith(('how', 'calc', 'needs', 'race', 'decisive'))
+        or any(x in low for x in ('how_', 'calc_', 'needs_', 'race', 'decisive'))):
+        _v78_clear_heavy_states(context)
         try:
-            await q.edit_message_text(_v77_disabled_text(), reply_markup=_public_main_keyboard())
+            await q.answer('تم تعطيله لتسريع البوت', show_alert=False)
         except Exception:
-            try: await q.message.reply_text(_v77_disabled_text(), reply_markup=_public_main_reply_keyboard())
-            except Exception: pass
+            pass
+        try:
+            await q.edit_message_text(_v78_disabled_text(), reply_markup=_public_main_keyboard())
+        except Exception:
+            try:
+                await q.message.reply_text(_v78_disabled_text(), reply_markup=_public_main_reply_keyboard())
+            except Exception:
+                pass
         return
-    if callable(_V77_PREV_V32_CALLBACK):
-        return await _V77_PREV_V32_CALLBACK(update, context)
+    if callable(_V78_PREV_V32_CALLBACK):
+        return await _V78_PREV_V32_CALLBACK(update, context)
 
-# ==================== END V77 SAFE HARD DISABLE WAITING STATES — FAHAD ====================
+# ==================== END V78 SAFE START + HARD STOP HEAVY CALCS — FAHAD ====================
 
 if __name__ == "__main__":
     main()
