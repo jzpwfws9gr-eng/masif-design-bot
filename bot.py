@@ -13655,7 +13655,12 @@ def main():
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
     ensure_flags_assets()
     ensure_design_assets()
-    app = ApplicationBuilder().token(TOKEN).build()
+    builder = ApplicationBuilder().token(TOKEN)
+    try:
+        builder = builder.post_init(v74_post_init)
+    except Exception:
+        pass
+    app = builder.build()
 
     # أساسيات
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start))
@@ -13811,9 +13816,9 @@ def main():
 
     # V63/V64 — تنبيهات الأهداف الاختيارية كل 45 ثانية.
     try:
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تنبيهات_الأهداف|تنبيهات_الاهداف|اشعارات_الأهداف|اشعارات_الاهداف)(?:\s|$)"), v63_goal_alerts_command))
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:حالة_تنبيهات_الأهداف|حاله_تنبيهات_الأهداف|حالة_اشعارات_الأهداف|حاله_اشعارات_الأهداف)(?:\s|$)"), admin_only(v64_goal_alerts_status_command)))
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اختبار_تنبيه_هدف|اختبار_اشعار_هدف|تجربة_تنبيه_هدف)(?:\s|$)"), admin_only(v64_goal_alerts_test_command)))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تنبيهات_المباراة|تنبيهات_المباراه|اشعارات_المباراة|اشعارات_المباراه|تنبيهات_الأهداف|تنبيهات_الاهداف|اشعارات_الأهداف|اشعارات_الاهداف)(?:\s|$)"), v63_goal_alerts_command))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:حالة_تنبيهات_المباراة|حاله_تنبيهات_المباراة|حالة_تنبيهات_المباراه|حالة_اشعارات_المباراة|حاله_اشعارات_المباراه|حالة_تنبيهات_الأهداف|حاله_تنبيهات_الأهداف|حالة_اشعارات_الأهداف|حاله_اشعارات_الأهداف)(?:\s|$)"), admin_only(v64_goal_alerts_status_command)))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اختبار_تنبيه_مباراة|اختبار_تنبيه_مباراه|اختبار_اشعار_مباراة|اختبار_تنبيه_هدف|اختبار_اشعار_هدف|تجربة_تنبيه_هدف)(?:\s|$)"), admin_only(v64_goal_alerts_test_command)))
         app.add_handler(CallbackQueryHandler(v63_goal_alerts_callback, pattern=r"^v63goal\|"))
         globals()["V64_GOAL_JOB_QUEUE_SCHEDULED"] = False
         if getattr(app, "job_queue", None):
@@ -13825,6 +13830,13 @@ def main():
             _v64_goal_alerts_log("job_queue_schedule_failed: " + str(e)[:160])
         except Exception:
             pass
+
+    # V74 — كاش الحسابات الثقيلة كل 10 دقائق + fallback تنبيهات إذا JobQueue غير متوفر.
+    try:
+        if getattr(app, "job_queue", None):
+            app.job_queue.run_repeating(v74_heavy_cache_job, interval=600, first=35, name="v74_heavy_cache")
+    except Exception:
+        pass
 
     app.run_polling()
 
@@ -53021,6 +53033,363 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await _V73_PREV_V32_CALLBACK(update, context)
 
 # ==================== END V73 STABLE FINAL PATCH — FAHAD ====================
+
+
+
+# ==================== V74 STABLE NOTIFICATIONS + AGREED FORMAT PATCH — FAHAD ====================
+# إصلاحات فهد على V73:
+# - تشغيل التنبيهات حتى لو JobQueue غير متوفر عبر post_init fallback.
+# - أول دورة بعد تشغيل البوت تبني خط أساس فقط حتى لا ترسل تنبيهات قديمة.
+# - الفحص سريع لكن التحديث الخارجي محدود ومقفول بمهلة حتى لا يعلّق البوت.
+# - أزرار مباشر الآن بنفس رموز الرسالة: ✅ انتهت / 🔴 مباشر + الدقيقة / ⏳ لم تبدأ.
+# - التأهل والمغادرة يعرض المركز تحت المنتخب بسطر مستقل.
+# - زر التأهل والمغادرة يستخدم كاش 10 دقائق مع تحديث يدوي آمن.
+
+V74_HEAVY_CACHE_FILE = 'v74_heavy_cache.json'
+V74_ALERT_RUNTIME_BASELINED = False
+V74_LAST_EXTERNAL_REFRESH_TS = 0.0
+V74_EXTERNAL_REFRESH_INTERVAL = 45
+
+try:
+    V63_GOAL_ALERT_INTERVAL = 15
+except Exception:
+    pass
+
+
+def _v74_time_ts():
+    try:
+        return time.time()
+    except Exception:
+        import time as _t
+        return _t.time()
+
+
+def _v74_load_cache():
+    try:
+        return _v63_json_load(V74_HEAVY_CACHE_FILE, {'updated_ts': 0, 'items': {}})
+    except Exception:
+        return {'updated_ts': 0, 'items': {}}
+
+
+def _v74_save_cache(data):
+    try:
+        _v63_json_save(V74_HEAVY_CACHE_FILE, data)
+    except Exception:
+        pass
+
+
+# ---------- مركز المنتخب لصيغة التأهل والمغادرة ----------
+def _v74_group_letter_for_team(team, snap=None):
+    try:
+        code = _v33_team_group(team)
+        return str(code or '').upper()
+    except Exception:
+        pass
+    try:
+        for code, teams in (WORLD_CUP_GROUPS or []):
+            if any(simple_key(t) == simple_key(team) for t in teams):
+                return str(code or '').upper()
+    except Exception:
+        pass
+    return ''
+
+
+def _v74_position_line_for_status(team, snap=None):
+    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
+    try:
+        rank = _v61_rank_label_for_team(team, snap) if '_v61_rank_label_for_team' in globals() else 'لم يُحسم بعد'
+    except Exception:
+        rank = 'لم يُحسم بعد'
+    code = _v74_group_letter_for_team(team, snap)
+    if rank in ('الأول', 'اول', '1', 'المركز الأول'):
+        return f'أول المجموعة {code}' if code else 'أول المجموعة'
+    if rank in ('الثاني', 'ثاني', '2', 'المركز الثاني'):
+        return f'ثاني المجموعة {code}' if code else 'ثاني المجموعة'
+    if rank in ('أفضل ثالث', 'افضل ثالث', 'الثالث'):
+        try:
+            if _v61_is_official_best_third(team, None, snap):
+                return 'ضمن كأفضل ثالث'
+        except Exception:
+            pass
+        return 'المركز لم يُحسم'
+    return 'المركز لم يُحسم'
+
+
+_V74_PREV_STATUS_TEXT = globals().get('_v34_status_text')
+def _v74_compute_status_text():
+    q, e = _v36_status_lists() if '_v36_status_lists' in globals() else ([], [])
+    try:
+        snap = _v33_snapshot(False) if '_v33_snapshot' in globals() else {}
+        updated = snap.get('updated_at', '-')
+    except Exception:
+        snap, updated = {}, '-'
+    lines = ['✅❌ التأهل والمغادرة', f'آخر تحديث: {updated}', '']
+    lines.append(f'🟩 المتأهلون حتى الآن {len(q)}/32:')
+    if q:
+        for i, t in enumerate(q, 1):
+            lines.append(f'{i}- {t}')
+            lines.append(f'📄 {_v74_position_line_for_status(t, snap)}')
+            lines.append('')
+    else:
+        lines.append('لا يوجد حتى الآن.')
+        lines.append('')
+    lines.append(f'🟥 المغادرون حتى الآن {len(e)}/16:')
+    if e:
+        for i, t in enumerate(e, 1):
+            lines.append(f'{i}- {t}')
+    else:
+        lines.append('لا يوجد حتى الآن.')
+    lines += ['', 'ملاحظة: القائمة تتحدث حسب حسبة البطولة الحالية، ويتأهل 32 منتخبًا ويغادر 16 من دور المجموعات.']
+    return '\n'.join(lines).strip()
+
+
+def _v34_status_text(force=False):
+    cache = _v74_load_cache()
+    items = cache.setdefault('items', {})
+    now = _v74_time_ts()
+    if (not force) and isinstance(items.get('status_text'), str) and items.get('status_text') and now - float(items.get('status_ts') or 0) < 600:
+        return items.get('status_text')
+    try:
+        txt = _v74_compute_status_text()
+        items['status_text'] = txt
+        items['status_ts'] = now
+        cache['updated_ts'] = now
+        _v74_save_cache(cache)
+        return txt
+    except Exception:
+        if isinstance(items.get('status_text'), str) and items.get('status_text'):
+            return items.get('status_text') + '\n\n⚠️ تعذر التحديث الآن، تم عرض آخر بيانات محفوظة.'
+        if callable(_V74_PREV_STATUS_TEXT):
+            return _V74_PREV_STATUS_TEXT()
+        return '✅❌ التأهل والمغادرة\n\nلا توجد بيانات كافية حاليًا.'
+
+
+def _v34_status_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('🔄 تحديث الآن', callback_data='v32|status_force'), InlineKeyboardButton('⬅️ الإحصائيات', callback_data='v32|stats')],
+        [InlineKeyboardButton('⬅️ الرئيسية', callback_data='mainmenu|home')],
+    ])
+
+
+# ---------- مباشر الآن: تصحيح أزرار المباريات والرموز ----------
+def _v74_cached_obj_for_label(m):
+    for fn in ('_v34_get_fast_live_cache_for_fixture', '_v43_get_cached_match_result', '_v33_get_cached_match_result'):
+        try:
+            f = globals().get(fn)
+            if callable(f):
+                obj = f(m)
+                if isinstance(obj, dict) and (not globals().get('_patch6_numeric_score') or _patch6_numeric_score(obj)):
+                    return obj
+        except Exception:
+            pass
+    try:
+        return _v73_fetch_fixture_obj(m, False)
+    except Exception:
+        return {}
+
+
+def _v40_live_button_label(m):
+    obj = _v74_cached_obj_for_label(m)
+    t1, t2 = _v73_fixture_teams(m, obj) if '_v73_fixture_teams' in globals() else (str((m or {}).get('team1') or ''), str((m or {}).get('team2') or ''))
+    try:
+        bucket = _v73_phase_bucket(obj, m) if isinstance(obj, dict) else 'scheduled'
+    except Exception:
+        bucket = 'scheduled'
+    try:
+        s1, s2, _total = _v73_obj_scores(obj if isinstance(obj, dict) else {})
+    except Exception:
+        s1, s2 = 0, 0
+    if isinstance(obj, dict) and ('_patch6_numeric_score' not in globals() or _patch6_numeric_score(obj)):
+        if bucket == 'complete':
+            return f'✅ {t1} {s1} - {s2} {t2}'
+        if bucket == 'live':
+            minute = _v73_minute_text(obj) if '_v73_minute_text' in globals() else ''
+            return f'🔴 {t1} {s1} - {s2} {t2}' + (f' {minute}' if minute else '')
+    return f'⏳ {t1} × {t2}'
+
+
+# ---------- تنبيهات المباراة: fallback + baseline + تحديث آمن ----------
+def _v74_context_from_application(application):
+    try:
+        return _V64MiniContext(application=application, bot=getattr(application, 'bot', None))
+    except Exception:
+        class C:
+            pass
+        c = C(); c.application = application; c.bot = getattr(application, 'bot', None); c.job_queue = getattr(application, 'job_queue', None); return c
+
+
+async def v74_post_init(application):
+    # إذا JobQueue غير موجود، شغل حلقة احتياط. إذا موجود، لا نكرر.
+    try:
+        if not getattr(application, 'job_queue', None):
+            _v64_start_goal_alert_loop(application)
+    except Exception as e:
+        try: _v64_goal_alerts_log('v74_post_init_alert_loop_failed: ' + str(e)[:160])
+        except Exception: pass
+    # حدّث كاش التأهل مرة بعد التشغيل بدون تعطيل البوت.
+    try:
+        application.create_task(v74_heavy_cache_job(_v74_context_from_application(application)))
+    except Exception:
+        pass
+
+
+async def v74_heavy_cache_job(context):
+    try:
+        txt = await asyncio.wait_for(asyncio.to_thread(_v74_compute_status_text), timeout=25)
+        cache = _v74_load_cache(); items = cache.setdefault('items', {})
+        items['status_text'] = txt; items['status_ts'] = _v74_time_ts(); cache['updated_ts'] = _v74_time_ts()
+        _v74_save_cache(cache)
+    except Exception as e:
+        try: _v64_goal_alerts_log('v74_heavy_cache_failed: ' + str(e)[:140])
+        except Exception: pass
+
+
+async def _v74_external_refresh_if_due(active):
+    global V74_LAST_EXTERNAL_REFRESH_TS
+    now = _v74_time_ts()
+    if now - float(V74_LAST_EXTERNAL_REFRESH_TS or 0) < V74_EXTERNAL_REFRESH_INTERVAL:
+        return False
+    V74_LAST_EXTERNAL_REFRESH_TS = now
+    try:
+        if '_v41_update_day_results' in globals():
+            await asyncio.wait_for(asyncio.to_thread(_v41_update_day_results, active, True), timeout=18)
+            return True
+    except Exception as e:
+        try: _v64_goal_alerts_log('v74_external_refresh_skip: ' + str(e)[:140])
+        except Exception: pass
+    return False
+
+
+async def v63_goal_alerts_job(context):
+    global V63_GOAL_ALERTS_RUNNING, V74_ALERT_RUNTIME_BASELINED
+    if V63_GOAL_ALERTS_RUNNING:
+        return
+    subs = _v63_goal_subscribers() if '_v63_goal_subscribers' in globals() else []
+    if not subs:
+        return
+    try:
+        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
+            return
+    except Exception:
+        pass
+    try:
+        active = _v40_active_live_date() if '_v40_active_live_date' in globals() else None
+    except Exception:
+        active = None
+    if not active:
+        return
+    V63_GOAL_ALERTS_RUNNING = True
+    try:
+        await _v74_external_refresh_if_due(active)
+        state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
+        matches_state = state.setdefault('matches', {})
+        rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
+        clean_rows = []
+        for m in rows or []:
+            try:
+                if '_has_unknown' in globals() and _has_unknown(m):
+                    continue
+            except Exception:
+                pass
+            clean_rows.append(m)
+        checked = 0; alerts = 0; changed = False
+        runtime_baseline = not V74_ALERT_RUNTIME_BASELINED
+        for m in clean_rows:
+            obj = _v74_cached_obj_for_label(m)
+            if not isinstance(obj, dict):
+                obj = {}
+            key = _v63_fixture_alert_key(m)
+            s1, s2, total = _v73_obj_scores(obj) if '_v73_obj_scores' in globals() else (0,0,0)
+            phase = _v67_phase_from_obj(obj) if '_v67_phase_from_obj' in globals() else 'unknown'
+            try: scorers = _v63_scorers_from_obj(obj)
+            except Exception: scorers = []
+            checked += 1
+            prev = matches_state.get(key)
+            if runtime_baseline or not isinstance(prev, dict) or prev.get('date') != active:
+                matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text(), 'baseline_reason': 'v74_runtime_start_no_old_alerts' if runtime_baseline else 'first_seen'}
+                changed = True
+                continue
+            old_total = int(prev.get('total') or 0)
+            old_phase = str(prev.get('phase') or '')
+            texts = []
+            if old_phase in ('scheduled', 'unknown', '') and phase in ('live1', 'live2'):
+                texts.append(_v67_event_message('start', m, obj, prev))
+            if old_phase not in ('halftime', 'final') and phase == 'halftime':
+                texts.append(_v67_event_message('halftime', m, obj, prev))
+            if old_phase == 'halftime' and phase == 'live2':
+                texts.append(_v67_event_message('second_half', m, obj, prev))
+            if old_phase != 'final' and phase == 'final':
+                texts.append(_v67_event_message('final', m, obj, prev))
+            if int(total or 0) > old_total:
+                new_scorers = scorers[old_total:int(total or 0)] if scorers and len(scorers) >= int(total or 0) else []
+                texts.append(_v67_event_message('goal', m, obj, prev, new_scorers))
+            elif int(total or 0) < old_total:
+                texts.append(_v67_event_message('cancelled_goal', m, obj, prev))
+            for txt in texts:
+                if str(txt or '').strip():
+                    await _v63_send_goal_alert(context, txt)
+                    alerts += 1
+                    await asyncio.sleep(0.05)
+            matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text()}
+            changed = True
+        V74_ALERT_RUNTIME_BASELINED = True
+        state['last_run'] = _v63_now_text(); state['last_checked'] = checked; state['last_alerts'] = alerts; state['runtime_baseline'] = runtime_baseline
+        if changed or checked or alerts:
+            _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
+        try: _v64_goal_alerts_log(f'v74_alert_job active={active} checked={checked} alerts={alerts} baseline={runtime_baseline}')
+        except Exception: pass
+    except Exception as e:
+        try: _v64_goal_alerts_log('v74_alert_job_error: ' + str(e)[:240])
+        except Exception: pass
+    finally:
+        V63_GOAL_ALERTS_RUNNING = False
+
+
+# ---------- راوتر نهائي لحالة التنبيهات + تحديث التأهل يدويًا ----------
+_V74_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in ('status_home','status_force'):
+        try: await q.answer('🔄 تحديث...' if action == 'status_force' else '', show_alert=False)
+        except Exception: pass
+        txt = _v34_status_text(force=(action == 'status_force'))
+        try:
+            await q.edit_message_text(txt, reply_markup=_v34_status_keyboard())
+        except Exception:
+            await q.message.reply_text(txt, reply_markup=_v34_status_keyboard())
+        return
+    if callable(_V74_PREV_V32_CALLBACK):
+        return await _V74_PREV_V32_CALLBACK(update, context)
+
+
+_V74_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try: _v32_track_user(update)
+    except Exception: pass
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt == '✅❌ التأهل والمغادرة':
+        await update.effective_message.reply_text(_v34_status_text(False), reply_markup=_v34_status_keyboard())
+        return
+    if txt in ('🔔 تنبيهات المباراة', '🔔 تنبيهات الأهداف'):
+        return await v63_goal_alerts_command(update, context)
+    if callable(_V74_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V74_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V74_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in ('🔔 تنبيهات المباراة', '🔔 تنبيهات الأهداف'):
+        return await v63_goal_alerts_command(update, context)
+    if callable(_V74_PREV_TEXT_STATE_ROUTER):
+        return await _V74_PREV_TEXT_STATE_ROUTER(update, context)
+
+# ==================== END V74 STABLE NOTIFICATIONS + AGREED FORMAT PATCH — FAHAD ====================
 
 if __name__ == "__main__":
     main()
