@@ -53639,5 +53639,76 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V71 SAFE FINAL PATCH — FAHAD ====================
 
+
+# ==================== V72 ALERT DELIVERY FIX — FAHAD ====================
+# إصلاح عدم وصول تنبيهات المباراة في بعض بيئات Railway:
+# - تشغيل حلقة احتياط دائمًا بجانب JobQueue، مع قفل داخلي يمنع التكرار.
+# - إصلاح إنشاء سياق الحلقة الاحتياطية في V71.
+# - الحفاظ على شرط عدم إعادة إرسال التنبيهات القديمة بعد إعادة التشغيل.
+
+async def _v64_goal_alerts_loop(application):
+    global V64_GOAL_ALERT_LOOP_STARTED_AT
+    V64_GOAL_ALERT_LOOP_STARTED_AT = _v63_now_text()
+    try:
+        _v64_goal_alerts_log('fallback_loop_started_v72_always_15s')
+    except Exception:
+        pass
+    try:
+        await asyncio.sleep(5)
+    except Exception:
+        pass
+    while True:
+        try:
+            # مهم: لا نستدعي _v64_application_from_context بوسيط application لأنها تقبل context فقط.
+            if '_v64_context_from_application' in globals():
+                ctx = _v64_context_from_application(application)
+            else:
+                class _Ctx: pass
+                ctx = _Ctx(); ctx.application = application; ctx.bot = getattr(application, 'bot', None); ctx.job_queue = getattr(application, 'job_queue', None)
+            await v63_goal_alerts_job(ctx)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            try:
+                _v64_goal_alerts_log('fallback_loop_error_v72: ' + str(e)[:220])
+            except Exception:
+                pass
+        try:
+            await asyncio.sleep(max(5, int(globals().get('V63_GOAL_ALERT_INTERVAL', 15) or 15)))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await asyncio.sleep(15)
+
+
+def _v64_start_goal_alert_loop(application):
+    """تشغيل حلقة احتياط دائمة لضمان وصول التنبيهات حتى لو JobQueue تعطل."""
+    global V64_GOAL_ALERT_LOOP_TASK
+    try:
+        if V64_GOAL_ALERT_LOOP_TASK and not V64_GOAL_ALERT_LOOP_TASK.done():
+            return True
+        loop = asyncio.get_running_loop()
+        V64_GOAL_ALERT_LOOP_TASK = loop.create_task(_v64_goal_alerts_loop(application))
+        return True
+    except Exception as e:
+        try:
+            _v64_goal_alerts_log('fallback_loop_start_failed_v72: ' + str(e)[:180])
+        except Exception:
+            pass
+        return False
+
+
+async def v64_post_init(application):
+    # نبدأ حلقة احتياط دائمًا، حتى لو JobQueue موجود. القفل والحالة يمنعون التكرار.
+    try:
+        _v64_start_goal_alert_loop(application)
+    except Exception as e:
+        try:
+            _v64_goal_alerts_log('post_init_error_v72: ' + str(e)[:180])
+        except Exception:
+            pass
+
+# ==================== END V72 ALERT DELIVERY FIX — FAHAD ====================
+
 if __name__ == "__main__":
     main()
