@@ -54026,5 +54026,497 @@ V74_HEAVY_CACHE_JOB_DISABLED = True
 V79_HEAVY_BACKGROUND_CACHE_DISABLED = True
 # ==================== END V79 SAFE STOP HEAVY BACKGROUND CACHE — FAHAD ====================
 
+
+
+# ==================== V81 FAST LIVE SNAPSHOT + ALERT FEED PATCH — FAHAD ====================
+# الهدف:
+# - بث مباشر خلفي سريع كل 5 ثواني من ESPN/مسار النتائج فقط.
+# - حفظ live snapshot خفيف تقرأ منه: مباشر الآن، تنبيهات المباراة، ولوحة البطولة عند الفتح.
+# - عدم تشغيل كيف يتأهل/سباق التأهل/حاسبة التأهل/مباريات الحسم/ماذا يحتاج منتخبك.
+# - أزرار مباشر الآن تعرض الدقيقة للمباشر: 🔴 المغرب 0 - 0 هايتي 4'
+
+V81_LIVE_SNAPSHOT_FILE = 'v81_live_snapshot.json'
+V81_LIVE_REFRESH_RUNNING = False
+V81_LAST_ESPN_REFRESH_TS = 0.0
+V81_LIVE_SNAPSHOT_MAX_AGE = 180
+
+try:
+    V63_GOAL_ALERT_INTERVAL = 5
+    V74_EXTERNAL_REFRESH_INTERVAL = 5
+    V49_LIVE_REFRESH_INTERVAL = 5
+except Exception:
+    pass
+
+_V81_PREV_CACHED_OBJ_FOR_LABEL = globals().get('_v74_cached_obj_for_label')
+_V81_PREV_V49_LIVE_AUTO_REFRESH_JOB = globals().get('v49_live_auto_refresh_job')
+_V81_PREV_V74_POST_INIT = globals().get('v74_post_init')
+
+
+def _v81_ts():
+    try:
+        return time.time()
+    except Exception:
+        import time as _t
+        return _t.time()
+
+
+def _v81_now_text():
+    try:
+        return _now_riyadh_text()
+    except Exception:
+        try:
+            return _v63_now_text()
+        except Exception:
+            return ''
+
+
+def _v81_active_date():
+    try:
+        d = _v40_active_live_date() if '_v40_active_live_date' in globals() else None
+        if d and '_normalize_date_arg' in globals():
+            d = _normalize_date_arg(d)
+        if d:
+            return d
+    except Exception:
+        pass
+    try:
+        now = _v49_now_makkah_dt() if '_v49_now_makkah_dt' in globals() else datetime.utcnow() + timedelta(hours=3)
+        return now.strftime('%d/%m/%Y')
+    except Exception:
+        return ''
+
+
+def _v81_load_snapshot():
+    try:
+        return _v63_json_load(V81_LIVE_SNAPSHOT_FILE, {'date': '', 'updated_ts': 0, 'updated_at': '', 'matches': []})
+    except Exception:
+        return {'date': '', 'updated_ts': 0, 'updated_at': '', 'matches': []}
+
+
+def _v81_save_snapshot(data):
+    try:
+        _v63_json_save(V81_LIVE_SNAPSHOT_FILE, data or {})
+    except Exception:
+        pass
+
+
+def _v81_key_for_fixture(m):
+    try:
+        return _v63_fixture_alert_key(m)
+    except Exception:
+        try:
+            return _v33_fixture_key(m)
+        except Exception:
+            return str(m)
+
+
+def _v81_minimal_obj(obj, m=None):
+    obj = obj if isinstance(obj, dict) else {}
+    m = m if isinstance(m, dict) else {}
+    out = {}
+    for k in ('score1','score2','status','minute','period','clock','displayClock','state','detail','shortDetail','source','actual_source'):
+        if k in obj:
+            try:
+                out[k] = obj.get(k)
+            except Exception:
+                pass
+    try:
+        if 'scorers' in obj and isinstance(obj.get('scorers'), list):
+            out['scorers'] = [str(x) for x in obj.get('scorers')[:12]]
+    except Exception:
+        pass
+    try:
+        if 'score1' not in out and obj.get('home_score') is not None:
+            out['score1'] = obj.get('home_score')
+        if 'score2' not in out and obj.get('away_score') is not None:
+            out['score2'] = obj.get('away_score')
+    except Exception:
+        pass
+    try:
+        out['team1'] = canonical_team_name(m.get('team1')) or m.get('team1') or obj.get('team1') or ''
+        out['team2'] = canonical_team_name(m.get('team2')) or m.get('team2') or obj.get('team2') or ''
+    except Exception:
+        out['team1'] = m.get('team1') or obj.get('team1') or ''
+        out['team2'] = m.get('team2') or obj.get('team2') or ''
+    return out
+
+
+def _v81_record_from_fixture(m, obj):
+    m = m if isinstance(m, dict) else {}
+    obj = obj if isinstance(obj, dict) else {}
+    key = _v81_key_for_fixture(m)
+    mini = _v81_minimal_obj(obj, m)
+    try:
+        bucket = _v73_phase_bucket(mini, m) if '_v73_phase_bucket' in globals() else 'scheduled'
+    except Exception:
+        bucket = 'scheduled'
+    try:
+        phase = _v67_phase_from_obj(mini) if '_v67_phase_from_obj' in globals() else 'unknown'
+    except Exception:
+        phase = 'unknown'
+    try:
+        minute = _v73_minute_text(mini) if '_v73_minute_text' in globals() else ''
+    except Exception:
+        minute = ''
+    try:
+        s1, s2, total = _v73_obj_scores(mini) if '_v73_obj_scores' in globals() else (0,0,0)
+    except Exception:
+        s1, s2, total = 0, 0, 0
+    try:
+        t1, t2 = _v73_fixture_teams(m, mini) if '_v73_fixture_teams' in globals() else (mini.get('team1') or m.get('team1') or '', mini.get('team2') or m.get('team2') or '')
+    except Exception:
+        t1, t2 = (m.get('team1') or ''), (m.get('team2') or '')
+    return {
+        'key': key,
+        'fixture': {
+            'id': m.get('id'), 'team1': t1, 'team2': t2,
+            'date': m.get('date'), 'time': m.get('time'), 'group': m.get('group') or m.get('group_code')
+        },
+        'obj': mini,
+        'team1': t1,
+        'team2': t2,
+        'score1': int(s1 or 0),
+        'score2': int(s2 or 0),
+        'total': int(total or 0),
+        'bucket': bucket,
+        'phase': phase,
+        'minute': minute,
+    }
+
+
+def _v81_snapshot_match_map():
+    snap = _v81_load_snapshot()
+    try:
+        if _v81_ts() - float(snap.get('updated_ts') or 0) > V81_LIVE_SNAPSHOT_MAX_AGE:
+            return {}
+    except Exception:
+        pass
+    out = {}
+    for rec in (snap.get('matches') or []):
+        if isinstance(rec, dict) and rec.get('key'):
+            out[str(rec.get('key'))] = rec
+    return out
+
+
+async def _v81_refresh_live_snapshot(force=False, reason=''):
+    """تحديث خلفي خفيف للبث المباشر/التنبيهات فقط."""
+    global V81_LIVE_REFRESH_RUNNING, V81_LAST_ESPN_REFRESH_TS
+    now = _v81_ts()
+    old = _v81_load_snapshot()
+    active = _v81_active_date()
+    if not active:
+        return old
+    try:
+        if (not force) and old.get('date') == active and now - float(old.get('updated_ts') or 0) < 4.0:
+            return old
+    except Exception:
+        pass
+    if V81_LIVE_REFRESH_RUNNING:
+        return old
+    V81_LIVE_REFRESH_RUNNING = True
+    try:
+        # سحب ESPN/نتائج اليوم فقط، بمهلة قصيرة؛ لا حسابات تأهل ولا سيناريوهات.
+        try:
+            if now - float(V81_LAST_ESPN_REFRESH_TS or 0) >= float(globals().get('V74_EXTERNAL_REFRESH_INTERVAL', 5) or 5):
+                if '_v41_update_day_results' in globals():
+                    await asyncio.wait_for(asyncio.to_thread(_v41_update_day_results, active, True), timeout=5.5)
+                V81_LAST_ESPN_REFRESH_TS = now
+                try:
+                    if '_V40_COUNTED_MATCHES_CACHE' in globals() and isinstance(_V40_COUNTED_MATCHES_CACHE, dict):
+                        _V40_COUNTED_MATCHES_CACHE['ts'] = 0
+                        _V40_COUNTED_MATCHES_CACHE['data'] = None
+                except Exception:
+                    pass
+        except Exception as e:
+            try: _v64_goal_alerts_log('v81_espn_refresh_skip: ' + str(e)[:140])
+            except Exception: pass
+        rows = []
+        try:
+            rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
+        except Exception:
+            rows = []
+        records = []
+        fetcher = _V81_PREV_CACHED_OBJ_FOR_LABEL
+        for m in rows or []:
+            try:
+                if '_has_unknown' in globals() and _has_unknown(m):
+                    continue
+            except Exception:
+                pass
+            obj = {}
+            try:
+                if callable(fetcher):
+                    obj = fetcher(m)
+            except Exception:
+                obj = {}
+            if not isinstance(obj, dict):
+                obj = {}
+            records.append(_v81_record_from_fixture(m, obj))
+        snap = {
+            'date': active,
+            'updated_ts': _v81_ts(),
+            'updated_at': _v81_now_text(),
+            'reason': str(reason or ''),
+            'matches': records,
+        }
+        _v81_save_snapshot(snap)
+        return snap
+    finally:
+        V81_LIVE_REFRESH_RUNNING = False
+
+
+def _v74_cached_obj_for_label(m):
+    """مباشر الآن والتنبيهات يقرؤون أولًا من live snapshot السريع."""
+    try:
+        mp = _v81_snapshot_match_map()
+        rec = mp.get(_v81_key_for_fixture(m))
+        if isinstance(rec, dict):
+            obj = dict(rec.get('obj') or {})
+            obj.setdefault('score1', rec.get('score1'))
+            obj.setdefault('score2', rec.get('score2'))
+            obj.setdefault('team1', rec.get('team1'))
+            obj.setdefault('team2', rec.get('team2'))
+            obj.setdefault('minute', rec.get('minute'))
+            obj.setdefault('status', rec.get('phase') or rec.get('bucket'))
+            return obj
+    except Exception:
+        pass
+    try:
+        if callable(_V81_PREV_CACHED_OBJ_FOR_LABEL):
+            return _V81_PREV_CACHED_OBJ_FOR_LABEL(m)
+    except Exception:
+        pass
+    return {}
+
+
+def _v40_live_button_label(m):
+    obj = _v74_cached_obj_for_label(m)
+    t1, t2 = _v73_fixture_teams(m, obj) if '_v73_fixture_teams' in globals() else (str((m or {}).get('team1') or ''), str((m or {}).get('team2') or ''))
+    try:
+        s1, s2, _total = _v73_obj_scores(obj if isinstance(obj, dict) else {})
+    except Exception:
+        s1, s2 = 0, 0
+    try:
+        bucket = _v73_phase_bucket(obj, m) if isinstance(obj, dict) and obj else 'scheduled'
+    except Exception:
+        bucket = 'scheduled'
+    if isinstance(obj, dict) and ('_patch6_numeric_score' not in globals() or _patch6_numeric_score(obj)):
+        if bucket == 'complete':
+            return f'✅ {t1} {s1} - {s2} {t2}'
+        if bucket == 'live':
+            minute = _v73_minute_text(obj) if '_v73_minute_text' in globals() else ''
+            return f'🔴 {t1} {s1} - {s2} {t2}' + (f' {minute}' if minute else '')
+    return f'⏳ {t1} × {t2}'
+
+
+async def v63_goal_alerts_job(context):
+    """كل 5 ثواني: حدث live snapshot ثم أرسل التنبيهات من نفس المصدر."""
+    global V63_GOAL_ALERTS_RUNNING, V74_ALERT_RUNTIME_BASELINED
+    if V63_GOAL_ALERTS_RUNNING:
+        return
+    try:
+        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
+            return
+    except Exception:
+        pass
+    active = _v81_active_date()
+    if not active:
+        return
+    V63_GOAL_ALERTS_RUNNING = True
+    try:
+        snap = await _v81_refresh_live_snapshot(force=True, reason='alerts_5s')
+        records = [r for r in (snap.get('matches') or []) if isinstance(r, dict)]
+        subs = _v63_goal_subscribers() if '_v63_goal_subscribers' in globals() else []
+        # حتى بدون مشتركين: نحدث السناب شوت فقط، ولا نرسل شيء.
+        if not subs:
+            try:
+                state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
+                state['last_run'] = _v63_now_text(); state['last_checked'] = len(records); state['last_alerts'] = 0; state['snapshot_only'] = True
+                _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
+            except Exception:
+                pass
+            return
+        state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
+        matches_state = state.setdefault('matches', {})
+        checked = 0; alerts = 0; changed = False
+        runtime_baseline = not globals().get('V74_ALERT_RUNTIME_BASELINED')
+        for rec in records:
+            key = str(rec.get('key') or '')
+            if not key:
+                continue
+            m = dict(rec.get('fixture') or {})
+            m.setdefault('team1', rec.get('team1'))
+            m.setdefault('team2', rec.get('team2'))
+            obj = dict(rec.get('obj') or {})
+            obj.setdefault('score1', rec.get('score1'))
+            obj.setdefault('score2', rec.get('score2'))
+            obj.setdefault('team1', rec.get('team1'))
+            obj.setdefault('team2', rec.get('team2'))
+            obj.setdefault('minute', rec.get('minute'))
+            phase = str(rec.get('phase') or '')
+            try: scorers = _v63_scorers_from_obj(obj)
+            except Exception: scorers = []
+            try: s1, s2, total = _v73_obj_scores(obj)
+            except Exception: s1, s2, total = int(rec.get('score1') or 0), int(rec.get('score2') or 0), int(rec.get('total') or 0)
+            checked += 1
+            prev = matches_state.get(key)
+            if runtime_baseline or not isinstance(prev, dict) or prev.get('date') != active:
+                matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text(), 'baseline_reason': 'v81_runtime_start_no_old_alerts' if runtime_baseline else 'first_seen'}
+                changed = True
+                continue
+            old_total = int(prev.get('total') or 0)
+            old_phase = str(prev.get('phase') or '')
+            texts = []
+            if old_phase in ('scheduled', 'unknown', '') and phase in ('live1', 'live2'):
+                texts.append(_v67_event_message('start', m, obj, prev))
+            if old_phase not in ('halftime', 'final') and phase == 'halftime':
+                texts.append(_v67_event_message('halftime', m, obj, prev))
+            if old_phase == 'halftime' and phase == 'live2':
+                texts.append(_v67_event_message('second_half', m, obj, prev))
+            if old_phase != 'final' and phase == 'final':
+                texts.append(_v67_event_message('final', m, obj, prev))
+            if int(total or 0) > old_total:
+                new_scorers = scorers[old_total:int(total or 0)] if scorers and len(scorers) >= int(total or 0) else []
+                texts.append(_v67_event_message('goal', m, obj, prev, new_scorers))
+            elif int(total or 0) < old_total:
+                texts.append(_v67_event_message('cancelled_goal', m, obj, prev))
+            for txt in texts:
+                if str(txt or '').strip():
+                    await _v63_send_goal_alert(context, txt)
+                    alerts += 1
+                    await asyncio.sleep(0.03)
+            matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text()}
+            changed = True
+        V74_ALERT_RUNTIME_BASELINED = True
+        state['last_run'] = _v63_now_text(); state['last_checked'] = checked; state['last_alerts'] = alerts; state['runtime_baseline'] = runtime_baseline; state['live_snapshot_updated_at'] = snap.get('updated_at')
+        if changed or checked or alerts:
+            _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
+        try: _v64_goal_alerts_log(f'v81_alert_job active={active} checked={checked} alerts={alerts} baseline={runtime_baseline}')
+        except Exception: pass
+    except Exception as e:
+        try: _v64_goal_alerts_log('v81_alert_job_error: ' + str(e)[:240])
+        except Exception: pass
+    finally:
+        V63_GOAL_ALERTS_RUNNING = False
+
+
+async def v49_live_auto_refresh_job(context):
+    """تحديث رسائل مباشر الآن المفتوحة كل 5 ثواني من live snapshot."""
+    try:
+        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
+            return
+    except Exception:
+        pass
+    active = _v81_active_date()
+    if not active:
+        return
+    await _v81_refresh_live_snapshot(force=True, reason='live_message_5s')
+    if not globals().get('V49_LIVE_TRACKED_MESSAGES'):
+        return
+    text = _v29_live_today_text(active)
+    kb = _v29_live_today_keyboard(active)
+    now_ts = _v81_ts()
+    for key, info in list(V49_LIVE_TRACKED_MESSAGES.items()):
+        chat_id, message_id = key
+        if now_ts - float((info or {}).get('ts') or 0) > 14 * 3600:
+            V49_LIVE_TRACKED_MESSAGES.pop(key, None); continue
+        try:
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=kb)
+        except Exception:
+            pass
+
+
+def _v81_completed_results_and_live_goals():
+    results = []
+    try:
+        results = _v80_results_from_cached_snapshot() if '_v80_results_from_cached_snapshot' in globals() else []
+    except Exception:
+        results = []
+    live_snap = _v81_load_snapshot()
+    live_records = [r for r in (live_snap.get('matches') or []) if isinstance(r, dict)]
+    complete_keys = set()
+    for r in results or []:
+        try:
+            k1 = simple_key(r.get('team1')) if 'simple_key' in globals() else str(r.get('team1') or '').lower()
+            k2 = simple_key(r.get('team2')) if 'simple_key' in globals() else str(r.get('team2') or '').lower()
+            complete_keys.add(tuple(sorted([k1, k2])))
+        except Exception:
+            pass
+    live_goals = 0
+    live_count = 0
+    for rec in live_records:
+        if rec.get('bucket') == 'live':
+            live_count += 1
+            try:
+                k1 = simple_key(rec.get('team1')) if 'simple_key' in globals() else str(rec.get('team1') or '').lower()
+                k2 = simple_key(rec.get('team2')) if 'simple_key' in globals() else str(rec.get('team2') or '').lower()
+                if tuple(sorted([k1, k2])) not in complete_keys:
+                    live_goals += int(rec.get('score1') or 0) + int(rec.get('score2') or 0)
+            except Exception:
+                pass
+    return results or [], live_count, live_goals, live_snap
+
+
+def _v32_tournament_board_text(force=False):
+    # لا تسحب ESPN هنا؛ البث الخلفي يغذي الكاش/السناب شوت كل 5 ثواني.
+    snap = _v80_load_tournament_cache_snapshot() if '_v80_load_tournament_cache_snapshot' in globals() else {}
+    results, live_count, live_goals, live_snap = _v81_completed_results_and_live_goals()
+    completed = int(snap.get('completed_count') or snap.get('finished_count') or len(results) or 0)
+    goals = int(snap.get('goals') or 0)
+    if not goals:
+        try:
+            goals = sum(int(r.get('score1') or 0) + int(r.get('score2') or 0) for r in results)
+        except Exception:
+            goals = 0
+    goals += int(live_goals or 0)
+    try:
+        q_count = len(snap.get('qualified') or [])
+        e_count = len(snap.get('eliminated') or [])
+    except Exception:
+        q_count, e_count = 0, 0
+    try:
+        atk, dfn = _v75_single_attack_defense_lines(False)
+    except Exception:
+        atk, dfn = '-', '-'
+    try:
+        biggest = _v80_biggest_result_from_cached() if '_v80_biggest_result_from_cached' in globals() else _v75_biggest_result_from_saved(False)
+    except Exception:
+        biggest = '-'
+    updated = live_snap.get('updated_at') or snap.get('updated_at') or (_now_riyadh_text() if '_now_riyadh_text' in globals() else '-')
+    return '\n'.join([
+        '📌 ملخص البطولة',
+        f'آخر تحديث: {updated}',
+        '',
+        f'📺 مباشر الآن: {int(live_count or 0)}',
+        f'✅ مباريات منتهية: {completed}',
+        f'🥅 إجمالي الأهداف: {goals}',
+        f'🔥 أكبر نتيجة: {biggest}',
+        f'⚔️ أقوى هجوم: {atk}',
+        f'🛡️ أقوى دفاع: {dfn}',
+        f'✅ المتأهلون رسميًا: {q_count}/32',
+        f'🚪 المغادرون رسميًا: {e_count}/16',
+    ]).strip()
+
+
+def _v39_board_text(force=False):
+    return _v32_tournament_board_text(False)
+
+
+async def v74_post_init(application):
+    # إذا JobQueue لم يُجدول، شغل حلقة احتياط حتى لو كان job_queue موجودًا لكن الجدولة فشلت.
+    try:
+        if not globals().get('V64_GOAL_JOB_QUEUE_SCHEDULED'):
+            _v64_start_goal_alert_loop(application)
+    except Exception as e:
+        try: _v64_goal_alerts_log('v81_post_init_loop_failed: ' + str(e)[:160])
+        except Exception: pass
+    try:
+        globals()['V74_HEAVY_CACHE_JOB_DISABLED'] = True
+        globals()['V79_HEAVY_BACKGROUND_CACHE_DISABLED'] = True
+    except Exception:
+        pass
+
+# ==================== END V81 FAST LIVE SNAPSHOT + ALERT FEED PATCH — FAHAD ====================
+
 if __name__ == "__main__":
     main()
