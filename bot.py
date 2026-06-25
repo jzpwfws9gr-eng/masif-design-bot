@@ -13655,13 +13655,7 @@ def main():
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
     ensure_flags_assets()
     ensure_design_assets()
-    # V69: نحتاج post_init لتشغيل حلقة تنبيهات المباراة الاحتياطية إذا JobQueue غير متوفر في Railway.
-    builder = ApplicationBuilder().token(TOKEN)
-    try:
-        builder = builder.post_init(v64_post_init)
-    except Exception:
-        pass
-    app = builder.build()
+    app = ApplicationBuilder().token(TOKEN).build()
 
     # أساسيات
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start))
@@ -13817,9 +13811,9 @@ def main():
 
     # V63/V64 — تنبيهات الأهداف الاختيارية كل 45 ثانية.
     try:
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تنبيهات_المباراة|تنبيهات_المباريات|اشعارات_المباراة|اشعارات_المباريات|تنبيهات_الأهداف|تنبيهات_الاهداف|اشعارات_الأهداف|اشعارات_الاهداف)(?:\s|$)"), v63_goal_alerts_command))
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:حالة_تنبيهات_المباراة|حاله_تنبيهات_المباراة|حالة_تنبيهات_الأهداف|حاله_تنبيهات_الأهداف|حالة_اشعارات_الأهداف|حاله_اشعارات_الأهداف)(?:\s|$)"), admin_only(v64_goal_alerts_status_command)))
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اختبار_تنبيه_المباراة|اختبار_تنبيه_مباراة|اختبار_تنبيه_هدف|اختبار_اشعار_هدف|تجربة_تنبيه_هدف)(?:\s|$)"), admin_only(v64_goal_alerts_test_command)))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تنبيهات_الأهداف|تنبيهات_الاهداف|اشعارات_الأهداف|اشعارات_الاهداف)(?:\s|$)"), v63_goal_alerts_command))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:حالة_تنبيهات_الأهداف|حاله_تنبيهات_الأهداف|حالة_اشعارات_الأهداف|حاله_اشعارات_الأهداف)(?:\s|$)"), admin_only(v64_goal_alerts_status_command)))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:اختبار_تنبيه_هدف|اختبار_اشعار_هدف|تجربة_تنبيه_هدف)(?:\s|$)"), admin_only(v64_goal_alerts_test_command)))
         app.add_handler(CallbackQueryHandler(v63_goal_alerts_callback, pattern=r"^v63goal\|"))
         globals()["V64_GOAL_JOB_QUEUE_SCHEDULED"] = False
         if getattr(app, "job_queue", None):
@@ -52137,55 +52131,84 @@ def _v33_round32_text(force=False):
 # ==================== END V66 STRICT ROUND32 GUARANTEE PATCH ====================
 
 
-# ==================== V67 MATCH ALERTS AUTO + EVENTS PATCH — FAHAD ====================
-# اعتماد فهد:
-# - "🔔 تنبيهات المباراة" مفعلة تلقائيًا لكل المستخدمين افتراضيًا.
-# - من لا يريدها يوقفها من الزر، ويُحفظ الإيقاف ولا يعاد تفعيله تلقائيًا.
-# - تنبيهات المباراة تشمل: بداية المباراة، نهاية الشوط الأول/بين الشوطين، بداية الشوط الثاني، نهاية المباراة، هدف، إلغاء هدف.
-# - آخر كل تنبيه يحتوي على صيغة الإيقاف.
-# - لا نذكر VAR عند إلغاء هدف؛ فقط: تم إلغاء الهدف.
+# ==================== V73 STABLE FINAL PATCH — FAHAD ====================
+# مبني على النسخة الشغالة التي أرسلها فهد (V66 تقريبًا) بدون لوب ثقيل يعلّق البوت.
+# التعديلات المضافة بعد V66:
+# - تنبيهات المباراة بدل تنبيهات الأهداف: بداية / بين الشوطين / بداية الشوط الثاني / نهاية / هدف / إلغاء هدف.
+# - التنبيهات مفعلة تلقائيًا لكل المستخدمين، ومن يوقفها يُحفظ إيقافه.
+# - زر "❌ إيقاف التنبيهات" داخل كل رسالة تنبيه.
+# - لا يعيد إرسال أحداث قديمة بعد إعادة التشغيل: أول مشاهدة لكل مباراة تبني خط أساس فقط.
+# - فحص آمن كل 15 ثانية مع timeout قصير وتوازي محدود؛ إذا المصدر تأخر يتجاوز ولا يعلّق.
+# - مباشر الآن بصيغة ESPN المختصرة والرموز.
+# - لوحة البطولة تحدث عند الفتح/التحديث وتحسب المباريات المباشرة.
+# - كيف يتأهل يحسب المجموعة كاملة مباشر ويربط المباراتين في نفس المجموعة.
+# - دور الـ32 يحافظ على شرط 1000٪ ويضيف توقعًا حاليًا للخانات غير المحسومة.
 
-V67_MATCH_ALERT_BUTTON = '🔔 تنبيهات المباراة'
-V67_OLD_GOAL_ALERT_BUTTON = '🔔 تنبيهات الأهداف'
+try:
+    V63_GOAL_ALERT_INTERVAL = 15
+except Exception:
+    pass
+
+V73_MATCH_ALERT_BUTTON = '🔔 تنبيهات المباراة'
+V73_OLD_GOAL_ALERT_BUTTON = '🔔 تنبيهات الأهداف'
+
+
+def _v73_stop_alerts_keyboard():
+    try:
+        return InlineKeyboardMarkup([[InlineKeyboardButton('❌ إيقاف التنبيهات', callback_data='v63goal|off')]])
+    except Exception:
+        return None
 
 
 def _v67_disable_footer():
-    return 'لإيقاف التنبيهات:\n🔔 تنبيهات المباراة ← ❌ إيقاف'
+    return 'لإيقاف التنبيهات اضغط الزر بالأسفل.'
 
 
-def _v67_line_score(m, obj):
-    t1 = canonical_team_name((m or {}).get('team1')) or (m or {}).get('team1') or (obj or {}).get('team1') or ''
-    t2 = canonical_team_name((m or {}).get('team2')) or (m or {}).get('team2') or (obj or {}).get('team2') or ''
-    _total, s1, s2 = _v63_score_total(obj)
-    if s1 is None or s2 is None:
-        s1 = (obj or {}).get('score1', '-')
-        s2 = (obj or {}).get('score2', '-')
-    return f'{t1} {s1} - {s2} {t2}'
-
-
-def _v67_status_blob(obj):
+def _v73_fixture_teams(m=None, obj=None):
+    m = m or {}; obj = obj or {}
     try:
-        return normalize_name(f"{(obj or {}).get('status') or ''} {(obj or {}).get('minute') or ''} {(obj or {}).get('period') or ''} {(obj or {}).get('clock') or ''}").strip()
+        t1 = canonical_team_name(m.get('team1')) or canonical_team_name(obj.get('team1')) or m.get('team1') or obj.get('team1') or ''
+        t2 = canonical_team_name(m.get('team2')) or canonical_team_name(obj.get('team2')) or m.get('team2') or obj.get('team2') or ''
+        return str(t1 or '').strip(), str(t2 or '').strip()
+    except Exception:
+        return str(m.get('team1') or obj.get('team1') or '').strip(), str(m.get('team2') or obj.get('team2') or '').strip()
+
+
+def _v73_obj_scores(obj):
+    try:
+        total, s1, s2 = _v63_score_total(obj)
+        if s1 is not None and s2 is not None:
+            return int(s1), int(s2), int(total or 0)
+    except Exception:
+        pass
+    try:
+        s1 = int((obj or {}).get('score1') or 0); s2 = int((obj or {}).get('score2') or 0)
+        return s1, s2, s1 + s2
+    except Exception:
+        return 0, 0, 0
+
+
+def _v73_status_blob(obj):
+    try:
+        return normalize_name(' '.join(str((obj or {}).get(k) or '') for k in ('status','minute','period','clock','displayClock','state','detail','shortDetail'))).strip()
     except Exception:
         return str((obj or {}).get('status') or '')
 
 
 def _v67_phase_from_obj(obj):
-    """يرجع مرحلة مستقرة للمباراة: scheduled/live1/halftime/live2/final/unknown"""
-    blob = _v67_status_blob(obj)
+    blob = _v73_status_blob(obj)
     low = blob.lower()
-    if any(x in low for x in ['final', 'full time', 'full-time', 'ft', 'انتهت', 'نهاية المباراة', 'انتهى']):
+    if any(x in low for x in ['final', 'full time', 'full-time', 'ft', 'انتهت', 'نهاية المباراة', 'انتهى', 'complete']):
         return 'final'
     if any(x in low for x in ['halftime', 'half time', 'half-time', 'ht', 'بين الشوطين', 'نهاية الشوط الأول', 'نهاية الشوط الاول']):
         return 'halftime'
     if any(x in low for x in ['scheduled', 'not started', 'pre-game', 'pregame', 'لم تبدأ', 'لم تبدا']):
         return 'scheduled'
-    # محاولة استنتاج الشوط من الدقيقة
     minute = None
     try:
-        m = re.search(r"(\d{1,3})\s*['’]?", blob)
-        if m:
-            minute = int(m.group(1))
+        mm = re.search(r"(\d{1,3})\s*['’]?", blob)
+        if mm:
+            minute = int(mm.group(1))
     except Exception:
         minute = None
     if any(x in low for x in ['2h', 'second half', 'الشوط الثاني']):
@@ -52199,11 +52222,60 @@ def _v67_phase_from_obj(obj):
     return 'unknown'
 
 
+def _v73_phase_bucket(obj, fixture=None):
+    try:
+        if '_v40_match_bucket' in globals():
+            b = _v40_match_bucket(obj, fixture)
+            if b in ('complete','live','scheduled'):
+                return b
+    except Exception:
+        pass
+    ph = _v67_phase_from_obj(obj)
+    if ph == 'final':
+        return 'complete'
+    if ph in ('live1','live2','halftime'):
+        return 'live'
+    return 'scheduled'
+
+
+def _v73_minute_text(obj):
+    blob = _v73_status_blob(obj)
+    try:
+        m = re.search(r"(\d{1,3})\s*['’]?", blob)
+        if m:
+            return m.group(1) + "'"
+    except Exception:
+        pass
+    low = blob.lower()
+    if any(x in low for x in ('halftime','half time','ht','بين الشوطين')):
+        return 'HT'
+    return ''
+
+
+def _v73_fetch_fixture_obj(m, force=True):
+    # تستخدم داخل to_thread/timeout في التنبيهات، وداخل العرض عند الطلب.
+    try:
+        if '_v40_fetch_live_for_fixture' in globals():
+            obj = _v40_fetch_live_for_fixture(m, bool(force))
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        pass
+    try:
+        if '_v32_result_for_fixture' in globals():
+            obj = _v32_result_for_fixture(m, force=bool(force))
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        pass
+    return {}
+
+
 def _v67_event_message(kind, m, obj, prev_state=None, new_scorers=None):
-    score = _v67_line_score(m, obj)
-    minute = str((obj or {}).get('minute') or (obj or {}).get('status') or '').strip()
-    # لا نكرر status الطويل إذا هو ليس دقيقة فعلية
-    has_minute = bool(re.search(r"\d{1,3}\s*['’]", minute))
+    t1, t2 = _v73_fixture_teams(m, obj)
+    s1, s2, total = _v73_obj_scores(obj)
+    score = f'{t1} {s1} - {s2} {t2}'
+    minute = _v73_minute_text(obj)
     lines = []
     if kind == 'start':
         lines = ['▶️ بداية المباراة', '', score]
@@ -52216,7 +52288,6 @@ def _v67_event_message(kind, m, obj, prev_state=None, new_scorers=None):
     elif kind == 'cancelled_goal':
         lines = ['❌ إلغاء هدف', '', score, '', 'تم إلغاء الهدف']
     elif kind == 'goal':
-        total, s1, s2 = _v63_score_total(obj)
         old_total = int((prev_state or {}).get('total') or 0)
         diff = max(1, int(total or 0) - old_total)
         title = '🚨 هدف جديد!' if diff == 1 else f'🚨 {diff} أهداف جديدة!'
@@ -52224,33 +52295,28 @@ def _v67_event_message(kind, m, obj, prev_state=None, new_scorers=None):
         try:
             old_s1 = int((prev_state or {}).get('score1') or 0)
             old_s2 = int((prev_state or {}).get('score2') or 0)
-            t1 = canonical_team_name((m or {}).get('team1')) or (m or {}).get('team1') or ''
-            t2 = canonical_team_name((m or {}).get('team2')) or (m or {}).get('team2') or ''
-            if s1 is not None and s2 is not None:
-                if s1 > old_s1 and s2 == old_s2:
-                    lines.append(f'✅ الهدف لصالح: {t1}')
-                elif s2 > old_s2 and s1 == old_s1:
-                    lines.append(f'✅ الهدف لصالح: {t2}')
+            if s1 > old_s1 and s2 == old_s2:
+                lines.append(f'✅ الهدف لصالح: {t1}')
+            elif s2 > old_s2 and s1 == old_s1:
+                lines.append(f'✅ الهدف لصالح: {t2}')
         except Exception:
             pass
         new_scorers = list(new_scorers or [])
         if new_scorers:
-            lines.append('')
-            lines.append('⚽ المسجل:')
+            lines += ['', '⚽ المسجل:']
             for sc in new_scorers[:diff]:
                 lines.append(f'- {sc}')
         else:
-            lines.append('')
-            lines.append('⚽ تم تسجيل هدف جديد')
-        if has_minute:
+            lines += ['', '⚽ تم تسجيل هدف جديد']
+        if minute:
             lines.append(f'⏱️ الدقيقة: {minute}')
     else:
         lines = ['🔔 تنبيه المباراة', '', score]
     lines += ['', _v67_disable_footer()]
-    return '\n'.join([str(x) for x in lines if x is not None]).strip()
+    return '\n'.join(str(x) for x in lines if x is not None).strip()
 
 
-# الافتراضي مفعّل للجميع، والإيقاف فقط هو الاستثناء.
+# الافتراضي: الجميع مشترك، إلا من أوقف التنبيهات بنفسه.
 def _v63_goal_alert_enabled(user_id):
     uid = str(user_id or '')
     if not uid:
@@ -52291,7 +52357,7 @@ def _v63_set_goal_alert(update, enabled=True):
     return True
 
 
-def _v67_users_json_map():
+def _v73_users_json_map():
     try:
         data = _v32_load_json(V32_USERS_FILE, {'users': {}}) if '_v32_load_json' in globals() else _v63_json_load(V32_USERS_FILE, {'users': {}})
         users = data.get('users') if isinstance(data, dict) else {}
@@ -52305,7 +52371,7 @@ def _v63_goal_subscribers():
     overrides = alerts.get('users') or {}
     out = {}
     # كل مستخدمي البوت مشتركين افتراضيًا.
-    for uid, item in _v67_users_json_map().items():
+    for uid, item in _v73_users_json_map().items():
         if not isinstance(item, dict):
             continue
         ov = overrides.get(str(uid)) if isinstance(overrides.get(str(uid)), dict) else {}
@@ -52317,7 +52383,7 @@ def _v63_goal_subscribers():
                 out[str(uid)] = {'uid': str(uid), 'chat_id': int(chat_id)}
             except Exception:
                 pass
-    # احتياط: من فعّل قديمًا ولم يوجد في users.json.
+    # احتياط: من فعّل يدويًا أو كان محفوظًا في ملف التنبيهات.
     for uid, item in overrides.items():
         if not isinstance(item, dict) or item.get('enabled') is False:
             continue
@@ -52333,39 +52399,32 @@ def _v63_goal_subscribers():
 def _v63_goal_alert_text(user_id=None):
     enabled = _v63_goal_alert_enabled(user_id) if user_id else True
     status = 'مفعّلة تلقائيًا ✅' if enabled else 'متوقفة ❌'
-    lines = [
-        '🔔 تنبيهات المباراة',
-        '',
+    return '\n'.join([
+        '🔔 تنبيهات المباراة', '',
         f'الحالة الحالية: {status}',
-        f'⏱️ الفحص: كل {V63_GOAL_ALERT_INTERVAL} ثانية وقت المباريات',
-        '',
+        f'⏱️ الفحص: كل {V63_GOAL_ALERT_INTERVAL} ثانية وقت المباريات', '',
         'التنبيهات تشمل:',
         '▶️ بداية المباراة',
         '⏸️ نهاية الشوط الأول',
         '🔁 بداية الشوط الثاني',
         '🏁 نهاية المباراة',
         '🚨 هدف جديد',
-        '❌ إلغاء هدف',
-        '',
+        '❌ إلغاء هدف', '',
         'التنبيهات مفعّلة للجميع تلقائيًا، واللي ما يبيها يقدر يوقفها من هنا.',
-    ]
-    return '\n'.join(lines).strip()
+    ]).strip()
 
 
 def _v63_goal_alert_keyboard(user_id=None):
     enabled = _v63_goal_alert_enabled(user_id) if user_id else True
-    if enabled:
-        row = [InlineKeyboardButton('❌ إيقاف تنبيهات المباراة', callback_data='v63goal|off')]
-    else:
-        row = [InlineKeyboardButton('✅ تفعيل تنبيهات المباراة', callback_data='v63goal|on')]
+    row = [InlineKeyboardButton('❌ إيقاف تنبيهات المباراة', callback_data='v63goal|off')] if enabled else [InlineKeyboardButton('✅ تفعيل تنبيهات المباراة', callback_data='v63goal|on')]
     return InlineKeyboardMarkup([row, [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')]])
 
 
-# استبدال زر تنبيهات الأهداف القديم باسم تنبيهات المباراة بدون تكرار.
-_V67_PREV_PUBLIC_MAIN_REPLY_KEYBOARD = globals().get('_public_main_reply_keyboard')
+# استبدال زر التنبيهات القديم في القوائم بدون تكرار.
+_V73_PREV_PUBLIC_MAIN_REPLY_KEYBOARD = globals().get('_public_main_reply_keyboard')
 def _public_main_reply_keyboard():
     try:
-        kb = _V67_PREV_PUBLIC_MAIN_REPLY_KEYBOARD() if callable(_V67_PREV_PUBLIC_MAIN_REPLY_KEYBOARD) else ReplyKeyboardMarkup([[]])
+        kb = _V73_PREV_PUBLIC_MAIN_REPLY_KEYBOARD() if callable(_V73_PREV_PUBLIC_MAIN_REPLY_KEYBOARD) else ReplyKeyboardMarkup([[]])
         rows = [list(r) for r in (getattr(kb, 'keyboard', None) or [])]
     except Exception:
         rows = []
@@ -52374,31 +52433,29 @@ def _public_main_reply_keyboard():
         nr = []
         for btn in row:
             txt = str(getattr(btn, 'text', btn) or '')
-            if txt in (V67_OLD_GOAL_ALERT_BUTTON, V67_MATCH_ALERT_BUTTON):
-                txt = V67_MATCH_ALERT_BUTTON
-                if exists:
-                    continue
-                exists = True
-                nr.append(txt)
-            else:
-                nr.append(btn)
+            if txt in (V73_OLD_GOAL_ALERT_BUTTON, V73_MATCH_ALERT_BUTTON):
+                if not exists:
+                    nr.append(V73_MATCH_ALERT_BUTTON); exists = True
+                continue
+            nr.append(btn)
         if nr:
             out.append(nr)
     if not exists:
+        # نحطها قرب دور الـ32 إذا موجود.
         inserted = False
         for row in out:
             texts = [str(getattr(b, 'text', b) or '') for b in row]
             if '🏟️ مباريات دور الـ32' in texts and len(row) < 2:
-                row.append(V67_MATCH_ALERT_BUTTON); inserted = True; break
+                row.append(V73_MATCH_ALERT_BUTTON); inserted = True; break
         if not inserted:
-            out.insert(4 if len(out) >= 4 else len(out), [V67_MATCH_ALERT_BUTTON])
+            out.insert(4 if len(out) >= 4 else len(out), [V73_MATCH_ALERT_BUTTON])
     return ReplyKeyboardMarkup(out, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder='اختر من القائمة')
 
 
-_V67_PREV_PUBLIC_MAIN_KEYBOARD = globals().get('_public_main_keyboard')
+_V73_PREV_PUBLIC_MAIN_KEYBOARD = globals().get('_public_main_keyboard')
 def _public_main_keyboard():
     try:
-        kb = _V67_PREV_PUBLIC_MAIN_KEYBOARD() if callable(_V67_PREV_PUBLIC_MAIN_KEYBOARD) else InlineKeyboardMarkup([])
+        kb = _V73_PREV_PUBLIC_MAIN_KEYBOARD() if callable(_V73_PREV_PUBLIC_MAIN_KEYBOARD) else InlineKeyboardMarkup([])
         rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
     except Exception:
         rows = []
@@ -52408,41 +52465,22 @@ def _public_main_keyboard():
         for btn in row:
             txt = str(getattr(btn, 'text', '') or '')
             cb = str(getattr(btn, 'callback_data', '') or '')
-            if txt in (V67_OLD_GOAL_ALERT_BUTTON, V67_MATCH_ALERT_BUTTON) or cb == 'v63goal|menu':
-                if exists:
-                    continue
-                exists = True
-                nr.append(InlineKeyboardButton(V67_MATCH_ALERT_BUTTON, callback_data='v63goal|menu'))
-            else:
-                nr.append(btn)
+            if txt in (V73_OLD_GOAL_ALERT_BUTTON, V73_MATCH_ALERT_BUTTON) or cb == 'v63goal|menu':
+                if not exists:
+                    nr.append(InlineKeyboardButton(V73_MATCH_ALERT_BUTTON, callback_data='v63goal|menu')); exists = True
+                continue
+            nr.append(btn)
         if nr:
             out.append(nr)
     if not exists:
         inserted = False
         for row in out:
-            if any(str(getattr(btn, 'text', '') or '') == '🏟️ مباريات دور الـ32' for btn in row) and len(row) < 2:
-                row.append(InlineKeyboardButton(V67_MATCH_ALERT_BUTTON, callback_data='v63goal|menu')); inserted = True; break
+            texts = [str(getattr(b, 'text', '') or '') for b in row]
+            if '🏟️ مباريات دور الـ32' in texts and len(row) < 2:
+                row.append(InlineKeyboardButton(V73_MATCH_ALERT_BUTTON, callback_data='v63goal|menu')); inserted = True; break
         if not inserted:
-            out.insert(4 if len(out) >= 4 else len(out), [InlineKeyboardButton(V67_MATCH_ALERT_BUTTON, callback_data='v63goal|menu')])
+            out.insert(4 if len(out) >= 4 else len(out), [InlineKeyboardButton(V73_MATCH_ALERT_BUTTON, callback_data='v63goal|menu')])
     return InlineKeyboardMarkup(out)
-
-
-_V67_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
-async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
-    if txt in (V67_MATCH_ALERT_BUTTON, V67_OLD_GOAL_ALERT_BUTTON):
-        return await v63_goal_alerts_command(update, context)
-    if callable(_V67_PREV_PUBLIC_REPLY_MENU_ROUTER):
-        return await _V67_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
-
-
-_V67_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
-async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
-    if txt in (V67_MATCH_ALERT_BUTTON, V67_OLD_GOAL_ALERT_BUTTON):
-        return await v63_goal_alerts_command(update, context)
-    if callable(_V67_PREV_TEXT_STATE_ROUTER):
-        return await _V67_PREV_TEXT_STATE_ROUTER(update, context)
 
 
 async def v63_goal_alerts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52450,24 +52488,16 @@ async def v63_goal_alerts_callback(update: Update, context: ContextTypes.DEFAULT
     if not q:
         return
     data = q.data or ''
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
     try:
         _v32_track_user(update)
     except Exception:
         pass
-    app = _v64_application_from_context(context) if '_v64_application_from_context' in globals() else getattr(context, 'application', None)
-    try:
-        if app is not None and '_v64_start_goal_alert_loop' in globals():
-            _v64_start_goal_alert_loop(app)
-    except Exception:
-        pass
     if data == 'v63goal|on':
         _v63_set_goal_alert(update, True)
-        try:
-            if '_v64_goal_alerts_build_baseline' in globals():
-                asyncio.create_task(_v64_goal_alerts_build_baseline(application=app, context=context, overwrite=True, reason='match_alert_enabled'))
-        except Exception:
-            pass
     elif data == 'v63goal|off':
         _v63_set_goal_alert(update, False)
     uid = _v63_user_id(update)
@@ -52482,19 +52512,7 @@ async def v63_goal_alerts_command(update: Update, context: ContextTypes.DEFAULT_
         _v32_track_user(update)
     except Exception:
         pass
-    app = _v64_application_from_context(context) if '_v64_application_from_context' in globals() else getattr(context, 'application', None)
-    try:
-        if app is not None and '_v64_start_goal_alert_loop' in globals():
-            _v64_start_goal_alert_loop(app)
-    except Exception:
-        pass
     uid = _v63_user_id(update)
-    if uid and _v63_goal_alert_enabled(uid):
-        try:
-            if '_v64_goal_alerts_build_baseline' in globals():
-                asyncio.create_task(_v64_goal_alerts_build_baseline(application=app, context=context, overwrite=False, reason='match_alert_menu_open'))
-        except Exception:
-            pass
     await update.effective_message.reply_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
 
 
@@ -52503,14 +52521,13 @@ async def _v63_send_goal_alert(context, text):
     dead = []
     for sub in subs:
         try:
-            await context.bot.send_message(chat_id=int(sub['chat_id']), text=text)
-            await asyncio.sleep(0.04)
+            await context.bot.send_message(chat_id=int(sub['chat_id']), text=str(text).strip(), reply_markup=_v73_stop_alerts_keyboard())
+            await asyncio.sleep(0.035)
         except Exception:
             dead.append(str(sub.get('uid') or ''))
     if dead:
         try:
-            data = _v63_goal_alerts_data()
-            users = data.setdefault('users', {})
+            data = _v63_goal_alerts_data(); users = data.setdefault('users', {})
             for uid in dead:
                 old = users.get(uid) if isinstance(users.get(uid), dict) else {}
                 users[uid] = dict(old, enabled=False, disabled_reason='send_failed', updated_at=_v63_now_text())
@@ -52520,440 +52537,42 @@ async def _v63_send_goal_alert(context, text):
 
 
 async def v64_goal_alerts_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        _v32_track_user(update)
-    except Exception:
-        pass
-    text = '\n'.join([
-        '🚨 اختبار تنبيهات المباراة',
-        '',
-        'هذا تنبيه تجريبي للتأكد أن رسائل المباراة توصلك.',
-        '',
-        'إذا وصلت هذه الرسالة فالإرسال شغال ✅',
-        '',
-        _v67_disable_footer(),
-    ])
-    await update.effective_message.reply_text(text)
+    txt = '\n'.join(['🚨 اختبار تنبيهات المباراة', '', 'إذا وصلت هذه الرسالة فالإرسال شغال ✅', '', _v67_disable_footer()])
+    await update.effective_message.reply_text(txt, reply_markup=_v73_stop_alerts_keyboard())
 
 
 async def v64_goal_alerts_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        app = _v64_application_from_context(context) if '_v64_application_from_context' in globals() else getattr(context, 'application', None)
-        if app is not None and '_v64_start_goal_alert_loop' in globals():
-            _v64_start_goal_alert_loop(app)
-    except Exception:
-        pass
-    users_all = _v67_users_json_map()
-    subs = _v63_goal_subscribers()
     data = _v63_goal_alerts_data()
     disabled = [u for u in (data.get('users') or {}).values() if isinstance(u, dict) and u.get('enabled') is False]
     state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
-    active = ''
     try:
         active = _v40_active_live_date() if '_v40_active_live_date' in globals() else ''
     except Exception:
         active = ''
     lines = [
-        '🔔 حالة تنبيهات المباراة',
-        '',
-        f'المستخدمون المحفوظون: {len(users_all)}',
-        f'المشتركون تلقائيًا/فعليًا: {len(subs)}',
+        '🔔 حالة تنبيهات المباراة', '',
+        f'المستخدمون المحفوظون: {len(_v73_users_json_map())}',
+        f'المشتركون فعليًا: {len(_v63_goal_subscribers())}',
         f'أوقفوا التنبيهات: {len(disabled)}',
-        f'JobQueue: {"مجدول ✅" if globals().get("V64_GOAL_JOB_QUEUE_SCHEDULED") else "حلقة احتياط/غير مجدول"}',
-        f'حلقة الاحتياط: {"تعمل ✅" if (globals().get("V64_GOAL_ALERT_LOOP_TASK") and not globals().get("V64_GOAL_ALERT_LOOP_TASK").done()) else "متوقفة"}',
-        f'بدأت الاحتياط: {globals().get("V64_GOAL_ALERT_LOOP_STARTED_AT") or "-"}',
         f'التاريخ النشط: {active or "-"}',
         f'آخر تشغيل: {state.get("last_run") or "-"}',
-        f'مباريات محفوظة: {len(state.get("matches") or {})}',
-        '',
-        'للتجربة:',
-        '/اختبار_تنبيه_هدف',
+        f'آخر فحص مباريات: {state.get("last_checked", 0)}',
+        f'آخر تنبيهات مرسلة: {state.get("last_alerts", 0)}',
+        f'مباريات محفوظة: {len(state.get("matches") or {})}', '',
+        'للتجربة: /اختبار_تنبيه_هدف',
     ]
     await update.effective_message.reply_text('\n'.join(lines).strip())
 
 
-async def v63_goal_alerts_job(context):
-    global V63_GOAL_ALERTS_RUNNING
-    if V63_GOAL_ALERTS_RUNNING:
-        return
-    subs = _v63_goal_subscribers()
-    if not subs:
-        return
+async def _v73_fetch_for_alert(m):
     try:
-        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
-            return
-    except Exception:
-        pass
-    active = _v40_active_live_date() if '_v40_active_live_date' in globals() else None
-    if not active:
-        return
-    V63_GOAL_ALERTS_RUNNING = True
-    try:
-        state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
-        matches_state = state.setdefault('matches', {})
-        rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
-        changed = False
-        checked = 0
-        alerts = 0
-        for m in rows or []:
-            try:
-                if '_has_unknown' in globals() and _has_unknown(m):
-                    continue
-            except Exception:
-                pass
-            key = _v63_fixture_alert_key(m)
-            obj = None
-            try:
-                obj = await asyncio.wait_for(asyncio.to_thread(_v40_fetch_live_for_fixture, m, True), timeout=28)
-            except Exception as e:
-                try:
-                    _v64_goal_alerts_log('job_fetch_failed: ' + str(e)[:140])
-                except Exception:
-                    pass
-                obj = None
-            if not isinstance(obj, dict) or ('_patch6_numeric_score' in globals() and not _patch6_numeric_score(obj)):
-                continue
-            total, s1, s2 = _v63_score_total(obj)
-            if total is None:
-                continue
-            checked += 1
-            scorers = _v63_scorers_from_obj(obj)
-            phase = _v67_phase_from_obj(obj)
-            prev = matches_state.get(key)
-            # أول مشاهدة: خط أساس فقط حتى لا نرسل أحداث قديمة بعد رفع النسخة.
-            if not isinstance(prev, dict) or prev.get('date') != active:
-                matches_state[key] = {
-                    'date': active, 'score1': s1, 'score2': s2, 'total': total,
-                    'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text(),
-                    'baseline_reason': 'first_seen_v67'
-                }
-                changed = True
-                continue
-            old_total = int(prev.get('total') or 0)
-            old_phase = str(prev.get('phase') or '')
-            # أحداث الحالة قبل/بعد الأهداف، بدون تكرار.
-            event_texts = []
-            if old_phase in ('scheduled', 'unknown', '') and phase in ('live1', 'live2'):
-                event_texts.append(_v67_event_message('start', m, obj, prev))
-            if old_phase not in ('halftime', 'final') and phase == 'halftime':
-                event_texts.append(_v67_event_message('halftime', m, obj, prev))
-            if old_phase == 'halftime' and phase in ('live2',):
-                event_texts.append(_v67_event_message('second_half', m, obj, prev))
-            if old_phase != 'final' and phase == 'final':
-                event_texts.append(_v67_event_message('final', m, obj, prev))
-            if total > old_total:
-                new_scorers = []
-                if scorers:
-                    new_scorers = scorers[old_total:total] if len(scorers) >= total else []
-                event_texts.append(_v67_event_message('goal', m, obj, prev, new_scorers))
-            elif total < old_total:
-                event_texts.append(_v67_event_message('cancelled_goal', m, obj, prev))
-            for text in event_texts:
-                await _v63_send_goal_alert(context, text)
-                alerts += 1
-                await asyncio.sleep(0.08)
-            matches_state[key] = {
-                'date': active, 'score1': s1, 'score2': s2, 'total': total,
-                'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text()
-            }
-            changed = True
-        state['last_run'] = _v63_now_text()
-        state['last_checked'] = checked
-        state['last_alerts'] = alerts
-        if changed:
-            _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
-        try:
-            if checked or alerts:
-                _v64_goal_alerts_log(f'job_done_v67 active={active} checked={checked} alerts={alerts}')
-        except Exception:
-            pass
+        return await asyncio.wait_for(asyncio.to_thread(_v73_fetch_fixture_obj, m, True), timeout=8)
     except Exception as e:
         try:
-            _v64_goal_alerts_log('job_error_v67: ' + str(e)[:240])
+            _v64_goal_alerts_log('v73_fetch_timeout_or_error: ' + str(e)[:120])
         except Exception:
             pass
-    finally:
-        V63_GOAL_ALERTS_RUNNING = False
-
-# ==================== END V67 MATCH ALERTS AUTO + EVENTS PATCH ====================
-
-
-# ==================== V68 STRICT SLOT SOURCE PATCH — FAHAD ====================
-# اعتماد فهد:
-# - دور الـ32 لا يأخذ الاسم من "قائمة المتأهلين" فقط.
-# - يثبت الاسم فقط من حسبة مركز رسمية 100٪: أول / ثاني / أفضل ثالث مع مسار محدد.
-# - أثناء وجود مباراة مباشرة في نفس المجموعة لا نعتمد المركز كرسمي من جدول live؛ ننتظر النهاية أو ضمان رياضي مستقل.
-# - لا نعتبر المجموعة مكتملة إذا فيها مباراة مباشرة أو مجدولة، حتى لو remaining صار 0 في snapshot.
-
-V68_GROUP_STATE_CACHE = {}
-
-
-def _v68_group_code_from_fixture(m):
-    try:
-        g = str((m or {}).get('group') or '')
-        for code in list('ABCDEFGHIJKL'):
-            ar = _v33_group_ar(code) if '_v33_group_ar' in globals() else code
-            if ar and ar in g:
-                return code
-    except Exception:
-        pass
-    return ''
-
-
-def _v68_group_fixtures(code):
-    out = []
-    try:
-        for m in (globals().get('TOURNAMENT_FIXTURES') or []):
-            if str((m or {}).get('stage') or '') != 'دور المجموعات':
-                continue
-            if _v68_group_code_from_fixture(m) == str(code or '').upper():
-                out.append(m)
-    except Exception:
-        pass
-    return out
-
-
-def _v68_fixture_bucket(m, force=False):
-    """يعيد complete/live/scheduled بشكل محافظ."""
-    try:
-        obj = _v32_result_for_fixture(m, force=force) if '_v32_result_for_fixture' in globals() else None
-        if isinstance(obj, dict):
-            if obj.get('_v40_bucket'):
-                return str(obj.get('_v40_bucket'))
-            if '_v40_match_bucket' in globals():
-                return _v40_match_bucket(obj, m)
-            st = str(obj.get('status') or obj.get('minute') or '').lower()
-            if any(x in st for x in ('final', 'انته', 'نهاية المباراة', 'full')):
-                return 'complete'
-            if any(x in st for x in ('live', 'مباشر', "'", 'الشوط')):
-                return 'live'
-            if '_patch6_numeric_score' in globals() and _patch6_numeric_score(obj):
-                # لو فيه نتيجة رقمية بدون حالة نهائية، لا نجزم أنها مكتملة.
-                return 'live' if st else 'scheduled'
-    except Exception:
-        pass
-    return 'scheduled'
-
-
-def _v68_group_state(code, force=False):
-    try:
-        key = str(code or '').upper()
-        now = time.time() if 'time' in globals() else 0
-        cached = V68_GROUP_STATE_CACHE.get(key)
-        if (not force) and isinstance(cached, dict) and now - float(cached.get('ts') or 0) < 25:
-            return dict(cached)
-        buckets = []
-        for m in _v68_group_fixtures(key):
-            buckets.append(_v68_fixture_bucket(m, force=force))
-        data = {
-            'buckets': buckets,
-            'has_live': any(b == 'live' for b in buckets),
-            'has_scheduled': any(b == 'scheduled' for b in buckets),
-            'all_complete': bool(buckets) and all(b == 'complete' for b in buckets),
-        }
-        V68_GROUP_STATE_CACHE[key] = dict(data, ts=now)
-        return data
-    except Exception:
-        return {'buckets': [], 'has_live': False, 'has_scheduled': True, 'all_complete': False}
-
-
-# المجموعة لا تعتبر مكتملة إلا إذا كل مبارياتها نهائية فعلًا.
-def _v66_group_complete(code, rows=None, snap=None):
-    try:
-        st = _v68_group_state(code, force=False)
-        if st.get('all_complete'):
-            return True
-        if st.get('has_live') or st.get('has_scheduled'):
-            return False
-    except Exception:
-        pass
-    try:
-        rows = rows or _v61_group_rows(code, snap)
-        return bool(rows) and all(_v66_row_played(r) >= 3 for r in rows[:4])
-    except Exception:
-        return False
-
-
-def _v68_final_group_results(code, snap=None):
-    """نتائج المواجهات المباشرة الرسمية فقط؛ لا تدخل المباراة المباشرة في تثبيت المركز."""
-    res = []
-    try:
-        for m in _v68_group_fixtures(code):
-            if _v68_fixture_bucket(m, force=False) != 'complete':
-                continue
-            obj = _v32_result_for_fixture(m, force=False) if '_v32_result_for_fixture' in globals() else None
-            if not isinstance(obj, dict):
-                continue
-            if '_patch6_numeric_score' in globals() and not _patch6_numeric_score(obj):
-                continue
-            t1 = canonical_team_name((m or {}).get('team1')) if 'canonical_team_name' in globals() else (m or {}).get('team1')
-            t2 = canonical_team_name((m or {}).get('team2')) if 'canonical_team_name' in globals() else (m or {}).get('team2')
-            try:
-                s1 = int(obj.get('score1') if obj.get('score1') is not None else obj.get('home_score'))
-                s2 = int(obj.get('score2') if obj.get('score2') is not None else obj.get('away_score'))
-            except Exception:
-                try:
-                    s1 = int(obj.get('score1') or 0); s2 = int(obj.get('score2') or 0)
-                except Exception:
-                    continue
-            if t1 and t2:
-                res.append({'team1': t1, 'team2': t2, 'score1': s1, 'score2': s2})
-    except Exception:
-        pass
-    if res:
-        return res
-    # fallback: لو ما قدرنا نقرأ fixtures، نستخدم النتائج القديمة فقط عند عدم وجود live في المجموعة.
-    try:
-        if not _v68_group_state(code, False).get('has_live'):
-            return _v62_group_results(code, snap) if '_v62_group_results' in globals() else []
-    except Exception:
-        pass
-    return []
-
-
-# حماية إضافية: لا نثبت الأول/الثاني إذا في المجموعة مباراة مباشرة، حتى لا نأخذ جدول live كأنه نهائي.
-def _v66_guaranteed_first(team, code, rows, snap=None):
-    try:
-        if _v68_group_state(code, False).get('has_live'):
-            return False
-        rows = rows or _v61_group_rows(code, snap)
-        code, pos, row, rows2 = _v33_group_row(team, snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {}))
-        rows = rows2 or rows
-        if not row:
-            return False
-        if _v66_group_complete(code, rows, snap):
-            return int(pos or 0) == 1
-        if int(pos or 0) != 1:
-            return False
-        pts = _v66_row_pts(row)
-        results = _v68_final_group_results(code, snap)
-        possible_ties = []
-        for other in rows or []:
-            ot = (other or {}).get('team')
-            if not ot or ot == team:
-                continue
-            mx = _v66_max_pts(other)
-            if mx > pts:
-                return False
-            if mx == pts:
-                possible_ties.append(ot)
-        for subset in _v66_subsets(possible_ties):
-            if not _v66_team_leads_h2h_set(team, subset, results):
-                return False
-        return True
-    except Exception:
-        return False
-
-
-def _v66_guaranteed_second(team, code, rows, snap=None):
-    try:
-        if _v68_group_state(code, False).get('has_live'):
-            return False
-        rows = rows or _v61_group_rows(code, snap)
-        code, pos, row, rows2 = _v33_group_row(team, snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {}))
-        rows = rows2 or rows
-        if not row:
-            return False
-        if _v66_group_complete(code, rows, snap):
-            return int(pos or 0) == 2
-        if int(pos or 0) != 2:
-            return False
-        first_team = (rows[0] or {}).get('team') if rows else ''
-        if not first_team or first_team == team or not _v66_guaranteed_first(first_team, code, rows, snap):
-            return False
-        pts = _v66_row_pts(row)
-        results = _v68_final_group_results(code, snap)
-        possible_ties = []
-        for other in rows or []:
-            ot = (other or {}).get('team')
-            if not ot or ot in (team, first_team):
-                continue
-            mx = _v66_max_pts(other)
-            if mx > pts:
-                return False
-            if mx == pts:
-                possible_ties.append(ot)
-        for subset in _v66_subsets(possible_ties):
-            if not _v66_team_leads_h2h_set(team, subset, results):
-                return False
-        return True
-    except Exception:
-        return False
-
-
-# مصدر دور الـ32: لا يعتمد على مجرد التأهل، بل على هذا الوسم فقط.
-def _v68_official_slot_rank(team, snap=None):
-    try:
-        snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
-        code, pos, row, rows = _v33_group_row(team, snap)
-        if not row:
-            return ''
-        if int(pos or 0) == 1 and _v66_guaranteed_first(team, code, rows, snap):
-            return 'الأول'
-        if int(pos or 0) == 2 and _v66_guaranteed_second(team, code, rows, snap):
-            return 'الثاني'
-        if int(pos or 0) == 3 and _v61_is_official_best_third(team, row, snap):
-            # أفضل ثالث مؤهل، لكن تثبيت المباراة نفسها يحتاج قفل مسارات الثوالث.
-            return 'أفضل ثالث'
-    except Exception:
-        pass
-    return ''
-
-
-def _v61_rank_label_for_team(team, snap=None):
-    snap = snap or (_v33_snapshot(False) if '_v33_snapshot' in globals() else {})
-    try:
-        return _v68_official_slot_rank(team, snap) or 'لم يُحسم بعد'
-    except Exception:
-        return 'لم يُحسم بعد'
-
-
-def _v61_resolve_pos_slot(code, pos, snap):
-    rows = _v61_group_rows(code, snap)
-    team = ''
-    try:
-        team = (rows[int(pos)-1] or {}).get('team') or ''
-    except Exception:
-        team = ''
-    expected = 'الأول' if int(pos) == 1 else 'الثاني'
-    try:
-        official_rank = _v68_official_slot_rank(team, snap)
-        confirmed = bool(team and _v61_is_official_qualified(team, snap) and official_rank == expected)
-    except Exception:
-        confirmed = False
-    return {
-        'kind': 'pos', 'code': code, 'pos': int(pos), 'phrase': _v61_pos_phrase(code, pos),
-        'team': team if confirmed else '', 'predicted': team or '', 'confirmed': confirmed,
-        'status': '✅ متأهل رسميًا' if confirmed else '',
-    }
-
-# ==================== END V68 STRICT SLOT SOURCE PATCH ====================
-
-
-# ==================== V69 MATCH ALERTS STARTUP/FIRST-SEEN FIX — FAHAD ====================
-# إصلاح عاجل:
-# - بعض بيئات Railway لا توفر JobQueue؛ لذلك نربط post_init في main ونشغل حلقة احتياط تلقائيًا.
-# - إذا أول فحص شاف المباراة بدأت بالفعل، لا يكتفي بخط أساس صامت؛ يرسل تنبيه بداية المباراة مرة واحدة.
-# - يستمر نفس نظام تنبيهات المباراة: بداية / بين الشوطين / بداية الثاني / نهاية / هدف / إلغاء هدف.
-
-
-def _v69_should_send_first_seen_start(phase, obj=None):
-    try:
-        ph = str(phase or '')
-        if ph == 'live1':
-            return True
-        # إذا المصدر قال live بدون تحديد الشوط لكن الدقيقة صغيرة، اعتبرها بداية.
-        blob = ''
-        try:
-            blob = _v67_status_blob(obj) if '_v67_status_blob' in globals() else str((obj or {}).get('status') or '')
-        except Exception:
-            blob = str((obj or {}).get('status') or '')
-        m = re.search(r"(\d{1,3})\s*['’]?", str(blob))
-        if m and int(m.group(1)) <= 15 and ph in ('live1', 'live2', 'unknown'):
-            return True
-    except Exception:
-        pass
-    return False
+        return {}
 
 
 async def v63_goal_alerts_job(context):
@@ -52962,10 +52581,6 @@ async def v63_goal_alerts_job(context):
         return
     subs = _v63_goal_subscribers()
     if not subs:
-        try:
-            _v64_goal_alerts_log('job_skip_no_subscribers')
-        except Exception:
-            pass
         return
     try:
         if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
@@ -52980,204 +52595,77 @@ async def v63_goal_alerts_job(context):
         state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
         matches_state = state.setdefault('matches', {})
         rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
-        changed = False
-        checked = 0
-        alerts = 0
-        for m in rows or []:
+        rows = [m for m in (rows or []) if not ('_has_unknown' in globals() and _has_unknown(m))]
+        changed = False; checked = 0; alerts = 0
+        # توازي محدود: كل مباريات اليوم مع timeout قصير، حتى لا يعلّق البوت.
+        fetched = await asyncio.gather(*[_v73_fetch_for_alert(m) for m in rows], return_exceptions=True) if rows else []
+        for m, obj in zip(rows, fetched):
+            if not isinstance(obj, dict) or not obj:
+                continue
             try:
-                if '_has_unknown' in globals() and _has_unknown(m):
-                    continue
+                if '_patch6_numeric_score' in globals() and not _patch6_numeric_score(obj):
+                    # نسمح بالحالة المجدولة/مباشر بدون سكور إذا المصدر ما أعطى رقم، لكن لا نرسل هدف.
+                    pass
             except Exception:
                 pass
             key = _v63_fixture_alert_key(m)
-            obj = None
-            try:
-                obj = await asyncio.wait_for(asyncio.to_thread(_v40_fetch_live_for_fixture, m, True), timeout=28)
-            except Exception as e:
-                try:
-                    _v64_goal_alerts_log('job_fetch_failed_v69: ' + str(e)[:140])
-                except Exception:
-                    pass
-                obj = None
-            if not isinstance(obj, dict) or ('_patch6_numeric_score' in globals() and not _patch6_numeric_score(obj)):
-                continue
-            total, s1, s2 = _v63_score_total(obj)
-            if total is None:
-                continue
+            s1, s2, total = _v73_obj_scores(obj)
             checked += 1
-            scorers = _v63_scorers_from_obj(obj)
-            phase = _v67_phase_from_obj(obj) if '_v67_phase_from_obj' in globals() else 'unknown'
+            try:
+                scorers = _v63_scorers_from_obj(obj)
+            except Exception:
+                scorers = []
+            phase = _v67_phase_from_obj(obj)
             prev = matches_state.get(key)
-            event_texts = []
-
-            # أول مشاهدة للمباراة: لا نرسل أهداف قديمة، لكن نرسل بداية المباراة إذا كانت للتو live.
+            # أول مشاهدة بعد تشغيل/رفع نسخة: خط أساس فقط؛ لا نعيد إرسال القديم.
             if not isinstance(prev, dict) or prev.get('date') != active:
-                if _v69_should_send_first_seen_start(phase, obj):
-                    event_texts.append(_v67_event_message('start', m, obj, {'total': total, 'score1': s1, 'score2': s2, 'phase': 'scheduled'}))
-                elif phase == 'halftime':
-                    event_texts.append(_v67_event_message('halftime', m, obj, {'total': total, 'score1': s1, 'score2': s2, 'phase': 'live1'}))
-                # إذا أول مشاهدة final لا نرسل نهاية مباراة قديمة حتى لا نزعج عند إعادة التشغيل.
-                for text in event_texts:
-                    await _v63_send_goal_alert(context, text)
-                    alerts += 1
-                    await asyncio.sleep(0.08)
-                matches_state[key] = {
-                    'date': active, 'score1': s1, 'score2': s2, 'total': total,
-                    'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text(),
-                    'baseline_reason': 'first_seen_v69_with_start_check'
-                }
+                matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text(), 'baseline_reason': 'first_seen_v73_no_old_alerts'}
                 changed = True
                 continue
-
             old_total = int(prev.get('total') or 0)
             old_phase = str(prev.get('phase') or '')
+            event_texts = []
             if old_phase in ('scheduled', 'unknown', '') and phase in ('live1', 'live2'):
                 event_texts.append(_v67_event_message('start', m, obj, prev))
             if old_phase not in ('halftime', 'final') and phase == 'halftime':
                 event_texts.append(_v67_event_message('halftime', m, obj, prev))
-            if old_phase == 'halftime' and phase in ('live2',):
+            if old_phase == 'halftime' and phase == 'live2':
                 event_texts.append(_v67_event_message('second_half', m, obj, prev))
             if old_phase != 'final' and phase == 'final':
                 event_texts.append(_v67_event_message('final', m, obj, prev))
-            if total > old_total:
+            if int(total or 0) > old_total:
                 new_scorers = []
                 if scorers:
-                    new_scorers = scorers[old_total:total] if len(scorers) >= total else []
+                    new_scorers = scorers[old_total:int(total or 0)] if len(scorers) >= int(total or 0) else []
                 event_texts.append(_v67_event_message('goal', m, obj, prev, new_scorers))
-            elif total < old_total:
+            elif int(total or 0) < old_total:
                 event_texts.append(_v67_event_message('cancelled_goal', m, obj, prev))
-            for text in event_texts:
-                await _v63_send_goal_alert(context, text)
-                alerts += 1
-                await asyncio.sleep(0.08)
-            matches_state[key] = {
-                'date': active, 'score1': s1, 'score2': s2, 'total': total,
-                'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text()
-            }
+            for txt in event_texts:
+                if str(txt or '').strip():
+                    await _v63_send_goal_alert(context, txt)
+                    alerts += 1
+                    await asyncio.sleep(0.05)
+            matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text()}
             changed = True
-        state['last_run'] = _v63_now_text()
-        state['last_checked'] = checked
-        state['last_alerts'] = alerts
+        state['last_run'] = _v63_now_text(); state['last_checked'] = checked; state['last_alerts'] = alerts
         if changed or checked or alerts:
             _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
         try:
-            _v64_goal_alerts_log(f'job_done_v69 active={active} checked={checked} alerts={alerts}')
+            if checked or alerts:
+                _v64_goal_alerts_log(f'job_done_v73 active={active} checked={checked} alerts={alerts}')
         except Exception:
             pass
     except Exception as e:
         try:
-            _v64_goal_alerts_log('job_error_v69: ' + str(e)[:240])
+            _v64_goal_alerts_log('job_error_v73: ' + str(e)[:240])
         except Exception:
             pass
     finally:
         V63_GOAL_ALERTS_RUNNING = False
 
-# ==================== END V69 MATCH ALERTS STARTUP/FIRST-SEEN FIX ====================
 
-
-# ==================== V71 SAFE FINAL PATCH — FAHAD ====================
-# مبني على V69 المستقرة بدون مسارات تحديث متداخلة ثقيلة.
-# - تنبيهات المباراة كل 15 ثانية، مع زر إيقاف داخل كل تنبيه.
-# - لا يعيد إرسال بداية/أهداف/شوط/نهاية قديمة بعد إعادة التشغيل: أول مشاهدة تبني خط أساس فقط.
-# - مباشر الآن بصيغة ESPN المختصرة: 🔴 مباشر / ⏳ لم تبدأ / ✅ انتهت.
-# - لوحة البطولة تحدث مصدر ESPN عند الفتح وتحسب المباريات المباشرة ضمن التفصيل.
-# - كيف يتأهل يحسب المجموعة كاملة إذا فيها مباراة مباشرة، ويربط المباراتين معًا.
-# - دور الـ32 يحافظ على قاعدة V68: لا يثبت الاسم إلا إذا الخانة مضمونة 1000٪، ويضيف توقعًا حاليًا للخانات غير المحسومة.
-
-try:
-    V63_GOAL_ALERT_INTERVAL = 15
-except Exception:
-    pass
-
-
-def _v71_alert_stop_keyboard():
-    try:
-        return InlineKeyboardMarkup([[InlineKeyboardButton('❌ إيقاف التنبيهات', callback_data='v63goal|off')]])
-    except Exception:
-        return None
-
-
-def _v67_disable_footer():
-    # نخلي الإيقاف بزر داخل الرسالة، ونترك نصًا خفيفًا فقط.
-    return 'لإيقاف التنبيهات اضغط الزر بالأسفل.'
-
-
-def _v71_fixture_teams(m, obj=None):
-    try:
-        t1 = canonical_team_name((m or {}).get('team1')) or (m or {}).get('team1') or (obj or {}).get('team1') or ''
-        t2 = canonical_team_name((m or {}).get('team2')) or (m or {}).get('team2') or (obj or {}).get('team2') or ''
-        return str(t1 or '').strip(), str(t2 or '').strip()
-    except Exception:
-        return str((m or {}).get('team1') or '').strip(), str((m or {}).get('team2') or '').strip()
-
-
-def _v71_obj_scores(obj):
-    try:
-        total, s1, s2 = _v63_score_total(obj)
-        if s1 is not None and s2 is not None:
-            return int(s1), int(s2)
-    except Exception:
-        pass
-    try:
-        return int((obj or {}).get('score1') or 0), int((obj or {}).get('score2') or 0)
-    except Exception:
-        return 0, 0
-
-
-def _v71_minute_text(obj):
-    try:
-        vals = [str((obj or {}).get(k) or '') for k in ('minute','clock','displayClock','status','period')]
-        blob = ' '.join(vals)
-        m = re.search(r"(\d{1,3})\s*['’]?", blob)
-        if m:
-            return m.group(1) + "'"
-        low = blob.lower()
-        if any(x in low for x in ('half', 'ht', 'بين الشوطين')):
-            return 'HT'
-    except Exception:
-        pass
-    return ''
-
-
-def _v71_phase_bucket(obj, fixture=None):
-    try:
-        if '_v40_match_bucket' in globals():
-            b = _v40_match_bucket(obj, fixture)
-            if b in ('complete','live','scheduled'):
-                return b
-    except Exception:
-        pass
-    try:
-        ph = _v67_phase_from_obj(obj) if '_v67_phase_from_obj' in globals() else 'unknown'
-        if ph == 'final':
-            return 'complete'
-        if ph in ('live1','live2','halftime'):
-            return 'live'
-        return 'scheduled'
-    except Exception:
-        return 'scheduled'
-
-
-def _v71_fetch_fixture_obj(m, force=True):
-    # لا نستخدمها داخل لوب ثقيل إلا من خلال to_thread/timeout.
-    try:
-        if '_v40_fetch_live_for_fixture' in globals():
-            obj = _v40_fetch_live_for_fixture(m, bool(force))
-            if isinstance(obj, dict):
-                return obj
-    except Exception:
-        pass
-    try:
-        if '_v32_result_for_fixture' in globals():
-            obj = _v32_result_for_fixture(m, force=bool(force))
-            if isinstance(obj, dict):
-                return obj
-    except Exception:
-        pass
-    return {}
-
-
-def _v71_active_fixtures(date_str=None):
+# ---------- مباشر الآن بصيغة الصورة ----------
+def _v73_active_fixtures(date_str=None):
     try:
         active = _normalize_date_arg(date_str) if date_str else (_v40_active_live_date() if '_v40_active_live_date' in globals() else None)
     except Exception:
@@ -53189,9 +52677,8 @@ def _v71_active_fixtures(date_str=None):
         return active, []
 
 
-# ---------- مباشر الآن بصيغة الصورة ----------
 def _v29_live_today_text(date_str=None):
-    active, rows = _v71_active_fixtures(date_str)
+    active, rows = _v73_active_fixtures(date_str)
     if not active or not rows:
         return '🔄 تحديث مباشر الآن من ESPN\n\nلا توجد مباريات في مباشر الآن حسب جدول البطولة.'
     live_lines, scheduled_lines, done_lines = [], [], []
@@ -53201,17 +52688,17 @@ def _v29_live_today_text(date_str=None):
                 continue
         except Exception:
             pass
-        t1, t2 = _v71_fixture_teams(m)
-        obj = _v71_fetch_fixture_obj(m, True)
-        b = _v71_phase_bucket(obj, m)
-        s1, s2 = _v71_obj_scores(obj)
-        minute = _v71_minute_text(obj)
+        t1, t2 = _v73_fixture_teams(m)
+        obj = _v73_fetch_fixture_obj(m, True)
+        b = _v73_phase_bucket(obj, m)
+        s1, s2, _total = _v73_obj_scores(obj)
+        minute = _v73_minute_text(obj)
         if b == 'live':
-            live_lines.append(f"🔴 {t1} {s1} - {s2} {t2}" + (f" {minute}" if minute else ''))
+            live_lines.append(f'🔴 {t1} {s1} - {s2} {t2}' + (f' {minute}' if minute else ''))
         elif b == 'complete':
-            done_lines.append(f"✅ {t1} {s1} - {s2} {t2}")
+            done_lines.append(f'✅ {t1} {s1} - {s2} {t2}')
         else:
-            scheduled_lines.append(f"⏳ {t1} × {t2}")
+            scheduled_lines.append(f'⏳ {t1} × {t2}')
     lines = ['🔄 تحديث مباشر الآن من ESPN', '']
     if live_lines:
         lines.extend(live_lines); lines.append('')
@@ -53224,29 +52711,24 @@ def _v29_live_today_text(date_str=None):
     return '\n'.join(lines).strip()
 
 
-# ---------- لوحة البطولة: تحديث عند الفتح + احتساب live إن فات على الكاش ----------
-_V71_PREV_COUNTED_MATCHES_AND_GOALS = globals().get('_v40_counted_matches_and_goals')
+# ---------- لوحة البطولة: تحديث عند الفتح واحتساب المباشر ----------
+_V73_PREV_COUNTED_MATCHES_AND_GOALS = globals().get('_v40_counted_matches_and_goals')
 def _v40_counted_matches_and_goals(force=False):
     try:
-        base = dict(_V71_PREV_COUNTED_MATCHES_AND_GOALS(bool(force)) or {}) if callable(_V71_PREV_COUNTED_MATCHES_AND_GOALS) else {}
+        base = dict(_V73_PREV_COUNTED_MATCHES_AND_GOALS(bool(force)) or {}) if callable(_V73_PREV_COUNTED_MATCHES_AND_GOALS) else {}
     except Exception:
-        try:
-            base = dict(_V71_PREV_COUNTED_MATCHES_AND_GOALS(False) or {}) if callable(_V71_PREV_COUNTED_MATCHES_AND_GOALS) else {}
-        except Exception:
-            base = {}
+        base = {}
     completed = int(base.get('completed') or 0)
     live = int(base.get('live') or 0)
     goals = int(base.get('goals') or 0)
-    # إذا الحسبة القديمة طلعت live=0، افحص مباريات اليوم النشط فقط وأضف المباشرة.
     try:
-        _active, rows = _v71_active_fixtures()
-        live_count = 0
-        live_goals = 0
+        _active, rows = _v73_active_fixtures()
+        live_count = 0; live_goals = 0
         for m in rows or []:
-            obj = _v71_fetch_fixture_obj(m, True)
-            if _v71_phase_bucket(obj, m) == 'live':
+            obj = _v73_fetch_fixture_obj(m, True)
+            if _v73_phase_bucket(obj, m) == 'live':
                 live_count += 1
-                s1, s2 = _v71_obj_scores(obj)
+                s1, s2, _t = _v73_obj_scores(obj)
                 live_goals += int(s1 or 0) + int(s2 or 0)
         if live_count > live:
             if live <= 0:
@@ -53257,25 +52739,23 @@ def _v40_counted_matches_and_goals(force=False):
     return {'completed': completed, 'live': live, 'counted': completed + live, 'goals': goals}
 
 
-_V71_PREV_BOARD_TEXT = globals().get('_v32_tournament_board_text')
+_V73_PREV_BOARD_TEXT = globals().get('_v32_tournament_board_text')
 def _v32_tournament_board_text(force=False):
     try:
         if '_v65_refresh_dynamic_sources' in globals():
-            _v65_refresh_dynamic_sources(force=True, reason='board_v71_safe')
+            _v65_refresh_dynamic_sources(force=True, reason='board_v73')
     except Exception:
         pass
     txt = ''
-    if callable(_V71_PREV_BOARD_TEXT):
+    if callable(_V73_PREV_BOARD_TEXT):
         try:
-            txt = _V71_PREV_BOARD_TEXT(True)
+            txt = _V73_PREV_BOARD_TEXT(True)
         except Exception:
             txt = ''
     try:
         cnt = _v40_counted_matches_and_goals(True)
-        completed = int(cnt.get('completed') or 0)
-        live = int(cnt.get('live') or 0)
-        counted = completed + live
-        goals = int(cnt.get('goals') or 0)
+        completed = int(cnt.get('completed') or 0); live = int(cnt.get('live') or 0)
+        counted = completed + live; goals = int(cnt.get('goals') or 0)
         if txt:
             txt = re.sub(r'مباريات البطولة المحتسبة:\s*\d+\s*/', f'مباريات البطولة المحتسبة: {counted} /', txt)
             txt = re.sub(r'مباريات دور المجموعات المحتسبة:\s*\d+\s*/', f'مباريات دور المجموعات المحتسبة: {counted} /', txt)
@@ -53291,185 +52771,56 @@ def _v39_board_text(force=False):
     return _v32_tournament_board_text(True)
 
 
-# ---------- تنبيهات المباراة: زر إيقاف + لا إعادة قديم بعد التشغيل ----------
-async def _v63_send_goal_alert(context, text):
-    subs = _v63_goal_subscribers()
-    dead = []
-    for sub in subs:
-        try:
-            await context.bot.send_message(chat_id=int(sub['chat_id']), text=str(text).strip(), reply_markup=_v71_alert_stop_keyboard())
-            await asyncio.sleep(0.04)
-        except Exception:
-            dead.append(str(sub.get('uid') or ''))
-    if dead:
-        try:
-            data = _v63_goal_alerts_data()
-            users = data.setdefault('users', {})
-            for uid in dead:
-                old = users.get(uid) if isinstance(users.get(uid), dict) else {}
-                users[uid] = dict(old, enabled=False, disabled_reason='send_failed', updated_at=_v63_now_text())
-            _v63_save_goal_alerts_data(data)
-        except Exception:
-            pass
-
-
-async def _v64_goal_alerts_loop(application):
-    global V64_GOAL_ALERT_LOOP_STARTED_AT
-    V64_GOAL_ALERT_LOOP_STARTED_AT = _v63_now_text()
-    try:
-        _v64_goal_alerts_log('fallback_loop_started_v71_15s')
-    except Exception:
-        pass
-    while True:
-        try:
-            ctx = _v64_application_from_context(application=application) if '_v64_application_from_context' in globals() else None
-            if ctx is None:
-                class _Ctx: pass
-                ctx = _Ctx(); ctx.application = application; ctx.bot = getattr(application, 'bot', None)
-            await v63_goal_alerts_job(ctx)
-        except Exception as e:
-            try: _v64_goal_alerts_log('fallback_loop_error_v71: ' + str(e)[:200])
-            except Exception: pass
-        await asyncio.sleep(max(5, int(globals().get('V63_GOAL_ALERT_INTERVAL', 15) or 15)))
-
-
-async def v63_goal_alerts_job(context):
-    global V63_GOAL_ALERTS_RUNNING
-    if V63_GOAL_ALERTS_RUNNING:
-        return
-    subs = _v63_goal_subscribers()
-    if not subs:
-        return
-    try:
-        if '_v49_in_live_refresh_window' in globals() and not _v49_in_live_refresh_window():
-            return
-    except Exception:
-        pass
-    active = _v40_active_live_date() if '_v40_active_live_date' in globals() else None
-    if not active:
-        return
-    V63_GOAL_ALERTS_RUNNING = True
-    try:
-        state = _v63_json_load(V63_GOAL_ALERTS_STATE_FILE, {'matches': {}})
-        matches_state = state.setdefault('matches', {})
-        rows = _v40_live_rows(active) if '_v40_live_rows' in globals() else []
-        changed = False; checked = 0; alerts = 0
-        for m in rows or []:
-            try:
-                if '_has_unknown' in globals() and _has_unknown(m):
-                    continue
-            except Exception:
-                pass
-            key = _v63_fixture_alert_key(m)
-            try:
-                obj = await asyncio.wait_for(asyncio.to_thread(_v71_fetch_fixture_obj, m, True), timeout=22)
-            except Exception as e:
-                try: _v64_goal_alerts_log('job_fetch_failed_v71: ' + str(e)[:140])
-                except Exception: pass
-                obj = {}
-            if not isinstance(obj, dict):
-                continue
-            # بعض المصادر ترجع 0-0 للمجدول؛ نقبلها فقط للحالة، والأهداف لن ترسل إلا بعد تغيير.
-            try:
-                phase = _v67_phase_from_obj(obj) if '_v67_phase_from_obj' in globals() else 'unknown'
-            except Exception:
-                phase = 'unknown'
-            s1, s2 = _v71_obj_scores(obj)
-            total = int(s1 or 0) + int(s2 or 0)
-            try:
-                scorers = _v63_scorers_from_obj(obj)
-            except Exception:
-                scorers = []
-            checked += 1
-            prev = matches_state.get(key)
-            # أهم شرط: بعد إعادة التشغيل/رفع نسخة، أول مشاهدة لأي مباراة تكون خط أساس فقط.
-            if not isinstance(prev, dict) or prev.get('date') != active:
-                matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text(), 'baseline_reason': 'first_seen_v71_no_old_alerts'}
-                changed = True
-                continue
-            old_total = int(prev.get('total') or 0)
-            old_phase = str(prev.get('phase') or '')
-            event_texts = []
-            if old_phase in ('scheduled', 'unknown', '') and phase in ('live1', 'live2'):
-                event_texts.append(_v67_event_message('start', m, obj, prev))
-            if old_phase not in ('halftime', 'final') and phase == 'halftime':
-                event_texts.append(_v67_event_message('halftime', m, obj, prev))
-            if old_phase == 'halftime' and phase in ('live2',):
-                event_texts.append(_v67_event_message('second_half', m, obj, prev))
-            if old_phase != 'final' and phase == 'final':
-                event_texts.append(_v67_event_message('final', m, obj, prev))
-            if total > old_total:
-                new_scorers = []
-                if scorers:
-                    new_scorers = scorers[old_total:total] if len(scorers) >= total else []
-                event_texts.append(_v67_event_message('goal', m, obj, prev, new_scorers))
-            elif total < old_total:
-                event_texts.append(_v67_event_message('cancelled_goal', m, obj, prev))
-            for text in event_texts:
-                text = str(text or '').strip()
-                if text:
-                    await _v63_send_goal_alert(context, text)
-                    alerts += 1
-                    await asyncio.sleep(0.08)
-            matches_state[key] = {'date': active, 'score1': s1, 'score2': s2, 'total': total, 'scorers': scorers, 'phase': phase, 'updated_at': _v63_now_text()}
-            changed = True
-        state['last_run'] = _v63_now_text(); state['last_checked'] = checked; state['last_alerts'] = alerts
-        if changed or checked or alerts:
-            _v63_json_save(V63_GOAL_ALERTS_STATE_FILE, state)
-        try:
-            if checked or alerts:
-                _v64_goal_alerts_log(f'job_done_v71 active={active} checked={checked} alerts={alerts}')
-        except Exception:
-            pass
-    except Exception as e:
-        try: _v64_goal_alerts_log('job_error_v71: ' + str(e)[:240])
-        except Exception: pass
-    finally:
-        V63_GOAL_ALERTS_RUNNING = False
-
-
-# ---------- كيف يتأهل: المجموعة كاملة مباشر ----------
-def _v71_group_code_for_team(team):
+# ---------- كيف يتأهل: حساب المجموعة كاملة أثناء المباشر ----------
+def _v73_group_code_for_team(team):
     try:
         return _v33_team_group(team)
     except Exception:
-        try:
-            for code, teams in WORLD_CUP_GROUPS:
-                if any(simple_key(t) == simple_key(team) for t in teams):
-                    return code
-        except Exception:
-            pass
+        pass
+    try:
+        for code, teams in (WORLD_CUP_GROUPS or []):
+            if any(simple_key(t) == simple_key(team) for t in teams):
+                return code
+    except Exception:
+        pass
     return ''
 
 
-def _v71_group_fixtures(code):
+def _v73_group_fixtures(code):
+    out = []
     try:
-        return _v68_group_fixtures(code) if '_v68_group_fixtures' in globals() else []
+        ar = _v33_group_ar(code) if '_v33_group_ar' in globals() else str(code)
+        for m in (globals().get('TOURNAMENT_FIXTURES') or []):
+            if str((m or {}).get('stage') or '') != 'دور المجموعات':
+                continue
+            g = str((m or {}).get('group') or '')
+            if str(code).upper() in g or ar in g:
+                out.append(m)
     except Exception:
-        return []
+        pass
+    return out
 
 
-def _v71_live_group_block(team, snap=None):
-    team = _v33_find_team(team) or team
-    code = _v71_group_code_for_team(team)
+def _v73_live_group_block(team, snap=None):
+    team = _v33_find_team(team) if '_v33_find_team' in globals() else team
+    team = team or ''
+    code = _v73_group_code_for_team(team)
     if not code:
         return ''
     try:
         if '_v65_refresh_dynamic_sources' in globals():
-            _v65_refresh_dynamic_sources(force=True, reason='how_v71_group_live')
+            _v65_refresh_dynamic_sources(force=True, reason='how_v73_group_live')
     except Exception:
         pass
     snap = snap or (_v33_snapshot(True) if '_v33_snapshot' in globals() else {})
-    live_lines, has_live = [], False
-    for m in _v71_group_fixtures(code):
-        obj = _v71_fetch_fixture_obj(m, True)
-        if _v71_phase_bucket(obj, m) == 'live':
-            has_live = True
-            t1, t2 = _v71_fixture_teams(m, obj)
-            s1, s2 = _v71_obj_scores(obj)
-            minute = _v71_minute_text(obj)
+    live_lines = []
+    for m in _v73_group_fixtures(code):
+        obj = _v73_fetch_fixture_obj(m, True)
+        if _v73_phase_bucket(obj, m) == 'live':
+            t1, t2 = _v73_fixture_teams(m, obj); s1, s2, _t = _v73_obj_scores(obj)
+            minute = _v73_minute_text(obj)
             live_lines.append(f'🔴 {t1} {s1} - {s2} {t2}' + (f' {minute}' if minute else ''))
-    if not has_live:
+    if not live_lines:
         return ''
     try:
         _code, pos, row, rows = _v33_group_row(team, snap)
@@ -53484,8 +52835,7 @@ def _v71_live_group_block(team, snap=None):
         pts, gd, played = 0, 0, 0
     lines = [f'✅ كيف يتأهل {team}؟', '', '🔴 مباريات المجموعة قائمة الآن:']
     lines.extend(live_lines)
-    lines += ['', '📌 حسب النتيجة الحالية لمباريات المجموعة:', f'المركز الحالي: {pos_txt}', f'النقاط: {pts} | الفارق: {gd:+d}', f'لعب: {played}/3', '', '⚠️ هذا حساب مباشر مؤقت، وقد يتغير إذا تغيرت نتيجة أي مباراة في المجموعة.']
-    lines += ['', 'إذا انتهت مباريات المجموعة بهذه النتيجة:']
+    lines += ['', '📌 حسب النتيجة الحالية لمباريات المجموعة:', f'المركز الحالي: {pos_txt}', f'النقاط: {pts} | الفارق: {gd:+d}', f'لعب: {played}/3', '', '⚠️ هذا حساب مباشر مؤقت، وقد يتغير إذا تغيرت نتيجة أي مباراة في المجموعة.', '', 'إذا انتهت مباريات المجموعة بهذه النتيجة:']
     if int(pos or 0) in (1,2):
         lines.append(f'✅ {team} يتأهل مباشرًا كـ {pos_txt} المجموعة')
     elif int(pos or 0) == 3:
@@ -53506,26 +52856,26 @@ def _v71_live_group_block(team, snap=None):
     return '\n'.join(lines).strip()
 
 
-_V71_PREV_HOW_TEXT = globals().get('_v33_how_qualify_text')
+_V73_PREV_HOW_TEXT = globals().get('_v33_how_qualify_text')
 def _v33_how_qualify_text(team, force=False):
     try:
-        block = _v71_live_group_block(team, _v33_snapshot(True) if '_v33_snapshot' in globals() else None)
+        block = _v73_live_group_block(team, _v33_snapshot(True) if '_v33_snapshot' in globals() else None)
         if block:
             return block
     except Exception:
         pass
     try:
         if '_v65_refresh_dynamic_sources' in globals():
-            _v65_refresh_dynamic_sources(force=True, reason='how_v71_normal')
+            _v65_refresh_dynamic_sources(force=True, reason='how_v73_normal')
     except Exception:
         pass
-    if callable(_V71_PREV_HOW_TEXT):
-        return _V71_PREV_HOW_TEXT(team, True)
+    if callable(_V73_PREV_HOW_TEXT):
+        return _V73_PREV_HOW_TEXT(team, True)
     return 'لا توجد بيانات كافية حاليًا.'
 
 
-# ---------- دور الـ32: توقع حالي للخانات غير المحسومة ----------
-def _v71_slot_rank_text(slot):
+# ---------- دور الـ32: توقع حالي للخانات غير المحسومة، مع الحفاظ على شرط 1000٪ ----------
+def _v73_slot_rank_text(slot):
     try:
         if (slot or {}).get('kind') == 'pos':
             return 'الأول' if int((slot or {}).get('pos') or 0) == 1 else 'الثاني'
@@ -53536,12 +52886,12 @@ def _v71_slot_rank_text(slot):
     return ''
 
 
-def _v71_slot_pred(slot):
+def _v73_slot_pred(slot):
     return str((slot or {}).get('predicted') or (slot or {}).get('waiting_best_third') or '').strip()
 
 
-def _v71_predicted_match_line(a, b):
-    pa, pb = _v71_slot_pred(a), _v71_slot_pred(b)
+def _v73_predicted_match_line(a, b):
+    pa, pb = _v73_slot_pred(a), _v73_slot_pred(b)
     if pa or pb:
         return f"   🔎 المتوقع حاليًا: {pa or 'لم يتحدد'} × {pb or 'لم يتحدد'}"
     return ''
@@ -53552,7 +52902,7 @@ def _v61_r32_row_lines(r):
     lines = [_v61_r32_main_line(r)]
     if r['group'] == 'complete':
         for slot in (a,b):
-            rank = _v71_slot_rank_text(slot)
+            rank = _v73_slot_rank_text(slot)
             lines.append(f"   ✅ {slot.get('team')}: {'متأهل رسميًا كأفضل ثالث' if slot.get('kind') == 'third' else 'متأهل رسميًا'}")
             if rank:
                 lines.append(f'   📌 المركز: {rank}')
@@ -53561,7 +52911,7 @@ def _v61_r32_row_lines(r):
             confirmed, waiting, waiting_side = a, b, 'الثاني'
         else:
             confirmed, waiting, waiting_side = b, a, 'الأول'
-        rank = _v71_slot_rank_text(confirmed)
+        rank = _v73_slot_rank_text(confirmed)
         lines.append(f"   ✅ {confirmed.get('team')}: {'متأهل رسميًا كأفضل ثالث' if confirmed.get('kind') == 'third' else 'متأهل رسميًا'}")
         if rank:
             lines.append(f'   📌 المركز: {rank}')
@@ -53569,7 +52919,7 @@ def _v61_r32_row_lines(r):
             lines.extend(_v66_slot_waiting_label(waiting, waiting_side))
         except Exception:
             lines.append(f"   ⏳ الطرف {waiting_side}: {waiting.get('phrase') or 'لم يتحدد'}")
-        pred = _v71_slot_pred(waiting)
+        pred = _v73_slot_pred(waiting)
         if pred:
             lines.append(f'   🔎 المتوقع حاليًا: {pred}')
         try:
@@ -53586,7 +52936,7 @@ def _v61_r32_row_lines(r):
                 lines.extend(_v66_best_third_waiting_lines(b))
         except Exception:
             pass
-        pred_line = _v71_predicted_match_line(a,b)
+        pred_line = _v73_predicted_match_line(a, b)
         if pred_line:
             lines.append(pred_line)
     dl = _v61_date_line(m)
@@ -53595,10 +52945,16 @@ def _v61_r32_row_lines(r):
     return lines
 
 
-# ---------- توجيه board/live/r32 لضمان استخدام النصوص الجديدة ----------
-_V71_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+# توجيه أزرار النص/الكولباك للنسخ الجديدة.
+_V73_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
 async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
     txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in (V73_MATCH_ALERT_BUTTON, V73_OLD_GOAL_ALERT_BUTTON):
+        return await v63_goal_alerts_command(update, context)
     if txt in ('🏆 لوحة البطولة', '🏆 لوحة البطولة الآن'):
         await update.effective_message.reply_text(_v32_tournament_board_text(True), reply_markup=_v32_board_keyboard())
         return
@@ -53607,11 +52963,38 @@ async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT
         try: _v49_track_live_message(msg)
         except Exception: pass
         return
-    if callable(_V71_PREV_PUBLIC_REPLY_MENU_ROUTER):
-        return await _V71_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+    if callable(_V73_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V73_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
 
 
-_V71_PREV_V32_CALLBACK = globals().get('v32_callback')
+_V73_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in (V73_MATCH_ALERT_BUTTON, V73_OLD_GOAL_ALERT_BUTTON):
+        return await v63_goal_alerts_command(update, context)
+    if callable(_V73_PREV_TEXT_STATE_ROUTER):
+        return await _V73_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+_V73_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    if (q.data or '') == 'v63goal|menu':
+        try: await q.answer()
+        except Exception: pass
+        uid = _v63_user_id(update)
+        try:
+            await q.edit_message_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
+        except Exception:
+            await q.message.reply_text(_v63_goal_alert_text(uid), reply_markup=_v63_goal_alert_keyboard(uid))
+        return
+    if callable(_V73_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V73_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+_V73_PREV_V32_CALLBACK = globals().get('v32_callback')
 async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     data = q.data or '' if q else ''
@@ -53634,81 +53017,10 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             await q.message.reply_text(_v33_round32_text(True), reply_markup=kb)
         return
-    if callable(_V71_PREV_V32_CALLBACK):
-        return await _V71_PREV_V32_CALLBACK(update, context)
+    if callable(_V73_PREV_V32_CALLBACK):
+        return await _V73_PREV_V32_CALLBACK(update, context)
 
-# ==================== END V71 SAFE FINAL PATCH — FAHAD ====================
-
-
-# ==================== V72 ALERT DELIVERY FIX — FAHAD ====================
-# إصلاح عدم وصول تنبيهات المباراة في بعض بيئات Railway:
-# - تشغيل حلقة احتياط دائمًا بجانب JobQueue، مع قفل داخلي يمنع التكرار.
-# - إصلاح إنشاء سياق الحلقة الاحتياطية في V71.
-# - الحفاظ على شرط عدم إعادة إرسال التنبيهات القديمة بعد إعادة التشغيل.
-
-async def _v64_goal_alerts_loop(application):
-    global V64_GOAL_ALERT_LOOP_STARTED_AT
-    V64_GOAL_ALERT_LOOP_STARTED_AT = _v63_now_text()
-    try:
-        _v64_goal_alerts_log('fallback_loop_started_v72_always_15s')
-    except Exception:
-        pass
-    try:
-        await asyncio.sleep(5)
-    except Exception:
-        pass
-    while True:
-        try:
-            # مهم: لا نستدعي _v64_application_from_context بوسيط application لأنها تقبل context فقط.
-            if '_v64_context_from_application' in globals():
-                ctx = _v64_context_from_application(application)
-            else:
-                class _Ctx: pass
-                ctx = _Ctx(); ctx.application = application; ctx.bot = getattr(application, 'bot', None); ctx.job_queue = getattr(application, 'job_queue', None)
-            await v63_goal_alerts_job(ctx)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            try:
-                _v64_goal_alerts_log('fallback_loop_error_v72: ' + str(e)[:220])
-            except Exception:
-                pass
-        try:
-            await asyncio.sleep(max(5, int(globals().get('V63_GOAL_ALERT_INTERVAL', 15) or 15)))
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            await asyncio.sleep(15)
-
-
-def _v64_start_goal_alert_loop(application):
-    """تشغيل حلقة احتياط دائمة لضمان وصول التنبيهات حتى لو JobQueue تعطل."""
-    global V64_GOAL_ALERT_LOOP_TASK
-    try:
-        if V64_GOAL_ALERT_LOOP_TASK and not V64_GOAL_ALERT_LOOP_TASK.done():
-            return True
-        loop = asyncio.get_running_loop()
-        V64_GOAL_ALERT_LOOP_TASK = loop.create_task(_v64_goal_alerts_loop(application))
-        return True
-    except Exception as e:
-        try:
-            _v64_goal_alerts_log('fallback_loop_start_failed_v72: ' + str(e)[:180])
-        except Exception:
-            pass
-        return False
-
-
-async def v64_post_init(application):
-    # نبدأ حلقة احتياط دائمًا، حتى لو JobQueue موجود. القفل والحالة يمنعون التكرار.
-    try:
-        _v64_start_goal_alert_loop(application)
-    except Exception as e:
-        try:
-            _v64_goal_alerts_log('post_init_error_v72: ' + str(e)[:180])
-        except Exception:
-            pass
-
-# ==================== END V72 ALERT DELIVERY FIX — FAHAD ====================
+# ==================== END V73 STABLE FINAL PATCH — FAHAD ====================
 
 if __name__ == "__main__":
     main()
