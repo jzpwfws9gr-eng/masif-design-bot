@@ -52969,7 +52969,7 @@ async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT
     if txt in (V73_MATCH_ALERT_BUTTON, V73_OLD_GOAL_ALERT_BUTTON):
         return await v63_goal_alerts_command(update, context)
     if txt in ('🏆 لوحة البطولة', '🏆 لوحة البطولة الآن'):
-        await update.effective_message.reply_text(_v32_tournament_board_text(True), reply_markup=_v32_board_keyboard())
+        await update.effective_message.reply_text(_v32_tournament_board_text(False), reply_markup=_v32_board_keyboard())
         return
     if txt == '📺 مباشر الآن':
         msg = await update.effective_message.reply_text(_v29_live_today_text(), reply_markup=_v29_live_today_keyboard())
@@ -53490,7 +53490,7 @@ def _v32_board_keyboard():
 
 def _v34_stats_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton('📈 إحصائيات سريعة', callback_data='v75|quick_stats')],
+        [InlineKeyboardButton('📈 إحصائيات سريعة', callback_data='v32|quick_stats')],
         [InlineKeyboardButton('📊 ترتيب المجموعات', callback_data='mainmenu|groups'), InlineKeyboardButton('🏆 هدافين البطولة', callback_data='mainmenu|scorers')],
         [InlineKeyboardButton('🥉 أفضل الثوالث الآن', callback_data='v32|thirds'), InlineKeyboardButton('✅❌ التأهل والمغادرة', callback_data='v32|status_home')],
         [InlineKeyboardButton('🏟️ مباريات دور الـ32', callback_data='v32|r32')],
@@ -53754,7 +53754,7 @@ async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT
     if txt in ('🔔 تنبيهات المباراة', '🔔 تنبيهات الأهداف'):
         return await v63_goal_alerts_command(update, context)
     if txt in ('🏆 لوحة البطولة', '🏆 لوحة البطولة الآن'):
-        await update.effective_message.reply_text(_v32_tournament_board_text(True), reply_markup=_v32_board_keyboard())
+        await update.effective_message.reply_text(_v32_tournament_board_text(False), reply_markup=_v32_board_keyboard())
         return
     if txt == '📊 إحصائيات البطولة':
         await update.effective_message.reply_text(_v34_stats_text() if '_v34_stats_text' in globals() else '📊 إحصائيات البطولة\n\nاختر القسم اللي تبيه:', reply_markup=_v34_stats_keyboard())
@@ -53839,7 +53839,7 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action in ('board', 'board_force'):
         try: await q.answer('🔄 تحديث...' if action == 'board_force' else '', show_alert=False)
         except Exception: pass
-        txt = _v32_tournament_board_text(action == 'board_force')
+        txt = _v32_tournament_board_text(False)
         try: await q.edit_message_text(txt, reply_markup=_v32_board_keyboard())
         except Exception: await q.message.reply_text(txt, reply_markup=_v32_board_keyboard())
         return
@@ -53849,7 +53849,7 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: await q.edit_message_text(_v34_stats_text() if '_v34_stats_text' in globals() else '📊 إحصائيات البطولة\n\nاختر القسم اللي تبيه:', reply_markup=_v34_stats_keyboard())
         except Exception: await q.message.reply_text(_v34_stats_text() if '_v34_stats_text' in globals() else '📊 إحصائيات البطولة\n\nاختر القسم اللي تبيه:', reply_markup=_v34_stats_keyboard())
         return
-    if data == 'v75|quick_stats':
+    if action == 'quick_stats' or data == 'v75|quick_stats':
         try: await q.answer()
         except Exception: pass
         kb = InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ الإحصائيات', callback_data='v32|stats'), InlineKeyboardButton('⬅️ الرئيسية', callback_data='mainmenu|home')]])
@@ -53875,6 +53875,150 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V75 PERFORMANCE + FAST ALERTS + COMPACT STATS PATCH — FAHAD ====================
 
+
+
+
+# ==================== V80 QUICK STATS + FAST BOARD CACHE-ONLY PATCH — FAHAD ====================
+# هدف التعديل:
+# - إصلاح زر 📈 إحصائيات سريعة ليستخدم v32 callback الموجود.
+# - لوحة البطولة لا تستدعي snapshot/سيناريوهات/ESPN عند الفتح، بل تقرأ آخر كاش محفوظ فقط.
+# - الإحصائيات السريعة تقرأ نتائج المباريات المحفوظة من كاش البوت فقط.
+# - لا لمس /start ولا التنبيهات ولا مباشر الآن.
+
+def _v80_load_tournament_cache_snapshot():
+    try:
+        cache = _v32_load_json(V32_TOURNAMENT_CACHE_FILE, {}) if '_v32_load_json' in globals() else {}
+        if isinstance(cache, dict):
+            data = cache.get('data') or {}
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _v80_results_from_cached_snapshot():
+    snap = _v80_load_tournament_cache_snapshot()
+    out, seen = [], set()
+    try:
+        groups = snap.get('groups') or {}
+        for code, g in groups.items():
+            for r in (g.get('results') or []):
+                if not isinstance(r, dict):
+                    continue
+                t1 = str(r.get('team1') or '').strip()
+                t2 = str(r.get('team2') or '').strip()
+                if not t1 or not t2:
+                    continue
+                try:
+                    s1 = int(r.get('score1')); s2 = int(r.get('score2'))
+                except Exception:
+                    continue
+                try:
+                    k1 = simple_key(t1) if 'simple_key' in globals() else t1.lower()
+                    k2 = simple_key(t2) if 'simple_key' in globals() else t2.lower()
+                except Exception:
+                    k1, k2 = t1.lower(), t2.lower()
+                key = tuple(sorted([k1, k2]))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({'team1': t1, 'team2': t2, 'score1': s1, 'score2': s2, 'group': code})
+    except Exception:
+        pass
+    return out
+
+
+# Override V75 saved-results source to avoid _v33_snapshot(), because _v33_snapshot can rebuild heavy qualification scenarios.
+def _v75_all_saved_results(force=False):
+    return _v80_results_from_cached_snapshot()
+
+
+def _v75_team_stats_from_saved_results(force=False):
+    stats = {}
+    def ensure(t):
+        t = str(t or '').strip()
+        if t and t not in stats:
+            stats[t] = {'team': t, 'gf': 0, 'ga': 0, 'played': 0, 'cs': 0}
+        return stats.get(t)
+    for r in _v80_results_from_cached_snapshot():
+        t1, t2 = r.get('team1'), r.get('team2')
+        s1, s2 = int(r.get('score1') or 0), int(r.get('score2') or 0)
+        a, b = ensure(t1), ensure(t2)
+        if not a or not b:
+            continue
+        a['gf'] += s1; a['ga'] += s2; a['played'] += 1
+        b['gf'] += s2; b['ga'] += s1; b['played'] += 1
+        if s2 == 0: a['cs'] += 1
+        if s1 == 0: b['cs'] += 1
+    return stats
+
+
+def _v80_biggest_result_from_cached():
+    best = None
+    for r in _v80_results_from_cached_snapshot():
+        try:
+            s1 = int(r.get('score1') or 0); s2 = int(r.get('score2') or 0)
+            diff = abs(s1 - s2); total = s1 + s2
+            if best is None or diff > best[0] or (diff == best[0] and total > best[1]):
+                best = (diff, total, r)
+        except Exception:
+            continue
+    if not best:
+        return '-'
+    r = best[2]
+    return f"{r.get('team1')} {int(r.get('score1') or 0)}-{int(r.get('score2') or 0)} {r.get('team2')}"
+
+
+def _v75_biggest_result_from_saved(force=False):
+    return _v80_biggest_result_from_cached()
+
+
+def _v32_tournament_board_text(force=False):
+    snap = _v80_load_tournament_cache_snapshot()
+    results = _v80_results_from_cached_snapshot()
+    completed = int(snap.get('completed_count') or snap.get('finished_count') or len(results) or 0)
+    # لا نسحب ESPN هنا؛ نقرأ live_count من آخر كاش فقط حتى لا تتأخر لوحة البطولة.
+    live = int(snap.get('live_count') or 0)
+    goals = int(snap.get('goals') or 0)
+    if not goals:
+        try:
+            goals = sum(int(r.get('score1') or 0) + int(r.get('score2') or 0) for r in results)
+        except Exception:
+            goals = 0
+    try:
+        q_count = len(snap.get('qualified') or [])
+        e_count = len(snap.get('eliminated') or [])
+    except Exception:
+        q_count, e_count = 0, 0
+    try:
+        atk, dfn = _v75_single_attack_defense_lines(False)
+    except Exception:
+        atk, dfn = '-', '-'
+    updated = snap.get('updated_at') or (_now_riyadh_text() if '_now_riyadh_text' in globals() else '-')
+    return '\n'.join([
+        '📌 ملخص البطولة',
+        f'آخر تحديث: {updated}',
+        '',
+        f'📺 مباشر الآن: {live}',
+        f'✅ مباريات منتهية: {completed}',
+        f'🥅 إجمالي الأهداف: {goals}',
+        f'🔥 أكبر نتيجة: {_v80_biggest_result_from_cached()}',
+        f'⚔️ أقوى هجوم: {atk}',
+        f'🛡️ أقوى دفاع: {dfn}',
+        f'✅ المتأهلون رسميًا: {q_count}/32',
+        f'🚪 المغادرون رسميًا: {e_count}/16',
+    ]).strip()
+
+
+def _v39_board_text(force=False):
+    return _v32_tournament_board_text(False)
+
+# اجعل كاش الخلفية الثقيل مقفل بشكل واضح.
+V74_HEAVY_CACHE_JOB_DISABLED = True
+V79_HEAVY_BACKGROUND_CACHE_DISABLED = True
+V80_BOARD_CACHE_ONLY = True
+# ==================== END V80 QUICK STATS + FAST BOARD CACHE-ONLY PATCH — FAHAD ====================
 
 # ==================== V79 SAFE STOP HEAVY BACKGROUND CACHE — FAHAD ====================
 # إيقاف الكاش الخلفي للحسابات الثقيلة نهائيًا بدون لمس /start أو التنبيهات أو مباشر الآن.
