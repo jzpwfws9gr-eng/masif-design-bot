@@ -54518,5 +54518,198 @@ async def v74_post_init(application):
 
 # ==================== END V81 FAST LIVE SNAPSHOT + ALERT FEED PATCH — FAHAD ====================
 
+
+
+# ==================== V82 BEST THIRDS OFFICIAL GUARANTEE FIX — FAHAD ====================
+# إصلاح حسبة "ضمن رسميًا كأفضل ثالث":
+# المنتخب الثالث يضمن رسميًا إذا كان داخل أفضل 8 حاليًا، ويوجد 4 ثوالث آخرون مضمون أنهم سيبقون خلفه.
+# للثوالث في مجموعات مكتملة: المقارنة بالنقاط ثم فارق الأهداف ثم الأهداف.
+# للمجموعات غير المكتملة: نحسب أعلى نقاط ممكنة لصاحب المركز الثالث فقط؛ إذا كانت أقل من نقاط المنتخب فهو مضمون خلفه.
+
+def _v82_third_pts(r):
+    try: return int((r or {}).get('Pts', (r or {}).get('points', 0)) or 0)
+    except Exception: return 0
+
+def _v82_third_gd(r):
+    try:
+        if 'GD' in (r or {}): return int((r or {}).get('GD') or 0)
+        return int((r or {}).get('GF') or 0) - int((r or {}).get('GA') or 0)
+    except Exception: return 0
+
+def _v82_third_gf(r):
+    try: return int((r or {}).get('GF', (r or {}).get('gf', 0)) or 0)
+    except Exception: return 0
+
+def _v82_third_rank_tuple(r):
+    return (_v82_third_pts(r), _v82_third_gd(r), _v82_third_gf(r))
+
+def _v82_is_strictly_lower_third(other, cand):
+    try:
+        return _v82_third_rank_tuple(other) < _v82_third_rank_tuple(cand)
+    except Exception:
+        return False
+
+def _v82_match_done_key(t1, t2):
+    try:
+        a = simple_key(canonical_team_name(t1) or t1) if 'simple_key' in globals() else str(t1 or '').strip().lower()
+        b = simple_key(canonical_team_name(t2) or t2) if 'simple_key' in globals() else str(t2 or '').strip().lower()
+        return tuple(sorted([a, b]))
+    except Exception:
+        return tuple(sorted([str(t1 or ''), str(t2 or '')]))
+
+def _v82_group_teams(code):
+    try:
+        for c, teams in WORLD_CUP_GROUPS:
+            if str(c).upper() == str(code).upper():
+                return [canonical_team_name(x) or x for x in teams]
+    except Exception:
+        pass
+    return []
+
+def _v82_max_possible_third_points(code, g):
+    """أعلى نقاط ممكنة للمركز الثالث في مجموعة غير مكتملة، بنقاط فقط وبكل احتمالات فوز/تعادل/خسارة."""
+    try:
+        teams = _v82_group_teams(code)
+        rows = (g or {}).get('rows') or []
+        pts0 = {t: 0 for t in teams}
+        for r in rows:
+            t = canonical_team_name((r or {}).get('team')) or (r or {}).get('team')
+            if t:
+                pts0[t] = _v82_third_pts(r)
+        done = set()
+        for r in (g or {}).get('results') or []:
+            done.add(_v82_match_done_key((r or {}).get('team1'), (r or {}).get('team2')))
+        remaining = []
+        for m in (g or {}).get('fixtures') or []:
+            t1 = canonical_team_name((m or {}).get('team1')) or (m or {}).get('team1')
+            t2 = canonical_team_name((m or {}).get('team2')) or (m or {}).get('team2')
+            if not t1 or not t2:
+                continue
+            if _v82_match_done_key(t1, t2) not in done:
+                remaining.append((t1, t2))
+        if len(remaining) > 6:
+            current = sorted(pts0.values(), reverse=True)
+            return int(current[2] if len(current) >= 3 else 0) + 9
+        best_third = 0
+        outcomes = [(3,0), (1,1), (0,3)]
+        def rec(i, pts):
+            nonlocal best_third
+            if i >= len(remaining):
+                vals = sorted([int(v or 0) for v in pts.values()], reverse=True)
+                if len(vals) >= 3:
+                    best_third = max(best_third, int(vals[2]))
+                return
+            t1, t2 = remaining[i]
+            for a, b in outcomes:
+                nxt = dict(pts)
+                nxt[t1] = int(nxt.get(t1, 0)) + a
+                nxt[t2] = int(nxt.get(t2, 0)) + b
+                rec(i+1, nxt)
+        rec(0, dict(pts0))
+        return int(best_third)
+    except Exception:
+        return 99
+
+def _v82_official_best_third(team, row, snap):
+    try:
+        thirds = list((snap or {}).get('thirds') or [])
+        groups = (snap or {}).get('groups') or {}
+        inside_teams = [str((r or {}).get('team') or '') for r in thirds[:8]]
+        if str(team or '') not in inside_teams:
+            return False
+        cand = row or {}
+        cand_group = str(cand.get('group') or '')
+        lower_count = 0
+        for code, g in groups.items():
+            if str(code).upper() == cand_group.upper():
+                continue
+            rows = (g or {}).get('rows') or []
+            if len(rows) < 3:
+                continue
+            complete = int((g or {}).get('remaining') or 0) == 0 and len((g or {}).get('results') or []) >= 6
+            if complete:
+                if _v82_is_strictly_lower_third(rows[2], cand):
+                    lower_count += 1
+            else:
+                if _v82_max_possible_third_points(code, g) < _v82_third_pts(cand):
+                    lower_count += 1
+        return lower_count >= 4
+    except Exception:
+        return False
+
+_V82_PREV_BEST_THIRDS_TEXT = globals().get('_v32_best_thirds_text')
+def _v32_best_thirds_text(force=False):
+    snap = _v33_snapshot(force) if '_v33_snapshot' in globals() else (_v32_snapshot(force) if '_v32_snapshot' in globals() else {})
+    thirds = list((snap or {}).get('thirds') or [])
+    lines = [
+        '🥉 أفضل الثوالث الآن',
+        '',
+        'النظام: يتأهل أفضل 8 منتخبات أصحاب المركز الثالث من أصل 12 مجموعة.',
+        'يعني كل ثالث مجموعة لا ينافس مجموعته فقط، بل ينافس بقية ثوالث المجموعات على 8 مقاعد فقط.',
+        '',
+        '━━━━━━━━━━━━━━━',
+        f"آخر تحديث: {_v61_now_text(snap) if '_v61_now_text' in globals() else (snap.get('updated_at') or '-')}",
+        '',
+    ]
+    if not thirds:
+        lines.append('لا توجد بيانات كافية حتى الآن.')
+        return '\n'.join(lines).strip()
+
+    inside = thirds[:8]
+    outside = thirds[8:]
+    official_map = {}
+    for r in inside:
+        team = r.get('team') or ''
+        official_map[team] = _v82_official_best_third(team, r, snap)
+    official_count = sum(1 for v in official_map.values() if v)
+
+    lines.append(f'✅ داخل أفضل الثوالث حاليًا: {len(inside)}/8')
+    lines.append(f'🏁 ضمن التأهل رسميًا كأفضل ثالث: {official_count}/8')
+    lines.append('')
+    lines.append('✅ داخلين حاليًا:')
+    lines.append('')
+    for i, r in enumerate(inside, start=1):
+        team = r.get('team') or '-'
+        g = r.get('group') or ''
+        pts = _v61_safe_int(r.get('Pts', r.get('points', 0))) if '_v61_safe_int' in globals() else _v82_third_pts(r)
+        played = _v61_safe_int(r.get('P', r.get('played', 0))) if '_v61_safe_int' in globals() else int((r or {}).get('P') or 0)
+        gd = _v61_signed(r.get('GD', r.get('gd', 0))) if '_v61_signed' in globals() else f"{_v82_third_gd(r):+d}"
+        gf = _v61_safe_int(r.get('GF', r.get('gf', 0))) if '_v61_safe_int' in globals() else _v82_third_gf(r)
+        group_label = _v61_group_label_short(g) if '_v61_group_label_short' in globals() else f'المجموعة {g}'
+        state = '🏁 ضمن التأهل رسميًا كأفضل ثالث' if official_map.get(team) else '✅ داخل أفضل الثوالث حاليًا'
+        lines.append(f'{i}. {team} — {group_label}')
+        lines.append(f'   النقاط: {pts} | لعب: {played}/3 | الفارق: {gd} | الأهداف: {gf}')
+        lines.append(f'   الحالة: {state}')
+        lines.append('')
+
+    lines.append('❌ خارجين حاليًا:')
+    if not outside:
+        lines.append('لا يوجد خارجون حاليًا.')
+    for i, r in enumerate(outside, start=9):
+        team = r.get('team') or '-'
+        g = r.get('group') or ''
+        pts = _v61_safe_int(r.get('Pts', r.get('points', 0))) if '_v61_safe_int' in globals() else _v82_third_pts(r)
+        played = _v61_safe_int(r.get('P', r.get('played', 0))) if '_v61_safe_int' in globals() else int((r or {}).get('P') or 0)
+        gd = _v61_signed(r.get('GD', r.get('gd', 0))) if '_v61_signed' in globals() else f"{_v82_third_gd(r):+d}"
+        gf = _v61_safe_int(r.get('GF', r.get('gf', 0))) if '_v61_safe_int' in globals() else _v82_third_gf(r)
+        group_label = _v61_group_label_short(g) if '_v61_group_label_short' in globals() else f'المجموعة {g}'
+        lines.append(f'{i}. {team} — {group_label}')
+        lines.append(f'   النقاط: {pts} | لعب: {played}/3 | الفارق: {gd} | الأهداف: {gf}')
+        lines.append('   الحالة: ❌ خارج أفضل الثوالث حاليًا')
+        lines.append('')
+
+    lines += [
+        '━━━━━━━━━━━━━━━',
+        '✅ الدخول الحالي لا يعني التأهل الرسمي، لأن الترتيب قد يتغير بعد نتائج بقية المجموعات.',
+        '',
+        'إذا ضمن منتخب التأهل حسابيًا كأفضل ثالث، تظهر حالته:',
+        '🏁 ضمن التأهل رسميًا كأفضل ثالث',
+        '',
+        'أفضل 8 ثوالث من أصل 12 يتأهلون لدور الـ32، والخصم يتحدد حسب جدول FIFA الرسمي لتوزيع أفضل الثوالث.',
+    ]
+    return '\n'.join(lines).strip()
+
+# ==================== END V82 BEST THIRDS OFFICIAL GUARANTEE FIX ====================
+
 if __name__ == "__main__":
     main()
