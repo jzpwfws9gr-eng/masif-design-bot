@@ -56023,5 +56023,980 @@ async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V84 REQUESTED ONLY PATCH — FAHAD ====================
 
+
+# ==================== V84.1 KNOCKOUT PATH + TOURNAMENT TRACK PATCH — FAHAD ====================
+# اعتماد فهد بعد V84:
+# - لا نرجع سباق التأهل/أفضل الثوالث/دور32 كقوائم قديمة.
+# - لوحة البطولة ديناميكية: غير المحدد = "انتظار" فقط.
+# - زر "✅❌ التأهل والمغادرة" يصبح "🏆 مسار البطولة".
+# - مغادرو البطولة من أصل 48، والمتأهلون للمرحلة القادمة حسب الدور الحالي.
+# - فائز الإقصائيات من ESPN: winner ثم shootoutScore ثم النتيجة العادية.
+# - إشعار تأهل وإشعار مغادرة مستقلان عن نظام تنبيهات المباراة القديم.
+# - زر "📍 عرض مسار [المنتخب] بالبطولة".
+
+V841_TOTAL_TEAMS = 48
+V841_PATH_BUTTON = '🏆 مسار البطولة'
+V841_NOTIFICATIONS_FILE = 'v841_ko_notifications.json'
+V841_ESPN_KO_CACHE_FILE = 'v841_espn_ko_cache.json'
+V841_KO_NOTIFY_INTERVAL = 120
+
+V841_GROUP_ELIMINATED = [
+    'التشيك', 'قطر', 'هايتي', 'تركيا', 'كوراساو', 'تونس', 'نيوزيلندا', 'السعودية',
+    'العراق', 'الأردن', 'أوزبكستان', 'بنما', 'إيران', 'كوريا الجنوبية', 'اسكتلندا', 'أوروجواي'
+]
+
+# ESPN event ids حسب جدول خروج المغلوب الظاهر من ESPN.
+V841_ESPN_EVENT_IDS = {
+    'R32-1': '53452545', 'R32-2': '53452557', 'R32-3': '53452541', 'R32-4': '53452547',
+    'R32-5': '53452561', 'R32-6': '53452543', 'R32-7': '53452563', 'R32-8': '53452565',
+    'R32-9': '53452555', 'R32-10': '53452553', 'R32-11': '53452551', 'R32-12': '53452549',
+    'R32-13': '53452505', 'R32-14': '53452503', 'R32-15': '53452569', 'R32-16': '53452507',
+    'R16-1': '53452511', 'R16-2': '53452509', 'R16-3': '53452517', 'R16-4': '53452519',
+    'R16-5': '53452513', 'R16-6': '53452515', 'R16-7': '53452521', 'R16-8': '53452523',
+    'QF-1': '53452525', 'QF-2': '53452527', 'QF-3': '53452529', 'QF-4': '53452531',
+    'SF-1': '53452533', 'SF-2': '53452535', '3RD': '53452539', 'FINAL': '53452537',
+}
+
+V841_ROUND_IDS = {
+    'r32': [f'R32-{i}' for i in range(1, 17)],
+    'r16': [f'R16-{i}' for i in range(1, 9)],
+    'qf': [f'QF-{i}' for i in range(1, 5)],
+    'sf': ['SF-1', 'SF-2'],
+    'final': ['FINAL'],
+}
+
+V841_ROUND_META = {
+    'r32': ('دور 32', 'دور 16', 16),
+    'r16': ('دور 16', 'ربع النهائي', 8),
+    'qf': ('ربع النهائي', 'نصف النهائي', 4),
+    'sf': ('نصف النهائي', 'نهائي البطولة', 2),
+    'final': ('نهائي البطولة', 'بطل البطولة', 1),
+}
+
+
+def _v841_json_load(path, default=None):
+    default = {} if default is None else default
+    try:
+        return _v63_json_load(path, default) if '_v63_json_load' in globals() else _v32_load_json(path, default)
+    except Exception:
+        try:
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    obj = json.load(f)
+                return obj if isinstance(obj, type(default)) else default
+        except Exception:
+            pass
+    return default
+
+
+def _v841_json_save(path, data):
+    try:
+        if '_v63_json_save' in globals():
+            _v63_json_save(path, data)
+        elif '_v32_save_json' in globals():
+            _v32_save_json(path, data)
+        else:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data or {}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _v841_now_ts():
+    try:
+        return time.time()
+    except Exception:
+        return datetime.utcnow().timestamp()
+
+
+def _v841_updated_text():
+    try:
+        snap = _v81_load_snapshot() if '_v81_load_snapshot' in globals() else {}
+        if isinstance(snap, dict) and snap.get('updated_at'):
+            return snap.get('updated_at')
+    except Exception:
+        pass
+    try:
+        return _now_riyadh_text()
+    except Exception:
+        return datetime.utcnow().isoformat()
+
+
+def _v841_to_int(v):
+    try:
+        if v is None or v == '':
+            return None
+        return int(float(str(v).strip()))
+    except Exception:
+        return None
+
+
+def _v841_wait_label(x):
+    s = _v83_canon_team(x) if '_v83_canon_team' in globals() else str(x or '').strip()
+    if not s or any(k in str(s) for k in ('تحدد', 'يتحدد', 'TBD', 'tbd', 'لاحق')):
+        return 'انتظار'
+    return s
+
+
+def _v841_fixture(match_id):
+    try:
+        m = _v83_fixture_base(match_id) if '_v83_fixture_base' in globals() else None
+        return dict(m or {})
+    except Exception:
+        return {}
+
+
+def _v841_is_final_obj(obj):
+    try:
+        if '_v83_status_is_final' in globals() and _v83_status_is_final(obj):
+            return True
+    except Exception:
+        pass
+    try:
+        blob = _v40_text_blob(obj) if '_v40_text_blob' in globals() else str(obj).lower()
+        return any(x in blob for x in ('final', 'ft', 'full time', 'completed', 'complete', 'post', 'انتهت', 'نهائي'))
+    except Exception:
+        return False
+
+
+def _v841_raw_bool(v):
+    if v is True:
+        return True
+    s = str(v).strip().lower()
+    return s in ('true', '1', 'yes', 'y')
+
+
+def _v841_competitors_from_event_raw(ev):
+    try:
+        comps = _v43_event_competitors(ev) if '_v43_event_competitors' in globals() else []
+        if comps:
+            return comps
+    except Exception:
+        pass
+    try:
+        return _v41_competitors_from_event(ev) if '_v41_competitors_from_event' in globals() else []
+    except Exception:
+        return []
+
+
+def _v841_penalty_from_raw(raw):
+    if not isinstance(raw, dict):
+        return None
+    keys = ('shootoutScore', 'shootout_score', 'penaltyScore', 'penalty_score', 'penalties', 'penaltyShootoutScore')
+    for k in keys:
+        v = raw.get(k)
+        n = _v841_to_int(v)
+        if n is not None:
+            return n
+    # أحيانًا ESPN يضعها داخل linescores/displayValue.
+    try:
+        for node in (raw.get('linescores') or raw.get('lineScores') or []):
+            if not isinstance(node, dict):
+                continue
+            lab = str(node.get('period') or node.get('name') or node.get('displayName') or node.get('shortDisplayName') or '').lower()
+            if any(x in lab for x in ('pen', 'shootout', 'ركلات', 'ترجيح')):
+                n = _v841_to_int(node.get('value') or node.get('score') or node.get('displayValue'))
+                if n is not None:
+                    return n
+    except Exception:
+        pass
+    return None
+
+
+def _v841_obj_scores(obj):
+    try:
+        if '_v83_numeric_scores' in globals():
+            sc = _v83_numeric_scores(obj)
+            if sc:
+                return sc
+    except Exception:
+        pass
+    if not isinstance(obj, dict):
+        return None
+    for a, b in (('score1','score2'), ('home_score','away_score'), ('s1','s2')):
+        x, y = _v841_to_int(obj.get(a)), _v841_to_int(obj.get(b))
+        if x is not None and y is not None:
+            return x, y
+    return None
+
+
+def _v841_winner_loser_from_obj(obj, team1, team2):
+    """ESPN knockout winner order: winner flag -> shootoutScore -> regular score."""
+    if not isinstance(obj, dict):
+        return None, None
+    t1 = _v83_canon_team(team1) if '_v83_canon_team' in globals() else str(team1 or '')
+    t2 = _v83_canon_team(team2) if '_v83_canon_team' in globals() else str(team2 or '')
+    k1 = _v83_team_key(t1) if '_v83_team_key' in globals() else str(t1).lower()
+    k2 = _v83_team_key(t2) if '_v83_team_key' in globals() else str(t2).lower()
+
+    # 1) winner flag من ESPN / أو حقل winner نصي في الكاش.
+    for key in ('winner', 'winner_team', 'winnerName', 'qualified', 'advance_team'):
+        w = obj.get(key)
+        if isinstance(w, str) and w.strip():
+            wk = _v83_team_key(w) if '_v83_team_key' in globals() else w.lower()
+            if wk == k1:
+                return t1, t2
+            if wk == k2:
+                return t2, t1
+    try:
+        ev = obj.get('event_raw') or obj.get('raw_event') or obj.get('espn_event')
+        comps = _v841_competitors_from_event_raw(ev) if isinstance(ev, dict) else []
+        comp_rows = []
+        for c in comps or []:
+            raw = c.get('raw') if isinstance(c, dict) else {}
+            nm = _v83_canon_team(c.get('name') or c.get('abbr') or '') if '_v83_canon_team' in globals() else str(c.get('name') or '')
+            ck = _v83_team_key(nm) if '_v83_team_key' in globals() else nm.lower()
+            comp_rows.append((ck, raw, c))
+            if _v841_raw_bool((raw or {}).get('winner')):
+                if ck == k1:
+                    return t1, t2
+                if ck == k2:
+                    return t2, t1
+        # 2) البلنتيات/shootoutScore إذا النتيجة متعادلة.
+        sc = _v841_obj_scores(obj)
+        tied = bool(sc and sc[0] == sc[1])
+        if tied:
+            p1 = p2 = None
+            for ck, raw, c in comp_rows:
+                pen = _v841_penalty_from_raw(raw or {})
+                if ck == k1:
+                    p1 = pen
+                elif ck == k2:
+                    p2 = pen
+            # بعض الكاشات قد تحفظها مباشرة.
+            if p1 is None:
+                p1 = _v841_to_int(obj.get('shootoutScore1') or obj.get('penalty1') or obj.get('pens1'))
+            if p2 is None:
+                p2 = _v841_to_int(obj.get('shootoutScore2') or obj.get('penalty2') or obj.get('pens2'))
+            if p1 is not None and p2 is not None:
+                if p1 > p2:
+                    return t1, t2
+                if p2 > p1:
+                    return t2, t1
+    except Exception:
+        pass
+
+    # 3) النتيجة العادية إذا غير متعادلة.
+    sc = _v841_obj_scores(obj)
+    if sc:
+        s1, s2 = sc
+        if s1 > s2:
+            return t1, t2
+        if s2 > s1:
+            return t2, t1
+
+    # 4) انتهت لكن ESPN لم يحدد فائزًا واضحًا.
+    return None, None
+
+
+def _v841_espn_obj_by_match_id(match_id, force=False):
+    eid = V841_ESPN_EVENT_IDS.get(str(match_id))
+    if not eid:
+        return None
+    cache = _v841_json_load(V841_ESPN_KO_CACHE_FILE, {})
+    rec = cache.get(str(match_id)) if isinstance(cache, dict) else None
+    now = _v841_now_ts()
+    if isinstance(rec, dict) and not force:
+        # النهائي يبقى محفوظًا، وغير النهائي يحدث كل دقيقتين تقريبًا.
+        ttl = 24 * 3600 if rec.get('final') else 120
+        if now - float(rec.get('ts') or 0) < ttl:
+            obj = rec.get('obj')
+            if isinstance(obj, dict):
+                return obj
+    try:
+        ev = _v43_fetch_espn_event_by_id(eid, debug=[]) if '_v43_fetch_espn_event_by_id' in globals() else None
+        if not isinstance(ev, dict):
+            return rec.get('obj') if isinstance(rec, dict) else None
+        m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(match_id)
+        m['event_id'] = eid
+        obj = _v43_event_score_obj(m, ev=ev, debug=[]) if '_v43_event_score_obj' in globals() else None
+        if not isinstance(obj, dict):
+            comps = _v841_competitors_from_event_raw(ev)
+            if len(comps) >= 2:
+                obj = {
+                    'team1': m.get('team1') or comps[0].get('name'), 'team2': m.get('team2') or comps[1].get('name'),
+                    'score1': comps[0].get('score'), 'score2': comps[1].get('score'),
+                    'status': _v41_status_from_espn(ev) if '_v41_status_from_espn' in globals() else '',
+                    'source': 'ESPN', 'event_id': eid,
+                }
+        if isinstance(obj, dict):
+            obj['event_raw'] = ev
+            obj['event_id'] = eid
+            try:
+                _v43_put_cached_match_result(m, obj, 'ESPN')
+            except Exception:
+                pass
+            cache[str(match_id)] = {'ts': now, 'final': _v841_is_final_obj(obj), 'obj': obj}
+            _v841_json_save(V841_ESPN_KO_CACHE_FILE, cache)
+            return obj
+    except Exception:
+        return rec.get('obj') if isinstance(rec, dict) else None
+    return None
+
+
+_V841_PREV_RESULT_OBJ_FOR_MATCH_ID = globals().get('_v83_result_obj_for_match_id')
+def _v83_result_obj_for_match_id(match_id):
+    obj = None
+    try:
+        obj = _V841_PREV_RESULT_OBJ_FOR_MATCH_ID(match_id) if callable(_V841_PREV_RESULT_OBJ_FOR_MATCH_ID) else None
+    except Exception:
+        obj = None
+    if isinstance(obj, dict) and _v841_is_final_obj(obj) and _v841_obj_scores(obj):
+        return obj
+    espn_obj = _v841_espn_obj_by_match_id(match_id, force=False)
+    return espn_obj if isinstance(espn_obj, dict) else obj
+
+
+def _v83_winner_loser(match_id):
+    m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(match_id)
+    if not m:
+        return None, None
+    obj = _v83_result_obj_for_match_id(match_id)
+    if not isinstance(obj, dict) or not _v841_is_final_obj(obj):
+        return None, None
+    return _v841_winner_loser_from_obj(obj, m.get('team1'), m.get('team2'))
+
+
+def _v841_match_result_text(match_id, include_pen=True):
+    m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(match_id)
+    obj = _v83_result_obj_for_match_id(match_id)
+    if not isinstance(obj, dict):
+        return ''
+    sc = _v841_obj_scores(obj)
+    if not sc:
+        return ''
+    t1, t2 = _v841_wait_label(m.get('team1')), _v841_wait_label(m.get('team2'))
+    txt = f'{t1} {sc[0]}-{sc[1]} {t2}'
+    if include_pen and sc[0] == sc[1]:
+        try:
+            ev = obj.get('event_raw')
+            comps = _v841_competitors_from_event_raw(ev) if isinstance(ev, dict) else []
+            p = []
+            for c in comps[:2]:
+                p.append(_v841_penalty_from_raw(c.get('raw') or {}))
+            if len(p) == 2 and p[0] is not None and p[1] is not None:
+                txt += f' (ترجيح {p[0]}-{p[1]})'
+        except Exception:
+            pass
+    return txt
+
+
+def _v841_round_completed(round_key):
+    out = []
+    for mid in V841_ROUND_IDS.get(round_key, []):
+        w, l = _v83_winner_loser(mid)
+        if w and l:
+            out.append((mid, w, l))
+    return out
+
+
+def _v841_eliminated_group_list():
+    try:
+        old = _v32_calculated_eliminated() if '_v32_calculated_eliminated' in globals() else []
+        if old and len(old) >= 16:
+            return list(old)[:16]
+    except Exception:
+        pass
+    return list(V841_GROUP_ELIMINATED)
+
+
+def _v841_eliminated_by_round():
+    data = {'groups': [(None, None, t) for t in _v841_eliminated_group_list()]}
+    for rk in ('r32', 'r16', 'qf', 'sf', 'final'):
+        data[rk] = []
+        for mid, w, l in _v841_round_completed(rk):
+            data[rk].append((mid, w, l))
+    return data
+
+
+def _v841_all_eliminated_count():
+    data = _v841_eliminated_by_round()
+    return sum(len(v) for v in data.values())
+
+
+def _v841_current_phase():
+    counts = {rk: len(_v841_round_completed(rk)) for rk in ('r32', 'r16', 'qf', 'sf', 'final')}
+    if counts['final'] >= 1:
+        return 'champion', counts
+    if counts['sf'] >= 2:
+        return 'final', counts
+    if counts['qf'] >= 4:
+        return 'sf', counts
+    if counts['r16'] >= 8:
+        return 'qf', counts
+    if counts['r32'] >= 16:
+        return 'r16', counts
+    return 'r32', counts
+
+
+def _v841_next_qualified_rows():
+    phase, counts = _v841_current_phase()
+    if phase == 'champion':
+        rows = _v841_round_completed('final')
+        return 'بطل البطولة', 1, [(mid, w, l) for mid, w, l in rows[:1]], phase
+    if phase == 'final':
+        return 'المتأهلون لنهائي البطولة', 2, _v841_round_completed('sf'), phase
+    title, next_title, denom = V841_ROUND_META.get(phase, ('دور 32', 'دور 16', 16))
+    return f'المتأهلون ل{next_title}', denom, _v841_round_completed(phase), phase
+
+
+def _v841_phase_title():
+    phase, _counts = _v841_current_phase()
+    if phase == 'champion':
+        return 'اكتملت البطولة'
+    return V841_ROUND_META.get(phase, ('دور 32', '', 0))[0]
+
+
+def _v841_team_button(team):
+    key = _v83_team_key(team) if '_v83_team_key' in globals() else re.sub(r'\W+', '', str(team or ''))[:20]
+    return InlineKeyboardButton(f'📍 عرض مسار {team} بالبطولة', callback_data=f'v32|team_path|{key}')
+
+
+def _v841_team_from_key(key):
+    key = str(key or '')
+    names = []
+    try:
+        for pair in V83_R32_FIXED.values():
+            names.extend(list(pair))
+    except Exception:
+        pass
+    names.extend(V841_GROUP_ELIMINATED)
+    try:
+        for mid in sum([V841_ROUND_IDS[k] for k in V841_ROUND_IDS], []):
+            m = _v83_resolve_fixture_light(_v841_fixture(mid))
+            names.extend([m.get('team1'), m.get('team2')])
+            w, l = _v83_winner_loser(mid)
+            names.extend([w, l])
+    except Exception:
+        pass
+    seen = []
+    for n in names:
+        n = _v841_wait_label(n)
+        if n and n != 'انتظار' and n not in seen:
+            seen.append(n)
+    for n in seen:
+        try:
+            if _v83_team_key(n) == key:
+                return n
+        except Exception:
+            pass
+    return ''
+
+
+def _v841_team_group_matches(team):
+    rows = []
+    try:
+        tk = _v83_team_key(team)
+        for m in globals().get('TOURNAMENT_FIXTURES', []) or []:
+            if 'مجموعات' not in str(m.get('stage') or ''):
+                continue
+            if tk not in {_v83_team_key(m.get('team1')), _v83_team_key(m.get('team2'))}:
+                continue
+            obj = None
+            try:
+                obj = _v43_get_cached_match_result(m) if '_v43_get_cached_match_result' in globals() else _v33_get_cached_match_result(m)
+            except Exception:
+                obj = None
+            sc = _v841_obj_scores(obj) if isinstance(obj, dict) else None
+            if sc:
+                rows.append(f"{_v841_wait_label(m.get('team1'))} {sc[0]}-{sc[1]} {_v841_wait_label(m.get('team2'))}")
+            else:
+                rows.append(f"{_v841_wait_label(m.get('team1'))} × {_v841_wait_label(m.get('team2'))}")
+    except Exception:
+        pass
+    return rows[:3]
+
+
+def _v841_team_status_line(team):
+    k = _v83_team_key(team) if '_v83_team_key' in globals() else str(team or '')
+    # خرج من المجموعات.
+    for t in _v841_eliminated_group_list():
+        if _v83_team_key(t) == k:
+            return 'غادر البطولة من دور المجموعات 🚪'
+    # خرج في الإقصائيات.
+    for rk in ('r32', 'r16', 'qf', 'sf', 'final'):
+        for mid, w, l in _v841_round_completed(rk):
+            if _v83_team_key(l) == k:
+                rn = V841_ROUND_META.get(rk, (rk, '', 0))[0]
+                return f'غادر البطولة من {rn} 🚪'
+    # بطل.
+    champ = None
+    rows = _v841_round_completed('final')
+    if rows:
+        champ = rows[0][1]
+    if champ and _v83_team_key(champ) == k:
+        return 'بطل البطولة 🏆'
+    return 'مستمر في البطولة ✅'
+
+
+def _v841_team_path_text(team):
+    team = _v841_wait_label(team)
+    lines = [f'📍 مسار {team} في البطولة', '']
+    groups = _v841_team_group_matches(team)
+    if groups:
+        lines.append('🏁 دور المجموعات')
+        for i, line in enumerate(groups, 1):
+            lines.append(f'{i}) {line}')
+        try:
+            pos = _v74_position_line_for_status(team, _v33_snapshot(False)) if '_v74_position_line_for_status' in globals() else ''
+            if pos and 'لم يُحسم' not in pos:
+                lines += ['', f'📄 طريقة التأهل: {pos} رسميًا']
+        except Exception:
+            pass
+        lines.append('')
+        lines.append('━━━━━━━━━━━━━━')
+        lines.append('')
+    found_ko = False
+    next_line = None
+    tk = _v83_team_key(team) if '_v83_team_key' in globals() else str(team or '')
+    for rk in ('r32', 'r16', 'qf', 'sf', 'final'):
+        for mid in V841_ROUND_IDS.get(rk, []):
+            m = _v83_resolve_fixture_light(_v841_fixture(mid)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(mid)
+            t1, t2 = _v841_wait_label(m.get('team1')), _v841_wait_label(m.get('team2'))
+            if tk not in {_v83_team_key(t1), _v83_team_key(t2)}:
+                continue
+            round_name = V841_ROUND_META.get(rk, (rk, '', 0))[0]
+            w, l = _v83_winner_loser(mid)
+            res = _v841_match_result_text(mid) or f'{t1} × {t2}'
+            if w and l:
+                found_ko = True
+                lines.append(f'🏆 {round_name}')
+                lines.append(res)
+                if _v83_team_key(w) == tk:
+                    next_title = V841_ROUND_META.get(rk, ('', '', 0))[1]
+                    lines.append(f'✅ تأهل إلى {next_title}')
+                else:
+                    lines.append('🚪 غادر البطولة')
+                lines.append('')
+                lines.append('━━━━━━━━━━━━━━')
+                lines.append('')
+            else:
+                next_line = (round_name, f'{t1} × {t2}', f"{m.get('day','')} {str(m.get('date',''))[:5]} — {m.get('time','')}")
+                break
+    if next_line:
+        rn, match_line, date_line = next_line
+        lines += ['🔜 المباراة القادمة', match_line, date_line, '', '━━━━━━━━━━━━━━', '']
+    lines.append('📌 الحالة الحالية:')
+    lines.append(_v841_team_status_line(team))
+    return '\n'.join(lines).strip()
+
+
+def _v841_status_text(force=False):
+    title, denom, winners, phase = _v841_next_qualified_rows()
+    eliminated_count = _v841_all_eliminated_count()
+    remaining = max(0, V841_TOTAL_TEAMS - eliminated_count)
+    lines = [V841_PATH_BUTTON, f'آخر تحديث: {_v841_updated_text()}', '']
+    if phase == 'champion' and winners:
+        lines.append(f'🏆 بطل البطولة: {winners[0][1]}')
+    else:
+        lines.append(f'🏆 المرحلة الحالية: {_v841_phase_title()}')
+    lines += [
+        '',
+        f'🟢 المتبقون في البطولة: {remaining}/{V841_TOTAL_TEAMS}',
+        f'🚪 مغادرو البطولة: {eliminated_count}/{V841_TOTAL_TEAMS}',
+        '',
+        '━━━━━━━━━━━━━━',
+        '',
+    ]
+    if phase == 'champion':
+        if winners:
+            lines.append(f'🏆 بطل البطولة: {winners[0][1]}')
+    else:
+        lines.append(f'✅ {title}: {len(winners)}/{denom}')
+        if winners:
+            for i, (mid, w, l) in enumerate(winners, 1):
+                rn = V841_ROUND_META.get(phase, (phase, '', 0))[0]
+                lines.append('')
+                lines.append(f'{i}- {w}')
+                lines.append(f'📄 تأهل من {rn} بعد الفوز على {l}')
+        else:
+            lines.append('لا يوجد حتى الآن.')
+    lines += ['', '━━━━━━━━━━━━━━', '', '🚪 مغادرو البطولة']
+    elim = _v841_eliminated_by_round()
+    order = [('groups', 'من دور المجموعات'), ('r32', 'من دور 32'), ('r16', 'من دور 16'), ('qf', 'من ربع النهائي'), ('sf', 'من نصف النهائي'), ('final', 'من النهائي')]
+    idx = 1
+    for key, label in order:
+        rows = elim.get(key) or []
+        if not rows:
+            continue
+        lines += ['', f'📌 {label}: {len(rows)}']
+        for row in rows:
+            if key == 'groups':
+                t = row[2]
+                lines.append(f'{idx}- {t}')
+            else:
+                mid, w, l = row
+                lines.append(f'{idx}- {l}')
+                lines.append(f'📄 غادر بعد الخسارة من {w}')
+            idx += 1
+    if phase != 'champion':
+        lines += ['', f'⏳ بانتظار اكتمال بقية مباريات {_v841_phase_title()}']
+    lines += ['', 'ملاحظة: المغادرون محسوبون من أصل 48 منتخبًا، والمتأهلون هنا خاصون بالمرحلة الإقصائية الحالية فقط.']
+    return '\n'.join(lines).strip()
+
+
+def _v34_status_text(force=False):
+    return _v841_status_text(force=force)
+
+
+def _v34_status_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('🔄 تحديث الآن', callback_data='v32|status_force')],
+        [InlineKeyboardButton('🏆 الأدوار الإقصائية', callback_data='v32|ko_menu'), InlineKeyboardButton('⬅️ الرئيسية', callback_data='mainmenu|home')],
+    ])
+
+
+def _v841_board_summary(force=False):
+    snap = _v80_load_tournament_cache_snapshot() if '_v80_load_tournament_cache_snapshot' in globals() else {}
+    try:
+        results, live_count, live_goals, live_snap = _v81_completed_results_and_live_goals()
+    except Exception:
+        results, live_count, live_goals, live_snap = [], 0, 0, {}
+    completed = int(snap.get('completed_count') or snap.get('finished_count') or len(results) or 0)
+    goals = int(snap.get('goals') or 0)
+    if not goals:
+        try:
+            goals = sum(int(r.get('score1') or 0) + int(r.get('score2') or 0) for r in results)
+        except Exception:
+            goals = 0
+    goals += int(live_goals or 0)
+    try:
+        atk, dfn = _v75_single_attack_defense_lines(False)
+    except Exception:
+        atk, dfn = '-', '-'
+    try:
+        biggest = _v80_biggest_result_from_cached() if '_v80_biggest_result_from_cached' in globals() else _v75_biggest_result_from_saved(False)
+    except Exception:
+        biggest = '-'
+    updated = (live_snap or {}).get('updated_at') or (snap or {}).get('updated_at') or _v841_updated_text()
+    eliminated_count = _v841_all_eliminated_count()
+    phase = _v841_phase_title()
+    lines = [
+        '📌 ملخص البطولة',
+        f'آخر تحديث: {updated}',
+        '',
+        f'📺 مباشر الآن: {int(live_count or 0)}',
+        f'✅ مباريات منتهية: {completed}',
+        f'🥅 إجمالي الأهداف: {goals}',
+        f'🔥 أكبر نتيجة: {biggest}',
+        f'⚔️ أقوى هجوم: {atk}',
+        f'🛡️ أقوى دفاع: {dfn}',
+        f'🏆 المرحلة الحالية: {phase}',
+        f'🚪 مغادرو البطولة: {eliminated_count}/{V841_TOTAL_TEAMS}',
+    ]
+    rows = _v841_round_completed('final')
+    if rows:
+        lines.append(f'🏆 بطل البطولة: {rows[0][1]}')
+    return '\n'.join(lines).strip()
+
+
+def _v32_tournament_board_text(force=False):
+    return _v841_board_summary(force=force)
+
+
+def _v39_board_text(force=False):
+    return _v32_tournament_board_text(force=force)
+
+
+def _v83_match_line(m):
+    a = _v841_wait_label((m or {}).get('team1'))
+    b = _v841_wait_label((m or {}).get('team2'))
+    return f'{a} × {b}'
+
+
+def _v83_knockout_text(stage='menu'):
+    if stage in ('menu','home',''):
+        return '🏆 الأدوار الإقصائية\n\nاختر الدور المطلوب:'
+    title = '📅 كل الأدوار الإقصائية' if stage == 'all' else V83_KO_STAGE_MAP.get(stage, ('🏆 الأدوار الإقصائية', None))[0]
+    rows = _v83_knockout_fixtures(stage)
+    lines = [title, '']
+    if not rows:
+        lines.append('لا توجد مباريات لهذا الدور حاليًا.')
+        return '\n'.join(lines).strip()
+    current_stage = None
+    for m in rows:
+        stg = str(m.get('stage') or '')
+        if stage == 'all' and stg != current_stage:
+            current_stage = stg
+            lines.append(f'━━━━━━━━━━━━━━━\n{stg}')
+        line = _v83_match_line(m)
+        lines.append(line)
+        lines.append(f"🗓️ {m.get('day','')} {str(m.get('date',''))[:5]} — {m.get('time','')}")
+        mid = str(m.get('id') or '')
+        res = _v841_match_result_text(mid)
+        if res:
+            w, l = _v83_winner_loser(mid)
+            lines.append(f'📌 النتيجة: {res}')
+            if w:
+                lines.append(f'✅ المتأهل: {w}')
+        elif 'انتظار' in line:
+            lines.append('⏳ انتظار')
+        lines.append('')
+    return '\n'.join(lines).strip()
+
+
+def _v75_public_main_rows():
+    return [
+        ['📊 إحصائيات البطولة', '🏆 لوحة البطولة'],
+        ['📺 مباشر الآن', '🔔 تنبيهات المباراة'],
+        [V841_PATH_BUTTON, '🏆 الأدوار الإقصائية'],
+        ['🏆 مسابقات المصيف'],
+        ['📅 مباريات اليوم', '📅 المباريات القادمة'],
+        ['📋 نتائج المباريات', '🎮 فانتزي'],
+    ]
+
+
+def _public_main_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        _v75_public_main_rows(),
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder='اكتب اسم منتخب أو اختر من القائمة',
+    )
+
+
+def _public_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('📊 إحصائيات البطولة', callback_data='v32|stats'), InlineKeyboardButton('🏆 لوحة البطولة', callback_data='v32|board')],
+        [InlineKeyboardButton('📺 مباشر الآن', callback_data='mainmenu|live'), InlineKeyboardButton('🔔 تنبيهات المباراة', callback_data='v63goal|menu')],
+        [InlineKeyboardButton(V841_PATH_BUTTON, callback_data='v32|status_home'), InlineKeyboardButton('🏆 الأدوار الإقصائية', callback_data='v32|ko_menu')],
+        [InlineKeyboardButton('🏆 مسابقات المصيف', callback_data='mainmenu|contests')],
+        [InlineKeyboardButton('📅 مباريات اليوم', callback_data='mainmenu|today'), InlineKeyboardButton('📅 المباريات القادمة', callback_data='mainmenu|fixtures')],
+        [InlineKeyboardButton('📋 نتائج المباريات', callback_data='mainmenu|results'), InlineKeyboardButton('🎮 فانتزي', callback_data='v32|fantasy_gate')],
+    ])
+
+
+def _v32_board_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(V841_PATH_BUTTON, callback_data='v32|status_home'), InlineKeyboardButton('🏆 الأدوار الإقصائية', callback_data='v32|ko_menu')],
+        [InlineKeyboardButton('📊 إحصائيات البطولة', callback_data='v32|stats')],
+        [InlineKeyboardButton('🔄 تحديث الآن', callback_data='v32|board_force'), InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+
+def _v34_stats_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('📈 إحصائيات سريعة', callback_data='v32|quick_stats')],
+        [InlineKeyboardButton('📊 ترتيب المجموعات', callback_data='mainmenu|groups'), InlineKeyboardButton('🏆 هدافين البطولة', callback_data='mainmenu|scorers')],
+        [InlineKeyboardButton(V841_PATH_BUTTON, callback_data='v32|status_home'), InlineKeyboardButton('🏆 الأدوار الإقصائية', callback_data='v32|ko_menu')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+
+try:
+    if 'V32_FINAL_MENU_LABELS' in globals():
+        V32_FINAL_MENU_LABELS.discard('✅❌ التأهل والمغادرة')
+        V32_FINAL_MENU_LABELS.update({V841_PATH_BUTTON})
+except Exception:
+    pass
+
+
+_V841_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try: _v32_track_user(update)
+    except Exception: pass
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if txt in (V841_PATH_BUTTON, '✅❌ التأهل والمغادرة', 'مسار البطولة'):
+        await update.effective_message.reply_text(_v841_status_text(False), reply_markup=_v34_status_keyboard())
+        return
+    if callable(_V841_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V841_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V841_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if txt in (V841_PATH_BUTTON, '✅❌ التأهل والمغادرة', 'مسار البطولة'):
+        return await public_reply_menu_router(update, context)
+    if callable(_V841_PREV_TEXT_STATE_ROUTER):
+        return await _V841_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+_V841_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'mainmenu|today':
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await _v84_send_matches_today_window(q.message, clean=False)
+        except Exception:
+            await q.message.reply_text('تعذر عرض مباريات اليوم مؤقتًا.')
+        return
+    if callable(_V841_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V841_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+_V841_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    try: _v32_track_user(update)
+    except Exception: pass
+    if action in ('status_home', 'status_force'):
+        try: await q.answer('🔄 تحديث...' if action == 'status_force' else '', show_alert=False)
+        except Exception: pass
+        try: await q.edit_message_text(_v841_status_text(force=(action == 'status_force')), reply_markup=_v34_status_keyboard())
+        except Exception: await q.message.reply_text(_v841_status_text(force=(action == 'status_force')), reply_markup=_v34_status_keyboard())
+        return
+    if action == 'team_path':
+        key = parts[2] if len(parts) > 2 else ''
+        team = _v841_team_from_key(key)
+        try: await q.answer()
+        except Exception: pass
+        if not team:
+            await q.message.reply_text('لم أجد مسار المنتخب حاليًا.', reply_markup=_v34_status_keyboard())
+            return
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ مسار البطولة', callback_data='v32|status_home'), InlineKeyboardButton('⬅️ الرئيسية', callback_data='mainmenu|home')]])
+        try: await q.edit_message_text(_v841_team_path_text(team), reply_markup=kb)
+        except Exception: await q.message.reply_text(_v841_team_path_text(team), reply_markup=kb)
+        return
+    if action in ('board', 'board_force'):
+        try: await q.answer('🔄 تحديث...' if action == 'board_force' else '', show_alert=False)
+        except Exception: pass
+        txt = _v32_tournament_board_text(force=(action == 'board_force'))
+        try: await q.edit_message_text(txt, reply_markup=_v32_board_keyboard())
+        except Exception: await q.message.reply_text(txt, reply_markup=_v32_board_keyboard())
+        return
+    if callable(_V841_PREV_V32_CALLBACK):
+        return await _V841_PREV_V32_CALLBACK(update, context)
+
+
+_V841_PREV_ADMIN_CALLBACK = globals().get('v32_admin_callback')
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'refresh':
+        try: await q.answer('🔄 تحديث...', show_alert=False)
+        except Exception: pass
+        try:
+            await q.edit_message_text('🔄 جاري تحديث بيانات البطولة...')
+        except Exception:
+            pass
+        report = []
+        try:
+            fetch_espn_top_scorers(True)
+            report.append('✅ الهدافين: تم')
+        except Exception:
+            report.append('❌ الهدافين: تعذر')
+        try:
+            _v841_status_text(True)
+            report.append('✅ مسار البطولة: تم')
+        except Exception:
+            report.append('❌ مسار البطولة: تعذر')
+        try:
+            board = _v32_tournament_board_text(True)
+            report.append('✅ لوحة البطولة: تم')
+        except Exception:
+            board = '🏆 لوحة البطولة'
+            report.append('❌ لوحة البطولة: تعذر')
+        try:
+            await q.edit_message_text(board + '\n\n' + '\n'.join(report), reply_markup=_v38e_admin_keyboard() if '_v38e_admin_keyboard' in globals() else None)
+        except Exception:
+            await q.message.reply_text(board + '\n\n' + '\n'.join(report))
+        return
+    if callable(_V841_PREV_ADMIN_CALLBACK):
+        return await _V841_PREV_ADMIN_CALLBACK(update, context)
+
+
+def _v841_notification_users():
+    data = _v841_json_load(V32_USERS_FILE if 'V32_USERS_FILE' in globals() else 'users.json', {'users': {}})
+    users = list((data.get('users') or {}).values()) if isinstance(data, dict) else []
+    out = []
+    for u in users:
+        cid = u.get('chat_id') or u.get('user_id') if isinstance(u, dict) else None
+        if cid:
+            out.append(cid)
+    return out
+
+
+async def _v841_send_to_all(bot, text, kb=None):
+    for chat_id in _v841_notification_users():
+        try:
+            await bot.send_message(chat_id=int(chat_id), text=text, reply_markup=kb)
+            await asyncio.sleep(0.04)
+        except Exception:
+            pass
+
+
+async def v841_knockout_notifications_job(context):
+    sent = _v841_json_load(V841_NOTIFICATIONS_FILE, {'sent': {}})
+    store = sent.setdefault('sent', {})
+    changed = False
+    for rk in ('r32', 'r16', 'qf', 'sf', 'final'):
+        for mid in V841_ROUND_IDS.get(rk, []):
+            w, l = _v83_winner_loser(mid)
+            if not w or not l:
+                continue
+            if store.get(mid):
+                continue
+            round_name, next_name, _den = V841_ROUND_META.get(rk, (rk, '', 0))
+            if rk == 'final':
+                win_txt = f'🏆 بطل مونديال المصيف 2026 🏆\n\n{w} بطل البطولة 👑\n\nرحلة بدأت من 48 منتخبًا وانتهت ببطل واحد فقط.\n\n🚪 مغادرو البطولة: 47/48\n👑 البطل: {w}'
+                lose_txt = f'🚪 غادر البطولة\n\n{l} تنهي مشوارها في مونديال المصيف 2026 بعد النهائي.\nشكرًا على الرحلة 👏'
+            else:
+                win_txt = f'🎉 تأهل رسميًا!\n\n{w} إلى {next_name} ✅\n\nبعد الفوز على {l}\nوتواصل مشوارها في مونديال المصيف 2026 🏆'
+                lose_txt = f'🚪 غادر البطولة\n\n{l} تنهي مشوارها في مونديال المصيف 2026\n\nبعد الخسارة من {w} في {round_name}.\nشكرًا على الرحلة 👏'
+            try:
+                await _v841_send_to_all(context.bot, win_txt, InlineKeyboardMarkup([[_v841_team_button(w)]]))
+                await _v841_send_to_all(context.bot, lose_txt, InlineKeyboardMarkup([[_v841_team_button(l)]]))
+                store[mid] = {'winner': w, 'loser': l, 'ts': _v841_now_ts()}
+                changed = True
+            except Exception:
+                pass
+    if changed:
+        _v841_json_save(V841_NOTIFICATIONS_FILE, sent)
+
+
+async def _v841_notifications_loop(application):
+    while True:
+        try:
+            class Ctx: pass
+            ctx = Ctx(); ctx.bot = application.bot
+            await v841_knockout_notifications_job(ctx)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        try:
+            await asyncio.sleep(V841_KO_NOTIFY_INTERVAL)
+        except asyncio.CancelledError:
+            raise
+
+
+_V841_PREV_V74_POST_INIT = globals().get('v74_post_init')
+async def v74_post_init(application):
+    if callable(_V841_PREV_V74_POST_INIT):
+        try:
+            await _V841_PREV_V74_POST_INIT(application)
+        except Exception:
+            pass
+    try:
+        if getattr(application, 'job_queue', None):
+            application.job_queue.run_repeating(v841_knockout_notifications_job, interval=V841_KO_NOTIFY_INTERVAL, first=15, name='v841_ko_path_notifications')
+        else:
+            asyncio.create_task(_v841_notifications_loop(application))
+    except Exception:
+        pass
+
+# ==================== END V84.1 KNOCKOUT PATH + TOURNAMENT TRACK PATCH — FAHAD ====================
+
 if __name__ == "__main__":
     main()
