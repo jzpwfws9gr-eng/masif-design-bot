@@ -55204,23 +55204,27 @@ def _v83_render_contest(kind='abokhaled'):
         except Exception:
             draw.rounded_rectangle((x0, y, x1, y+row_h-8), radius=16, fill=fill)
         cy = y + (row_h-8)//2
-        name = f"{i}  {r.get('name','')}"
+        # لا نعرض رقم المشارك داخل عمود الاسم؛ الترتيب داخلي فقط.
+        name = str(r.get('name',''))
         team = _v83_canon_team(r.get('team',''))
         status = 'غادر' if out else 'مستمر'
         status_color = '#FF5555' if out else '#A7F3D0'
         if kind == 'abokhaled':
-            draw_text(draw, (855, cy), name, get_font(26), fill='#FFFFFF', max_width=330)
-            draw_text(draw, (520, cy), team, get_font(26), fill='#FDE68A', max_width=260)
+            # أسماء المشاركين بدون أرقام وبمحاذاة وسط العمود.
+            draw_text(draw, (855, cy), name, get_font(26), fill='#FFFFFF', max_width=380)
+            draw_text(draw, (520, cy), team, get_font(26), fill='#FDE68A', max_width=270)
             draw_text(draw, (215, cy), status, get_font(24), fill=status_color, max_width=220)
         else:
-            draw_text(draw, (875, cy), name, get_font(24), fill='#FFFFFF', max_width=300)
-            draw_text(draw, (575, cy), team, get_font(24), fill='#FDE68A', max_width=230)
-            draw_text(draw, (300, cy), str(r.get('player','')), get_font(24), fill='#E0F2FE', max_width=210)
-            draw_text(draw, (115, cy), status, get_font(22), fill=status_color, max_width=100)
+            # أبوياسر فيه أعمدة أكثر؛ نوسّع عمود المشارك ونوسّط كل القيم.
+            draw_text(draw, (875, cy), name, get_font(23), fill='#FFFFFF', max_width=330)
+            draw_text(draw, (575, cy), team, get_font(23), fill='#FDE68A', max_width=235)
+            draw_text(draw, (300, cy), str(r.get('player','')), get_font(23), fill='#E0F2FE', max_width=220)
+            draw_text(draw, (115, cy), status, get_font(22), fill=status_color, max_width=110)
         if out:
             # شطب خفيف أحمر على كامل السطر داخل الصورة.
             try:
-                draw.line((x0+35, cy, x1-35, cy), fill='#FF4040', width=3)
+                # شطب أخف حتى لا يغطي الأسماء.
+                draw.line((x0+55, cy, x1-55, cy), fill='#FF5A5A', width=2)
             except Exception:
                 pass
         y += row_h
@@ -55492,6 +55496,8 @@ async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if callable(_V83_PREV_TEXT_STATE_ROUTER):
         return await _V83_PREV_TEXT_STATE_ROUTER(update, context)
 
+
+# V84: تحسين تصميم المسابقات: حذف أرقام المشاركين من عمود الاسم، توسيط الأسماء، وتخفيف الشطب الأحمر.
 # ==================== END V83 KNOCKOUT + MASEEF CONTESTS PATCH ====================
 
 if __name__ == "__main__":
