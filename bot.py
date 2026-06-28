@@ -55500,5 +55500,528 @@ async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # V84: تحسين تصميم المسابقات: حذف أرقام المشاركين من عمود الاسم، توسيط الأسماء، وتخفيف الشطب الأحمر.
 # ==================== END V83 KNOCKOUT + MASEEF CONTESTS PATCH ====================
 
+
+# ==================== V84 REQUESTED ONLY PATCH — FAHAD ====================
+# المطلوب فقط:
+# 1) مباريات اليوم = مباريات PM اليوم + AM اليوم التالي.
+# 2) مسابقات المصيف بدون عبارة "المصيف يضعكم بالحدث".
+# 3) زر عرض المسابقات نصًا.
+# 4) زر تعديل مسابقات المصيف للمشرف فقط: يعرض القائمة الحالية كاملة ثم يستقبل القائمة المعدلة كاملة.
+# 5) تحسين تصميم المسابقات: بدون أرقام بجانب الأسماء، توسيط الأسماء، وشطب أحمر خفيف.
+# لا نلمس /start، مباشر الآن، التنبيهات، لوحة البطولة، ولا نرجع ميزات دور المجموعات القديمة.
+
+V84_CONTESTS_FILE = 'v84_contests.json'
+
+
+def _v84_digit_normalize(s):
+    try:
+        return str(s or '').translate(str.maketrans('٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789'))
+    except Exception:
+        return str(s or '')
+
+
+def _v84_date_obj(d):
+    d = _normalize_date_arg(d) if '_normalize_date_arg' in globals() else str(d or '')
+    try:
+        dd, mm, yy = [int(x) for x in d.split('/')]
+        return datetime(yy, mm, dd)
+    except Exception:
+        return None
+
+
+def _v84_add_days_to_date(d, days=1):
+    dt = _v84_date_obj(d)
+    if not dt:
+        return ''
+    try:
+        return (dt + timedelta(days=days)).strftime('%d/%m/%Y')
+    except Exception:
+        return ''
+
+
+def _v84_now_riyadh_dt():
+    try:
+        return _v33_now_riyadh_dt()
+    except Exception:
+        try:
+            return datetime.utcnow() + timedelta(hours=3)
+        except Exception:
+            return datetime.now()
+
+
+def _v84_time_bucket(t):
+    s = _v84_digit_normalize(t).strip().lower()
+    if not s:
+        return ''
+    # منتصف الليل/الفجر/الصباح = AM. مهم: لا نعتبر حرف "م" داخل "منتصف" مساءً.
+    if 'منتصف الليل' in s or 'فجر' in s or 'صباح' in s or 'am' in s or re.search(r'(^|\s)ص($|\s)', s):
+        return 'am'
+    if 'مساء' in s or 'pm' in s or re.search(r'(^|\s)م($|\s)', s):
+        return 'pm'
+    m = re.search(r'(\d{1,2})(?::(\d{2}))?', s)
+    if not m:
+        return ''
+    h = int(m.group(1))
+    return 'pm' if h >= 12 else 'am'
+
+
+def _v84_time_minutes(t):
+    s = _v84_digit_normalize(t).strip().lower()
+    m = re.search(r'(\d{1,2})(?::(\d{2}))?', s)
+    if not m:
+        return 9999
+    h = int(m.group(1))
+    minute = int(m.group(2) or 0)
+    bucket = _v84_time_bucket(s)
+    if bucket == 'pm' and h < 12:
+        h += 12
+    if bucket == 'am' and h == 12:
+        h = 0
+    return h * 60 + minute
+
+
+def _v84_fixture_sort_key(m):
+    d = _normalize_date_arg((m or {}).get('date')) if '_normalize_date_arg' in globals() else str((m or {}).get('date') or '')
+    dt = _v84_date_obj(d)
+    base = dt.toordinal() if dt else 9999999
+    return (base, _v84_time_minutes((m or {}).get('time')), str((m or {}).get('id') or ''))
+
+
+def _v84_day_label(d):
+    d = _normalize_date_arg(d) if '_normalize_date_arg' in globals() else str(d or '')
+    try:
+        for m in (globals().get('TOURNAMENT_FIXTURES') or []):
+            if _normalize_date_arg((m or {}).get('date')) == d:
+                return str((m or {}).get('day') or '').strip() or d[:5]
+    except Exception:
+        pass
+    try:
+        for dd, day in (_fixture_dates() or []):
+            if _normalize_date_arg(dd) == d:
+                return str(day or '').strip() or d[:5]
+    except Exception:
+        pass
+    return d[:5] if d else ''
+
+
+def _v84_rows_for_date_bucket(d, bucket):
+    d = _normalize_date_arg(d) if '_normalize_date_arg' in globals() else str(d or '')
+    rows = []
+    try:
+        src = list(_fixtures_for_date(d) or [])
+    except Exception:
+        src = []
+    if not src:
+        try:
+            src = [m for m in (_all_fixtures() or []) if _normalize_date_arg((m or {}).get('date')) == d]
+        except Exception:
+            src = []
+    for m in src:
+        try:
+            m = _apply_fixture_updates(m) if '_apply_fixture_updates' in globals() else dict(m or {})
+        except Exception:
+            m = dict(m or {})
+        if _v84_time_bucket((m or {}).get('time')) == bucket:
+            rows.append(m)
+    return rows
+
+
+def _v84_today_pm_next_am_matches():
+    today = _v84_now_riyadh_dt().strftime('%d/%m/%Y')
+    tomorrow = _v84_add_days_to_date(today, 1)
+    rows = []
+    rows.extend(_v84_rows_for_date_bucket(today, 'pm'))
+    if tomorrow:
+        rows.extend(_v84_rows_for_date_bucket(tomorrow, 'am'))
+    try:
+        rows = _v26_dedupe_fixture_matches(rows) if '_v26_dedupe_fixture_matches' in globals() else rows
+    except Exception:
+        pass
+    rows = sorted(rows, key=_v84_fixture_sort_key)
+    title = f"{_v84_day_label(today)} {today[:5]} مساءً + فجر {_v84_day_label(tomorrow)} {tomorrow[:5]}" if tomorrow else f"{_v84_day_label(today)} {today[:5]} مساءً"
+    return title.strip(), rows
+
+
+async def _v84_send_matches_today_window(message, clean=False):
+    wait = await message.reply_text('⏳ جاري تصميم مباريات اليوم...')
+    try:
+        title, rows = _v84_today_pm_next_am_matches()
+        if not rows:
+            await wait.edit_text('لا توجد مباريات PM اليوم ولا AM اليوم التالي في جدول البطولة.')
+            return
+        if clean and 'create_matches_today_v31_clean_image' in globals():
+            path = create_matches_today_v31_clean_image(title, rows)
+        else:
+            path = create_matches_today_v31_full_image(title, rows)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        await send_photo_path(message, path, build_matches_today_v31_caption(title, rows))
+    except Exception as e:
+        try:
+            await wait.edit_text(f'تعذر تجهيز مباريات اليوم ❌\n{str(e)[:300]}')
+        except Exception:
+            await message.reply_text(f'تعذر تجهيز مباريات اليوم ❌\n{str(e)[:300]}')
+
+
+_V84_PREV_MATCHES_TODAY_FULL_COMMAND = globals().get('matches_today_v31_full_command')
+async def matches_today_v31_full_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _v84_send_matches_today_window(update.message, clean=False)
+
+
+_V84_PREV_MATCHES_TODAY_CLEAN_COMMAND = globals().get('matches_today_v31_clean_command')
+async def matches_today_v31_clean_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _v84_send_matches_today_window(update.message, clean=True)
+
+
+def _v84_contest_default_rows(kind):
+    base = V83_ABOKHALED if kind == 'abokhaled' else V83_ABOYASER
+    return [dict(x) for x in (base or [])]
+
+
+def _v84_load_contests():
+    default = {'abokhaled': _v84_contest_default_rows('abokhaled'), 'aboyaser': _v84_contest_default_rows('aboyaser')}
+    try:
+        data = _v63_json_load(V84_CONTESTS_FILE, default) if '_v63_json_load' in globals() else _json_load_file(V84_CONTESTS_FILE, default)
+    except Exception:
+        data = default
+    if not isinstance(data, dict):
+        data = default
+    for kind in ('abokhaled', 'aboyaser'):
+        if not isinstance(data.get(kind), list) or not data.get(kind):
+            data[kind] = _v84_contest_default_rows(kind)
+    return data
+
+
+def _v84_save_contests(data):
+    try:
+        if '_v63_json_save' in globals():
+            _v63_json_save(V84_CONTESTS_FILE, data or {})
+        else:
+            _json_save_file(V84_CONTESTS_FILE, data or {})
+    except Exception:
+        pass
+
+
+def _v84_contest_rows(kind):
+    data = _v84_load_contests()
+    return [dict(x) for x in (data.get(kind) or _v84_contest_default_rows(kind))]
+
+
+def _v84_set_contest_rows(kind, rows):
+    data = _v84_load_contests()
+    data[kind] = [dict(x) for x in (rows or [])]
+    _v84_save_contests(data)
+
+
+def _v84_contest_title(kind):
+    return 'مسابقة أبوخالد' if kind == 'abokhaled' else 'مسابقة أبوياسر'
+
+
+def _v84_contests_menu_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('🏆 مسابقة أبوخالد', callback_data='v32|contest|abokhaled')],
+        [InlineKeyboardButton('🏆 مسابقة أبوياسر', callback_data='v32|contest|aboyaser')],
+        [InlineKeyboardButton('📄 عرض المسابقات نصًا', callback_data='v32|contest_text')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+
+def _v83_contests_menu_keyboard():
+    return _v84_contests_menu_keyboard()
+
+
+def _v84_format_contest_plain(kind, for_edit=False):
+    rows = _v84_contest_rows(kind)
+    lines = []
+    if for_edit:
+        if kind == 'abokhaled':
+            lines.append('الصيغة: الاسم|المنتخب')
+        else:
+            lines.append('الصيغة: الاسم|المنتخب|اللاعب')
+        lines.append('')
+    else:
+        lines.append(f'🏆 {_v84_contest_title(kind)}')
+        lines.append('')
+    for r in rows:
+        name = str((r or {}).get('name') or '').strip()
+        team = _v83_canon_team((r or {}).get('team') or '') if '_v83_canon_team' in globals() else str((r or {}).get('team') or '').strip()
+        player = str((r or {}).get('player') or '').strip()
+        if for_edit:
+            if kind == 'aboyaser':
+                lines.append(f'{name}|{team}|{player}')
+            else:
+                lines.append(f'{name}|{team}')
+        else:
+            status = 'غادر' if (_v83_team_is_out(team) if '_v83_team_is_out' in globals() else False) else 'مستمر'
+            if kind == 'aboyaser':
+                lines.append(f'• {name} | {team} | {player} | {status}')
+            else:
+                lines.append(f'• {name} | {team} | {status}')
+    return '\n'.join(lines).strip()
+
+
+def _v84_contests_text():
+    return '\n\n━━━━━━━━━━━━━━━\n\n'.join([
+        '🏆 مسابقات المصيف — عرض نصي',
+        _v84_format_contest_plain('abokhaled', for_edit=False),
+        _v84_format_contest_plain('aboyaser', for_edit=False),
+    ]).strip()
+
+
+def _v84_contest_edit_prompt(kind):
+    return (
+        f'✏️ تعديل {_v84_contest_title(kind)}\n\n'
+        'هذه الأسماء الحالية كاملة. انسخ القائمة، عدّلها، ثم أرسل القائمة كاملة بنفس الصيغة.\n'
+        'لإلغاء التعديل ارسل: إلغاء\n\n'
+        f'{_v84_format_contest_plain(kind, for_edit=True)}'
+    ).strip()
+
+
+def _v84_parse_contest_edit(raw, kind):
+    raw = str(raw or '').replace('\u200f', '').replace('\u200e', '').strip()
+    lines = [x.strip() for x in raw.splitlines() if x.strip()]
+    parsed = []
+    for line in lines:
+        if '|' not in line:
+            continue
+        parts = [p.strip() for p in line.split('|')]
+        if kind == 'abokhaled':
+            if len(parts) < 2:
+                continue
+            name, team = parts[0], parts[1]
+            name = re.sub(r'^\s*(?:[-•*]|\d+[\.)\-]?)\s*', '', name).strip()
+            if name and team:
+                parsed.append({'name': name, 'team': team})
+        else:
+            if len(parts) < 3:
+                continue
+            name, team, player = parts[0], parts[1], parts[2]
+            name = re.sub(r'^\s*(?:[-•*]|\d+[\.)\-]?)\s*', '', name).strip()
+            if name and team and player:
+                parsed.append({'name': name, 'team': team, 'player': player})
+    if not parsed:
+        need = 'الاسم|المنتخب' if kind == 'abokhaled' else 'الاسم|المنتخب|اللاعب'
+        return None, f'لم أجد أي سطر صحيح. الصيغة المطلوبة: {need}'
+    return parsed, ''
+
+
+async def _v84_maybe_process_contest_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        kind = context.user_data.get('v84_wait_contest_edit')
+    except Exception:
+        kind = None
+    if kind not in ('abokhaled', 'aboyaser'):
+        return False
+    if not is_admin_user(update):
+        try:
+            context.user_data.pop('v84_wait_contest_edit', None)
+        except Exception:
+            pass
+        await update.effective_message.reply_text('هذا التعديل للمشرف فقط 🔒')
+        return True
+    raw = getattr(update.effective_message, 'text', '') or ''
+    if normalize_name(raw) in {'إلغاء', 'الغاء', '↩️ إلغاء'}:
+        try:
+            context.user_data.pop('v84_wait_contest_edit', None)
+        except Exception:
+            pass
+        await update.effective_message.reply_text('تم إلغاء تعديل مسابقات المصيف.')
+        return True
+    rows, err = _v84_parse_contest_edit(raw, kind)
+    if err:
+        await update.effective_message.reply_text(f'لم يتم الحفظ ❌\n{err}\n\nأرسل القائمة كاملة مرة ثانية أو اكتب إلغاء.')
+        return True
+    _v84_set_contest_rows(kind, rows)
+    try:
+        context.user_data.pop('v84_wait_contest_edit', None)
+    except Exception:
+        pass
+    await update.effective_message.reply_text(f'✅ تم تحديث {_v84_contest_title(kind)} — العدد: {len(rows)}', reply_markup=_v83_contests_menu_keyboard())
+    return True
+
+
+# إعادة تعريف تصميم المسابقات ليقرأ من ملف التعديل ويثبت التحسينات المطلوبة فقط.
+def _v83_render_contest(kind='abokhaled'):
+    kind = 'aboyaser' if kind == 'aboyaser' else 'abokhaled'
+    rows = _v84_contest_rows(kind)
+    title = 'مسابقة أبوخالد' if kind == 'abokhaled' else 'مسابقة أبوياسر'
+    subtitle = 'ترشيحات الفوز بكأس العالم' if kind == 'abokhaled' else 'المشارك / المنتخب / اللاعب'
+    width = 1080
+    row_h = 58 if kind == 'abokhaled' else 62
+    height = max(1500, 260 + len(rows)*row_h + 150)
+    img, draw = _v83_contest_bg(width, height)
+    draw_text(draw, (width//2, 70), title, get_font(56), fill='#FFFFFF', max_width=900)
+    draw_text(draw, (width//2, 132), subtitle, get_font(32), fill='#FDE68A', max_width=880)
+    updated = _v81_now_text() if '_v81_now_text' in globals() else (_now_riyadh_text() if '_now_riyadh_text' in globals() else '')
+    updated = str(updated).replace('/', ' ')
+    draw_text(draw, (width//2, 178), f'آخر تحديث: {updated}', get_font(24), fill='#CFE8FF', max_width=820)
+    x0, x1 = 60, width-60
+    y = 225
+    try:
+        rounded_rect(draw, (x0, y, x1, y+46), radius=18, fill='#0B2A5CCC', outline='#38BDF8', width=2)
+    except Exception:
+        draw.rounded_rectangle((x0, y, x1, y+46), radius=18, fill='#0B2A5C')
+    if kind == 'abokhaled':
+        draw_text(draw, (855, y+24), 'المشارك', get_font(24), fill='#FFFFFF')
+        draw_text(draw, (520, y+24), 'المنتخب', get_font(24), fill='#FFFFFF')
+        draw_text(draw, (215, y+24), 'الحالة', get_font(24), fill='#FFFFFF')
+    else:
+        draw_text(draw, (875, y+24), 'المشارك', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (575, y+24), 'المنتخب', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (300, y+24), 'اللاعب', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (115, y+24), 'الحالة', get_font(23), fill='#FFFFFF')
+    y += 56
+    for r in rows:
+        out = _v83_team_is_out((r or {}).get('team')) if '_v83_team_is_out' in globals() else False
+        fill = '#071A36DD' if not out else '#2B1018DD'
+        outline = '#1D9BFF88' if not out else '#FF666666'
+        try:
+            rounded_rect(draw, (x0, y, x1, y+row_h-8), radius=16, fill=fill, outline=outline, width=1)
+        except Exception:
+            draw.rounded_rectangle((x0, y, x1, y+row_h-8), radius=16, fill=fill)
+        cy = y + (row_h-8)//2
+        name = str((r or {}).get('name','')).strip()
+        team = _v83_canon_team((r or {}).get('team','')) if '_v83_canon_team' in globals() else str((r or {}).get('team','')).strip()
+        status = 'غادر' if out else 'مستمر'
+        status_color = '#FF8A8A' if out else '#A7F3D0'
+        if kind == 'abokhaled':
+            # بدون أرقام بجانب الأسماء، والاسم في منتصف عموده.
+            draw_text(draw, (855, cy), name, get_font(26), fill='#FFFFFF', max_width=380)
+            draw_text(draw, (520, cy), team, get_font(26), fill='#FDE68A', max_width=270)
+            draw_text(draw, (215, cy), status, get_font(24), fill=status_color, max_width=220)
+        else:
+            draw_text(draw, (875, cy), name, get_font(23), fill='#FFFFFF', max_width=330)
+            draw_text(draw, (575, cy), team, get_font(23), fill='#FDE68A', max_width=235)
+            draw_text(draw, (300, cy), str((r or {}).get('player','')), get_font(23), fill='#E0F2FE', max_width=220)
+            draw_text(draw, (115, cy), status, get_font(22), fill=status_color, max_width=110)
+        if out:
+            try:
+                # شطب أحمر خفيف جدًا حتى لا يغطي الاسم.
+                draw.line((x0+65, cy, x1-65, cy), fill='#FF8A8A', width=1)
+            except Exception:
+                pass
+        y += row_h
+    # لا نضع عبارة "المصيف يضعكم بالحدث" في مسابقات المصيف حسب طلب V84.
+    draw_text(draw, (width//2, height-60), 'مونديال المصيف 2026', get_font(28), fill='#FBBF24')
+    try:
+        ensure_generated_dir()
+    except Exception:
+        os.makedirs(globals().get('GENERATED_DIR','generated'), exist_ok=True)
+    out_path = os.path.join(globals().get('GENERATED_DIR','generated'), f"contest_{kind}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.jpg")
+    img.save(out_path, quality=94)
+    return out_path
+
+
+_V84_PREV_ADMIN_KEYBOARD = globals().get('_v38e_admin_keyboard')
+def _v38e_admin_keyboard():
+    try:
+        kb = _V84_PREV_ADMIN_KEYBOARD() if callable(_V84_PREV_ADMIN_KEYBOARD) else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    def exists(cb):
+        return any(str(getattr(btn, 'callback_data', '') or '') == cb for row in rows for btn in row)
+    if not exists('v32adm|contest_edit_menu'):
+        rows.append([InlineKeyboardButton('✏️ تعديل مسابقات المصيف', callback_data='v32adm|contest_edit_menu')])
+    return InlineKeyboardMarkup(rows)
+
+
+_V84_PREV_ADMIN_CALLBACK = globals().get('v32_admin_callback')
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'contest_edit_menu':
+        if not is_admin_user(update):
+            try: await q.answer('للمشرف فقط', show_alert=True)
+            except Exception: pass
+            return
+        try: await q.answer()
+        except Exception: pass
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton('✏️ تعديل مسابقة أبوخالد', callback_data='v32adm|contest_edit|abokhaled')],
+            [InlineKeyboardButton('✏️ تعديل مسابقة أبوياسر', callback_data='v32adm|contest_edit|aboyaser')],
+            [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+        ])
+        try:
+            await q.edit_message_text('✏️ تعديل مسابقات المصيف\n\nاختر المسابقة التي تريد تعديلها:', reply_markup=kb)
+        except Exception:
+            await q.message.reply_text('✏️ تعديل مسابقات المصيف\n\nاختر المسابقة التي تريد تعديلها:', reply_markup=kb)
+        return
+    if action == 'contest_edit':
+        if not is_admin_user(update):
+            try: await q.answer('للمشرف فقط', show_alert=True)
+            except Exception: pass
+            return
+        kind = parts[2] if len(parts) > 2 else 'abokhaled'
+        kind = 'aboyaser' if kind == 'aboyaser' else 'abokhaled'
+        try:
+            context.user_data['v84_wait_contest_edit'] = kind
+        except Exception:
+            pass
+        try: await q.answer('أرسل القائمة المعدلة كاملة')
+        except Exception: pass
+        await q.message.reply_text(_v84_contest_edit_prompt(kind))
+        return
+    if callable(_V84_PREV_ADMIN_CALLBACK):
+        return await _V84_PREV_ADMIN_CALLBACK(update, context)
+
+
+_V84_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'contest_text':
+        if not _v83_contest_authorized(update):
+            try:
+                context.user_data['v83_wait_contest_code'] = True
+            except Exception:
+                pass
+            try: await q.answer('أدخل الرقم السري', show_alert=False)
+            except Exception: pass
+            await q.message.reply_text(_v83_contests_gate_text())
+            return
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(_v84_contests_text(), reply_markup=_v83_contests_menu_keyboard())
+        except Exception:
+            await q.message.reply_text(_v84_contests_text(), reply_markup=_v83_contests_menu_keyboard())
+        return
+    if callable(_V84_PREV_V32_CALLBACK):
+        return await _V84_PREV_V32_CALLBACK(update, context)
+
+
+_V84_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if txt == '📅 مباريات اليوم':
+        await _v84_send_matches_today_window(update.effective_message, clean=False)
+        return
+    if callable(_V84_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V84_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V84_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _v84_maybe_process_contest_edit(update, context):
+        return
+    if callable(_V84_PREV_TEXT_STATE_ROUTER):
+        return await _V84_PREV_TEXT_STATE_ROUTER(update, context)
+
+# ==================== END V84 REQUESTED ONLY PATCH — FAHAD ====================
+
 if __name__ == "__main__":
     main()
