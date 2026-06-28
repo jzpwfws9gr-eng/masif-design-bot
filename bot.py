@@ -57202,23 +57202,42 @@ async def v74_post_init(application):
 # ==================== END V84.1.1 STARTUP SAFE HOTFIX — FAHAD ====================
 
 
-# ==================== V84.1.2 LOCAL RESULTS WINNER PATCH — FAHAD ====================
-# اعتماد فهد:
-# - لوحة البطولة / مسار البطولة / إشعارات التأهل والمغادرة لا تسحب من ESPN وقت العرض.
-# - المصدر الوحيد لها هو نتائج المباريات المحفوظة داخل البوت.
-# - نتيجة الإقصائيات يجب أن تحفظ: انتهت المباراة، ركلات الترجيح إن وجدت، والفائز.
-# - إذا انتهت المباراة بالتعادل ولم يوجد فائز/ترجيح محفوظ، لا يتم ترحيل أي منتخب.
+# ==================== V84.1.3 SAFE LOCAL WINNER PATCH — FAHAD ====================
+# اعتماد فهد النهائي:
+# - لا نلمس /start.
+# - لا نلمس نتائج المباريات ولا مصدرها.
+# - لا نلمس مباشر الآن ولا التنبيهات القديمة.
+# - لوحة البطولة / مسار البطولة / إشعارات مسار البطولة تقرأ الفائز من نتائج البوت المحفوظة فقط.
+# - لا يوجد أي اتصال ESPN وقت ضغط اللوحة أو مسار البطولة.
+# - نتيجة الإقصائيات المعتمدة داخليًا: انتهت المباراة + انتهت ركلات الترجيح إن وجدت + الفائز.
 
-V8412_VERSION = 'V84.1.2_LOCAL_RESULTS_ONLY'
+V8413_VERSION = 'V84.1.3_LOCAL_WINNER_FROM_SAVED_RESULTS_ONLY'
 
 
-def _v8412_first_int_from_obj(obj, keys):
+def _v8413_to_int(x):
+    try:
+        if x is None:
+            return None
+        if isinstance(x, bool):
+            return None
+        if isinstance(x, (int, float)):
+            return int(x)
+        s = str(x).strip()
+        if not s:
+            return None
+        m = re.search(r'-?\d+', s)
+        return int(m.group(0)) if m else None
+    except Exception:
+        return None
+
+
+def _v8413_first_int(obj, keys):
     if not isinstance(obj, dict):
         return None
     for k in keys:
         try:
             if k in obj:
-                n = _v841_to_int(obj.get(k)) if '_v841_to_int' in globals() else None
+                n = _v8413_to_int(obj.get(k))
                 if n is not None:
                     return n
         except Exception:
@@ -57226,17 +57245,43 @@ def _v8412_first_int_from_obj(obj, keys):
     return None
 
 
-def _v8412_split_score_pair(v):
+def _v8413_scores_from_obj(obj):
+    if not isinstance(obj, dict):
+        return None
+    try:
+        sc = _v841_obj_scores(obj) if '_v841_obj_scores' in globals() else None
+        if sc:
+            return sc
+    except Exception:
+        pass
+    pairs = [
+        ('score1', 'score2'), ('home_score', 'away_score'), ('homeScore', 'awayScore'),
+        ('team1_score', 'team2_score'), ('team1Score', 'team2Score'),
+        ('s1', 's2'), ('home', 'away'),
+    ]
+    for a, b in pairs:
+        x, y = _v8413_to_int(obj.get(a)), _v8413_to_int(obj.get(b))
+        if x is not None and y is not None:
+            return x, y
+    for k in ('score', 'result', 'ft_score', 'fulltime_score', 'نتيجة'):
+        v = obj.get(k)
+        if v is None:
+            continue
+        m = re.search(r'(\d+)\s*[-–—:]\s*(\d+)', str(v))
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def _v8413_split_pair(v):
     try:
         if v is None:
             return None, None
         if isinstance(v, (list, tuple)) and len(v) >= 2:
-            a = _v841_to_int(v[0]); b = _v841_to_int(v[1])
-            return a, b
+            return _v8413_to_int(v[0]), _v8413_to_int(v[1])
         if isinstance(v, dict):
-            # دعم أكثر من شكل محتمل للبلنتيات المحفوظة.
-            a = _v8412_first_int_from_obj(v, ['team1','home','home_score','score1','a','p1','pen1','home_penalty','homePenalty'])
-            b = _v8412_first_int_from_obj(v, ['team2','away','away_score','score2','b','p2','pen2','away_penalty','awayPenalty'])
+            a = _v8413_first_int(v, ['team1','home','home_score','homeScore','score1','a','p1','pen1','home_penalty','homePenalty'])
+            b = _v8413_first_int(v, ['team2','away','away_score','awayScore','score2','b','p2','pen2','away_penalty','awayPenalty'])
             return a, b
         m = re.search(r'(\d+)\s*[-–—:]\s*(\d+)', str(v))
         if m:
@@ -57246,35 +57291,34 @@ def _v8412_split_score_pair(v):
     return None, None
 
 
-def _v8412_penalty_scores_from_obj(obj):
-    """يرجع ركلات الترجيح المحفوظة للفريقين من نتيجة المباراة المحلية فقط."""
+def _v8413_penalties_from_obj(obj):
+    """قراءة ركلات الترجيح من نتيجة البوت المحفوظة فقط."""
     if not isinstance(obj, dict):
         return None, None
-    # مفاتيح مباشرة شائعة.
-    p1 = _v8412_first_int_from_obj(obj, [
+    p1 = _v8413_first_int(obj, [
         'shootoutScore1','shootout_score1','penalty1','penalties1','pens1','pen1',
         'home_penalty','home_penalties','homePenalty','homePenalties','score_penalty_home',
-        'team1_penalty','team1_penalties','p1'
+        'team1_penalty','team1_penalties','p1','ركلات1','ترجيح1'
     ])
-    p2 = _v8412_first_int_from_obj(obj, [
+    p2 = _v8413_first_int(obj, [
         'shootoutScore2','shootout_score2','penalty2','penalties2','pens2','pen2',
         'away_penalty','away_penalties','awayPenalty','awayPenalties','score_penalty_away',
-        'team2_penalty','team2_penalties','p2'
+        'team2_penalty','team2_penalties','p2','ركلات2','ترجيح2'
     ])
     if p1 is not None and p2 is not None:
         return p1, p2
-    # مفاتيح مجمعة.
-    for k in ['shootoutScore','shootout_score','penalties','penalty_score','penaltyScore','pens','shootout']:
-        a, b = _v8412_split_score_pair(obj.get(k))
+    for k in ['shootoutScore','shootout_score','penalties','penalty_score','penaltyScore','pens','shootout','ركلات الترجيح','الترجيح']:
+        a, b = _v8413_split_pair(obj.get(k))
         if a is not None and b is not None:
             return a, b
-    # من raw ESPN لو كان محفوظًا مسبقًا داخل نتيجة البوت، بدون أي اتصال خارجي.
+    # إذا كان raw ESPN محفوظًا سابقًا داخل نتيجة البوت فقط، نقرأ منه بدون اتصال خارجي.
     try:
         ev = obj.get('event_raw') or obj.get('raw_event') or obj.get('espn_event')
         comps = _v841_competitors_from_event_raw(ev) if isinstance(ev, dict) and '_v841_competitors_from_event_raw' in globals() else []
         vals = []
         for c in (comps or [])[:2]:
-            vals.append(_v841_penalty_from_raw((c or {}).get('raw') or {}) if '_v841_penalty_from_raw' in globals() else None)
+            raw = (c or {}).get('raw') or {}
+            vals.append(_v841_penalty_from_raw(raw) if '_v841_penalty_from_raw' in globals() else None)
         if len(vals) >= 2 and vals[0] is not None and vals[1] is not None:
             return vals[0], vals[1]
     except Exception:
@@ -57282,50 +57326,63 @@ def _v8412_penalty_scores_from_obj(obj):
     return None, None
 
 
-def _v8412_local_result_obj(match_id):
-    """قراءة نتيجة محفوظة من البوت فقط، بدون ESPN وبدون كاش ESPN الخارجي."""
-    obj = None
+def _v8413_is_final_obj(obj):
     try:
-        if callable(globals().get('_V841_PREV_RESULT_OBJ_FOR_MATCH_ID')):
-            obj = _V841_PREV_RESULT_OBJ_FOR_MATCH_ID(match_id)
-            if isinstance(obj, dict):
-                return obj
+        if '_v841_is_final_obj' in globals() and _v841_is_final_obj(obj):
+            return True
     except Exception:
         pass
     try:
-        m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(match_id)
-        if '_v33_get_cached_match_result' in globals():
-            obj = _v33_get_cached_match_result(m)
-            if isinstance(obj, dict):
-                return obj
-        if '_v43_get_cached_match_result' in globals():
-            obj = _v43_get_cached_match_result(m)
-            if isinstance(obj, dict):
-                return obj
+        if '_v83_status_is_final' in globals() and _v83_status_is_final(obj):
+            return True
     except Exception:
         pass
+    if not isinstance(obj, dict):
+        return False
+    st = str(obj.get('status') or obj.get('shortStatus') or obj.get('phase') or obj.get('state') or obj.get('الحالة') or '').lower()
+    return any(x in st for x in ['final', 'ft', 'full', 'complete', 'completed', 'انتهت', 'نهاية'])
+
+
+def _v8413_saved_result_obj(match_id):
+    """قراءة آمنة من نتائج البوت المحفوظة فقط، بدون ESPN مباشر وبدون كاش ESPN الخاص بالإقصائيات."""
+    # نتيجة V83 الأصلية قبل تعديلات ESPN.
+    try:
+        prev = globals().get('_V841_PREV_RESULT_OBJ_FOR_MATCH_ID')
+        obj = prev(match_id) if callable(prev) else None
+        if isinstance(obj, dict) and _v8413_scores_from_obj(obj):
+            return obj
+    except Exception:
+        pass
+
+    try:
+        fx = _v841_fixture(match_id) if '_v841_fixture' in globals() else (_v83_fixture_base(match_id) if '_v83_fixture_base' in globals() else None)
+        fx = _v83_resolve_fixture_light(fx) if fx and '_v83_resolve_fixture_light' in globals() else fx
+        if isinstance(fx, dict):
+            for fn_name in ('_v43_get_cached_match_result', '_v33_get_cached_match_result'):
+                fn = globals().get(fn_name)
+                if callable(fn):
+                    try:
+                        obj = fn(fx)
+                        if isinstance(obj, dict) and _v8413_scores_from_obj(obj):
+                            return obj
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
     try:
         if '_v81_snapshot_match_map' in globals() and '_v81_key_for_fixture' in globals():
-            m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(match_id)
-            obj = _v81_snapshot_match_map().get(_v81_key_for_fixture(m))
-            if isinstance(obj, dict):
+            fx = _v841_fixture(match_id) if '_v841_fixture' in globals() else (_v83_fixture_base(match_id) if '_v83_fixture_base' in globals() else None)
+            fx = _v83_resolve_fixture_light(fx) if fx and '_v83_resolve_fixture_light' in globals() else fx
+            obj = _v81_snapshot_match_map().get(_v81_key_for_fixture(fx)) if isinstance(fx, dict) else None
+            if isinstance(obj, dict) and _v8413_scores_from_obj(obj):
                 return obj
     except Exception:
         pass
     return None
 
 
-def _v83_result_obj_for_match_id(match_id):
-    # V84.1.2: نتيجة محلية فقط. لا ESPN هنا نهائيًا.
-    return _v8412_local_result_obj(match_id)
-
-
-def _v841_espn_obj_by_match_id(match_id, force=False):
-    # V84.1.2: منع أي اتصال ESPN من لوحة البطولة/مسار البطولة.
-    return _v8412_local_result_obj(match_id)
-
-
-def _v8412_winner_loser_from_obj(obj, team1, team2):
+def _v8413_winner_loser_from_saved_obj(obj, team1, team2):
     if not isinstance(obj, dict):
         return None, None
     t1 = _v83_canon_team(team1) if '_v83_canon_team' in globals() else str(team1 or '')
@@ -57334,7 +57391,7 @@ def _v8412_winner_loser_from_obj(obj, team1, team2):
     k2 = _v83_team_key(t2) if '_v83_team_key' in globals() else t2.lower()
 
     # 1) الفائز المحفوظ صراحة داخل نتيجة المباراة.
-    for key in ['winner','winner_team','winnerName','qualified','advance_team','winner_ar','الفائز']:
+    for key in ['winner','winner_team','winnerName','qualified','advance_team','winner_ar','الفائز','فائز']:
         w = obj.get(key)
         if isinstance(w, str) and w.strip():
             wk = _v83_team_key(_v83_canon_team(w)) if '_v83_team_key' in globals() and '_v83_canon_team' in globals() else w.lower()
@@ -57343,80 +57400,99 @@ def _v8412_winner_loser_from_obj(obj, team1, team2):
             if wk == k2:
                 return t2, t1
 
-    # 2) لو النتيجة متعادلة، نقرأ ركلات الترجيح المحفوظة.
-    sc = _v841_obj_scores(obj) if '_v841_obj_scores' in globals() else None
-    if sc:
-        s1, s2 = sc
-        if s1 == s2:
-            p1, p2 = _v8412_penalty_scores_from_obj(obj)
-            if p1 is not None and p2 is not None:
-                if p1 > p2:
-                    return t1, t2
-                if p2 > p1:
-                    return t2, t1
-            # مباراة إقصائية انتهت بالتعادل ولا يوجد فائز محفوظ: لا نرحّل.
-            return None, None
-        # 3) فوز عادي.
-        if s1 > s2:
-            return t1, t2
-        if s2 > s1:
-            return t2, t1
+    # 2) بعض النتائج تحفظ فائز الفريق كـ boolean.
+    hwin = obj.get('home_winner', obj.get('winner1', obj.get('team1_winner')))
+    awin = obj.get('away_winner', obj.get('winner2', obj.get('team2_winner')))
+    if str(hwin).lower() in ('true', '1', 'yes', 'y'):
+        return t1, t2
+    if str(awin).lower() in ('true', '1', 'yes', 'y'):
+        return t2, t1
+
+    sc = _v8413_scores_from_obj(obj)
+    if not sc:
+        return None, None
+    s1, s2 = sc
+
+    # 3) إذا النتيجة متعادلة في الإقصائيات، نقرأ ركلات الترجيح المحفوظة.
+    if s1 == s2:
+        p1, p2 = _v8413_penalties_from_obj(obj)
+        if p1 is not None and p2 is not None:
+            if p1 > p2:
+                return t1, t2
+            if p2 > p1:
+                return t2, t1
+        return None, None
+
+    # 4) فوز عادي.
+    if s1 > s2:
+        return t1, t2
+    if s2 > s1:
+        return t2, t1
     return None, None
 
 
 def _v83_winner_loser(match_id):
-    m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(match_id)
-    if not m:
+    # V84.1.3: الفائز من نتائج البوت المحفوظة فقط. لا ESPN هنا نهائيًا.
+    try:
+        m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() and '_v841_fixture' in globals() else (_v83_fixture_base(match_id) if '_v83_fixture_base' in globals() else None)
+        if not m:
+            return None, None
+        obj = _v8413_saved_result_obj(match_id)
+        if not isinstance(obj, dict) or not _v8413_is_final_obj(obj):
+            return None, None
+        return _v8413_winner_loser_from_saved_obj(obj, m.get('team1'), m.get('team2'))
+    except Exception:
         return None, None
-    obj = _v83_result_obj_for_match_id(match_id)
-    if not isinstance(obj, dict) or not _v841_is_final_obj(obj):
-        return None, None
-    return _v8412_winner_loser_from_obj(obj, m.get('team1'), m.get('team2'))
 
 
 def _v841_match_result_text(match_id, include_pen=True):
-    m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(match_id)
-    obj = _v83_result_obj_for_match_id(match_id)
-    if not isinstance(obj, dict):
+    # V84.1.3: عرض النتيجة من نتائج البوت المحفوظة فقط.
+    try:
+        m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() and '_v841_fixture' in globals() else (_v83_fixture_base(match_id) if '_v83_fixture_base' in globals() else {})
+        obj = _v8413_saved_result_obj(match_id)
+        if not isinstance(obj, dict):
+            return ''
+        sc = _v8413_scores_from_obj(obj)
+        if not sc:
+            return ''
+        t1, t2 = _v841_wait_label(m.get('team1')), _v841_wait_label(m.get('team2'))
+        txt = f'{t1} {sc[0]}-{sc[1]} {t2}'
+        if include_pen and sc[0] == sc[1]:
+            p1, p2 = _v8413_penalties_from_obj(obj)
+            if p1 is not None and p2 is not None:
+                txt += f' (ترجيح {p1}-{p2})'
+        return txt
+    except Exception:
         return ''
-    sc = _v841_obj_scores(obj) if '_v841_obj_scores' in globals() else None
-    if not sc:
-        return ''
-    t1, t2 = _v841_wait_label(m.get('team1')), _v841_wait_label(m.get('team2'))
-    txt = f'{t1} {sc[0]}-{sc[1]} {t2}'
-    if include_pen and sc[0] == sc[1]:
-        p1, p2 = _v8412_penalty_scores_from_obj(obj)
+
+
+def _v8413_match_result_block(match_id):
+    try:
+        m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() and '_v841_fixture' in globals() else (_v83_fixture_base(match_id) if '_v83_fixture_base' in globals() else {})
+        obj = _v8413_saved_result_obj(match_id)
+        if not isinstance(obj, dict):
+            return ''
+        sc = _v8413_scores_from_obj(obj)
+        if not sc:
+            return ''
+        t1, t2 = _v841_wait_label(m.get('team1')), _v841_wait_label(m.get('team2'))
+        w, _l = _v83_winner_loser(match_id)
+        lines = ['✅ انتهت المباراة', f'{t1} {sc[0]}-{sc[1]} {t2}']
+        p1, p2 = _v8413_penalties_from_obj(obj)
         if p1 is not None and p2 is not None:
-            txt += f' (ترجيح {p1}-{p2})'
-    return txt
-
-
-def _v8412_match_result_block(match_id):
-    m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(match_id)
-    obj = _v83_result_obj_for_match_id(match_id)
-    if not isinstance(obj, dict):
+            lines += ['', '🎯 انتهت ركلات الترجيح', f'{t1} {p1}-{p2} {t2}']
+        if w:
+            lines += ['', f'🏆 الفائز: {w}']
+        elif sc[0] == sc[1]:
+            lines += ['', '⚠️ النتيجة محفوظة بدون فائز واضح. يحتاج تحديث نتيجة الترجيح/الفائز في نتائج المباريات.']
+        return '\n'.join(lines).strip()
+    except Exception:
         return ''
-    sc = _v841_obj_scores(obj) if '_v841_obj_scores' in globals() else None
-    if not sc:
-        return ''
-    t1, t2 = _v841_wait_label(m.get('team1')), _v841_wait_label(m.get('team2'))
-    w, l = _v83_winner_loser(match_id)
-    lines = [
-        '✅ انتهت المباراة',
-        f'{t1} {sc[0]}-{sc[1]} {t2}',
-    ]
-    p1, p2 = _v8412_penalty_scores_from_obj(obj)
-    if p1 is not None and p2 is not None:
-        lines += ['', '🎯 انتهت ركلات الترجيح', f'{t1} {p1}-{p2} {t2}']
-    if w:
-        lines += ['', f'🏆 الفائز: {w}']
-    elif sc[0] == sc[1]:
-        lines += ['', '⚠️ المباراة إقصائية ومنتهية بالتعادل، بانتظار حفظ الفائز أو ركلات الترجيح في نتائج المباريات.']
-    return '\n'.join(lines).strip()
 
 
 def _v83_knockout_text(stage='menu'):
-    if stage in ('menu','home',''):
+    # عرض خفيف: لا يطلب ESPN، يقرأ النتائج المحفوظة فقط.
+    if stage in ('menu', 'home', ''):
         return '🏆 الأدوار الإقصائية\n\nاختر الدور المطلوب:'
     title = '📅 كل الأدوار الإقصائية' if stage == 'all' else V83_KO_STAGE_MAP.get(stage, ('🏆 الأدوار الإقصائية', None))[0]
     rows = _v83_knockout_fixtures(stage)
@@ -57434,69 +57510,46 @@ def _v83_knockout_text(stage='menu'):
         lines.append(line)
         lines.append(f"🗓️ {m.get('day','')} {str(m.get('date',''))[:5]} — {m.get('time','')}")
         mid = str(m.get('id') or '')
-        block = _v8412_match_result_block(mid)
+        block = _v8413_match_result_block(mid)
         if block:
             lines.append(block)
-        elif 'انتظار' in line:
+        elif 'انتظار' in line or 'لم يتحدد' in line:
             lines.append('⏳ انتظار')
         lines.append('')
     return '\n'.join(lines).strip()
 
 
 async def v841_knockout_notifications_job(context):
-    # V84.1.2: إشعارات التأهل/المغادرة تعتمد على نتائج البوت المحفوظة فقط.
-    sent = _v841_json_load(V841_NOTIFICATIONS_FILE, {'sent': {}})
-    store = sent.setdefault('sent', {})
-    changed = False
-    for rk in ('r32', 'r16', 'qf', 'sf', 'final'):
-        for mid in V841_ROUND_IDS.get(rk, []):
-            w, l = _v83_winner_loser(mid)
-            if not w or not l:
-                continue
-            if store.get(mid):
-                continue
-            round_name, next_name, _den = V841_ROUND_META.get(rk, (rk, '', 0))
-            if rk == 'final':
-                win_txt = f'🏆 بطل مونديال المصيف 2026 🏆\n\n{w} بطل البطولة 👑\n\nرحلة بدأت من 48 منتخبًا وانتهت ببطل واحد فقط.\n\n🚪 مغادرو البطولة: 47/48\n👑 البطل: {w}'
-                lose_txt = f'🚪 غادر البطولة\n\n{l} تنهي مشوارها في مونديال المصيف 2026 بعد النهائي.\nشكرًا على الرحلة 👏'
-            else:
-                win_txt = f'🎉 تأهل رسميًا!\n\n{w} إلى {next_name} ✅\n\nبعد الفوز على {l}\nوتواصل مشوارها في مونديال المصيف 2026 🏆'
-                lose_txt = f'🚪 غادر البطولة\n\n{l} تنهي مشوارها في مونديال المصيف 2026\n\nبعد الخسارة من {w} في {round_name}.\nشكرًا على الرحلة 👏'
-            try:
-                await _v841_send_to_all(context.bot, win_txt, InlineKeyboardMarkup([[_v841_team_button(w)]]))
-                await _v841_send_to_all(context.bot, lose_txt, InlineKeyboardMarkup([[_v841_team_button(l)]]))
-                store[mid] = {'winner': w, 'loser': l, 'source': 'local_results', 'ts': _v841_now_ts()}
-                changed = True
-            except Exception:
-                pass
-    if changed:
-        _v841_json_save(V841_NOTIFICATIONS_FILE, sent)
-
-
-try:
-    _V8412_PREV_V74_POST_INIT = v74_post_init
-except Exception:
-    _V8412_PREV_V74_POST_INIT = None
-
-async def v74_post_init(application):
-    # لا يوجد تحديث ESPN للإقصائيات هنا. فقط قراءة نتائج محفوظة وإرسال إشعارات عند وجود فائز محفوظ.
-    if callable(_V8412_PREV_V74_POST_INIT):
-        try:
-            # منع مهمة V84.1.1 من فتح Fetch خارجي عبر تغيير الحد إلى صفر قبل post_init السابق.
-            globals()['V841_BG_FETCH_MAX_PER_RUN'] = 0
-            globals()['V841_BG_FETCH_TIMEOUT'] = 1
-            await _V8412_PREV_V74_POST_INIT(application)
-        except Exception:
-            pass
+    # V84.1.3: إشعارات مسار البطولة من نتائج البوت المحفوظة فقط، بدون ESPN وبدون fetch.
     try:
-        if getattr(application, 'job_queue', None):
-            application.job_queue.run_repeating(v841_knockout_notifications_job, interval=V841_KO_NOTIFY_INTERVAL, first=60, name='v8412_local_ko_notifications')
-        else:
-            asyncio.create_task(_v841_notifications_loop(application))
+        sent = _v841_json_load(V841_NOTIFICATIONS_FILE, {'sent': {}})
+        store = sent.setdefault('sent', {})
+        changed = False
+        for rk in ('r32', 'r16', 'qf', 'sf', 'final'):
+            for mid in V841_ROUND_IDS.get(rk, []):
+                w, l = _v83_winner_loser(mid)
+                if not w or not l or store.get(str(mid)) or store.get(mid):
+                    continue
+                round_name, next_name, _den = V841_ROUND_META.get(rk, (rk, '', 0))
+                if rk == 'final':
+                    win_txt = f'🏆 بطل مونديال المصيف 2026 🏆\n\n{w} بطل البطولة 👑\n\nرحلة بدأت من 48 منتخبًا وانتهت ببطل واحد فقط.\n\n🚪 مغادرو البطولة: 47/48\n👑 البطل: {w}'
+                    lose_txt = f'🚪 غادر البطولة\n\n{l} تنهي مشوارها في مونديال المصيف 2026 بعد النهائي.\nشكرًا على الرحلة 👏'
+                else:
+                    win_txt = f'🎉 تأهل رسميًا!\n\n{w} إلى {next_name} ✅\n\nبعد الفوز على {l}\nوتواصل مشوارها في مونديال المصيف 2026 🏆'
+                    lose_txt = f'🚪 غادر البطولة\n\n{l} تنهي مشوارها في مونديال المصيف 2026\n\nبعد الخسارة من {w} في {round_name}.\nشكرًا على الرحلة 👏'
+                try:
+                    await _v841_send_to_all(context.bot, win_txt, InlineKeyboardMarkup([[_v841_team_button(w)]]))
+                    await _v841_send_to_all(context.bot, lose_txt, InlineKeyboardMarkup([[_v841_team_button(l)]]))
+                    store[str(mid)] = {'winner': w, 'loser': l, 'ts': _v841_now_ts(), 'source': 'saved_results'}
+                    changed = True
+                except Exception:
+                    pass
+        if changed:
+            _v841_json_save(V841_NOTIFICATIONS_FILE, sent)
     except Exception:
         pass
 
-# ==================== END V84.1.2 LOCAL RESULTS WINNER PATCH — FAHAD ====================
+# ==================== END V84.1.3 SAFE LOCAL WINNER PATCH — FAHAD ====================
 
 if __name__ == "__main__":
     main()
