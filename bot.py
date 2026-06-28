@@ -54711,5 +54711,788 @@ def _v32_best_thirds_text(force=False):
 
 # ==================== END V82 BEST THIRDS OFFICIAL GUARANTEE FIX ====================
 
+
+# ==================== V83 KNOCKOUT + MASEEF CONTESTS PATCH — FAHAD ====================
+# اعتماد فهد:
+# - بعد نهاية دور المجموعات: إخفاء أفضل الثوالث ودور الـ32 من القوائم.
+# - إضافة زر "🏆 الأدوار الإقصائية" ثم دور الـ16/ربع/نصف/الثالث/النهائي/كل الأدوار.
+# - PDF/جدول البطولة يبقى مصدر المواعيد والمسارات، والنتائج المحفوظة/ESPN تحدد الفائزين.
+# - تصميم مباريات اليوم يبقى كما هو، فقط تُحل أسماء الأطراف بدل "تحدد لاحقًا" عند معرفة الفائز.
+# - إضافة "🏆 مسابقات المصيف" في الصفحة الرئيسية: ظاهر للجميع، ولا يفتح إلا بالرقم السري "كرت احمر"، والمشرف يدخل بدون رقم.
+# - مسابقتا أبوخالد/أبوياسر ثابتتان داخل الكود وتظهران كتصميم صورة بخلفية زرقاء مثل مباريات اليوم بدون تمثال.
+
+V83_CONTEST_SECRET = 'كرت احمر'
+V83_CONTEST_AUTH_FILE = 'v83_contest_auth.json'
+V83_NO_LONGER_MENU_TEXTS = {'🥉 أفضل الثوالث الآن', '🥉 أفضل الثوالث', '🏟️ مباريات دور الـ32'}
+
+# مباريات دور الـ32 أصبحت مكتملة رسميًا، ونستخدمها لحل المسار في التصميم والأدوار التالية.
+V83_R32_FIXED = {
+    'R32-1': ('جنوب أفريقيا', 'كندا'),
+    'R32-2': ('البرازيل', 'اليابان'),
+    'R32-3': ('ألمانيا', 'باراغواي'),
+    'R32-4': ('هولندا', 'المغرب'),
+    'R32-5': ('ساحل العاج', 'النرويج'),
+    'R32-6': ('فرنسا', 'السويد'),
+    'R32-7': ('المكسيك', 'الإكوادور'),
+    'R32-8': ('إنجلترا', 'الكونغو الديمقراطية'),
+    'R32-9': ('بلجيكا', 'السنغال'),
+    'R32-10': ('الولايات المتحدة', 'البوسنة والهرسك'),
+    'R32-11': ('إسبانيا', 'النمسا'),
+    'R32-12': ('البرتغال', 'كرواتيا'),
+    'R32-13': ('سويسرا', 'الجزائر'),
+    'R32-14': ('أستراليا', 'مصر'),
+    'R32-15': ('الأرجنتين', 'الرأس الأخضر'),
+    'R32-16': ('كولومبيا', 'غانا'),
+}
+
+# مسارات خروج المغلوب حسب جدول FIFA/ESPN الذي صار ظاهرًا بعد اكتمال دور الـ32.
+V83_ADVANCE_SLOTS = {
+    'R16-1': (('W', 'R32-1'), ('W', 'R32-4')),
+    'R16-2': (('W', 'R32-3'), ('W', 'R32-6')),
+    'R16-3': (('W', 'R32-2'), ('W', 'R32-5')),
+    'R16-4': (('W', 'R32-7'), ('W', 'R32-8')),
+    'R16-5': (('W', 'R32-12'), ('W', 'R32-11')),
+    'R16-6': (('W', 'R32-10'), ('W', 'R32-9')),
+    'R16-7': (('W', 'R32-15'), ('W', 'R32-14')),
+    'R16-8': (('W', 'R32-13'), ('W', 'R32-16')),
+    'QF-1': (('W', 'R16-2'), ('W', 'R16-1')),
+    'QF-2': (('W', 'R16-5'), ('W', 'R16-6')),
+    'QF-3': (('W', 'R16-3'), ('W', 'R16-4')),
+    'QF-4': (('W', 'R16-7'), ('W', 'R16-8')),
+    'SF-1': (('W', 'QF-1'), ('W', 'QF-2')),
+    'SF-2': (('W', 'QF-3'), ('W', 'QF-4')),
+    '3RD': (('L', 'SF-1'), ('L', 'SF-2')),
+    'FINAL': (('W', 'SF-1'), ('W', 'SF-2')),
+}
+
+V83_KO_STAGE_MAP = {
+    'r16': ('🏟️ دور الـ16', lambda m: str(m.get('id','')).startswith('R16-')),
+    'qf': ('🏟️ ربع النهائي', lambda m: str(m.get('id','')).startswith('QF-')),
+    'sf': ('🏟️ نصف النهائي', lambda m: str(m.get('id','')).startswith('SF-')),
+    'third': ('🥉 الثالث والرابع', lambda m: str(m.get('id','')) == '3RD'),
+    'final': ('🏆 النهائي', lambda m: str(m.get('id','')) == 'FINAL'),
+}
+
+V83_ABOKHALED = [
+    {'name':'أبو خالد','team':'إنجلترا'},
+    {'name':'سلمان أحمد','team':'إسبانيا'},
+    {'name':'أبوداحم','team':'البرازيل'},
+    {'name':'نواف فارس','team':'فرنسا'},
+    {'name':'أبو نايف','team':'البرتغال'},
+    {'name':'أبو راكان','team':'هولندا'},
+    {'name':'مشعل','team':'البرتغال'},
+    {'name':'نايف','team':'هولندا'},
+    {'name':'محمد عبدالرحمن','team':'البرتغال'},
+    {'name':'سلطان','team':'فرنسا'},
+    {'name':'خالد','team':'إسبانيا'},
+    {'name':'عادل','team':'البرتغال'},
+    {'name':'أبو عبدالله','team':'السعودية'},
+    {'name':'فهد فارس','team':'ألمانيا'},
+    {'name':'زياد','team':'السعودية'},
+    {'name':'فارس سالم','team':'فرنسا'},
+    {'name':'مشاري عبدالعزيز','team':'إسبانيا'},
+    {'name':'طلال عبدالله','team':'الأرجنتين'},
+    {'name':'عبدالعزيز','team':'البرتغال'},
+    {'name':'أبوتركي','team':'نيوزيلندا'},
+    {'name':'أبوفارس','team':'إسبانيا'},
+    {'name':'عبدالله','team':'فرنسا'},
+    {'name':'أبو طلال','team':'ساحل العاج'},
+    {'name':'خالد','team':'إسبانيا'},
+    {'name':'يزيد','team':'إنجلترا'},
+    {'name':'أبو يزيد','team':'إنجلترا'},
+]
+
+V83_ABOYASER = [
+    {'name':'أبو فارس','team':'البرازيل','player':'ديمبلي'},
+    {'name':'أبو هوى','team':'فرنسا','player':'يامال'},
+    {'name':'تركي محسن','team':'البرازيل','player':'يامال'},
+    {'name':'زيكا','team':'البرتغال','player':'مبابي'},
+    {'name':'طلال عبدالله','team':'إنجلترا','player':'يامال'},
+    {'name':'عبدالله إبراهيم','team':'فرنسا','player':'مبابي'},
+    {'name':'بدران','team':'فرنسا','player':'أوليسي'},
+    {'name':'فهد فارس','team':'ألمانيا','player':'يامال'},
+    {'name':'أبو صنت','team':'السعودية','player':'سعود عبدالحميد'},
+    {'name':'يزيد','team':'إسبانيا','player':'مبابي'},
+    {'name':'سلطان أحمد','team':'فرنسا','player':'مبابي'},
+    {'name':'نواف فارس','team':'إنجلترا','player':'هاري كين'},
+    {'name':'الأمير','team':'إسبانيا','player':'يامال'},
+    {'name':'فارس سالم','team':'فرنسا','player':'يامال'},
+    {'name':'مشاري عبدالعزيز','team':'إسبانيا','player':'يامال'},
+    {'name':'هندسة','team':'البرازيل','player':'يامال'},
+    {'name':'سلمان أحمد','team':'إسبانيا','player':'يامال'},
+    {'name':'نايف حمود','team':'الأرجنتين','player':'أبو محمد'},
+    {'name':'عبدالرحمن سالم','team':'البرازيل','player':'مبابي'},
+    {'name':'محمد محسن','team':'البرازيل','player':'بيدرو'},
+    {'name':'أبو شنب','team':'فرنسا','player':'مبابي'},
+    {'name':'ممدوح غزاي','team':'إسبانيا','player':'فيرتز'},
+    {'name':'جلعده','team':'إسبانيا','player':'مبابي'},
+    {'name':'خالد عبدالرحمن','team':'إسبانيا','player':'يامال'},
+    {'name':'محمد عبدالرحمن','team':'البرتغال','player':'مبابي'},
+    {'name':'سلطان رباح','team':'إسبانيا','player':'يامال'},
+    {'name':'عادل','team':'البرتغال','player':'كين'},
+]
+
+
+def _v83_canon_team(x):
+    s = normalize_name(str(x or '')).strip()
+    repl = {
+        'اسبانيا':'إسبانيا','أسبانيا':'إسبانيا','السعوديه':'السعودية','السعودية':'السعودية',
+        'انجلترا':'إنجلترا','إنجلترا':'إنجلترا','الارجنتين':'الأرجنتين','ارجنتين':'الأرجنتين',
+        'المانيا':'ألمانيا','ألمانيا':'ألمانيا','البرازيل':'البرازيل','برازيـل':'البرازيل',
+        'البرتغال':'البرتغال','نيوزيلندا':'نيوزيلندا','ساحل العاج':'ساحل العاج',
+        'امريكا':'الولايات المتحدة','أمريكا':'الولايات المتحدة','كوريا الجنوبيه':'كوريا الجنوبية',
+        'جنوب افريقيا':'جنوب أفريقيا','الرأس الاخضر':'الرأس الأخضر','الراس الاخضر':'الرأس الأخضر',
+        'الاكوادور':'الإكوادور','الإكوادور':'الإكوادور','ايران':'إيران','النرويج':'النرويج',
+    }
+    s = repl.get(s, s)
+    try:
+        return canonical_team_name(s) or s
+    except Exception:
+        return s
+
+
+def _v83_team_key(x):
+    try:
+        return simple_key(_v83_canon_team(x))
+    except Exception:
+        return normalize_name(str(x or '')).lower().replace('أ','ا').replace('إ','ا').replace('آ','ا')
+
+
+def _v83_fixture_base(match_id):
+    for m in globals().get('TOURNAMENT_FIXTURES', []) or []:
+        if str(m.get('id')) == str(match_id):
+            return dict(m)
+    return None
+
+
+def _v83_status_is_final(obj):
+    if not isinstance(obj, dict):
+        return False
+    try:
+        if '_is_finished_obj' in globals() and _is_finished_obj(obj):
+            return True
+    except Exception:
+        pass
+    st = str(obj.get('status') or obj.get('shortStatus') or obj.get('phase') or obj.get('state') or '').lower()
+    if any(x in st for x in ['final','ft','full','انتهت','نهاية','complete']):
+        return True
+    return False
+
+
+def _v83_numeric_scores(obj):
+    if not isinstance(obj, dict):
+        return None
+    for a,b in [('score1','score2'), ('home_score','away_score'), ('s1','s2')]:
+        try:
+            if obj.get(a) is not None and obj.get(b) is not None:
+                return int(obj.get(a)), int(obj.get(b))
+        except Exception:
+            pass
+    return None
+
+
+def _v83_resolve_fixture_light(m):
+    """حلّ الأطراف فقط بدون قراءة نتيجة المباراة نفسها حتى لا يحدث تكرار."""
+    m = dict(m or {})
+    mid = str(m.get('id') or '')
+    if mid in V83_R32_FIXED:
+        m['team1'], m['team2'] = V83_R32_FIXED[mid]
+        return m
+    slots = V83_ADVANCE_SLOTS.get(mid)
+    if slots:
+        a = _v83_slot_team(slots[0]) or 'لم يتحدد'
+        b = _v83_slot_team(slots[1]) or 'لم يتحدد'
+        m['team1'], m['team2'] = a, b
+    return m
+
+
+def _v83_result_obj_for_match_id(match_id):
+    base = _v83_fixture_base(match_id)
+    if not base:
+        return None
+    # أولًا من كاش نتائج المباريات المحفوظة بالآيدي.
+    try:
+        obj = _v33_get_cached_match_result(base) if '_v33_get_cached_match_result' in globals() else None
+        if isinstance(obj, dict) and _v83_numeric_scores(obj):
+            return obj
+    except Exception:
+        pass
+    # ثانيًا من البث السريع إذا المباراة نشطة/حديثة.
+    try:
+        if '_v81_snapshot_match_map' in globals() and '_v81_key_for_fixture' in globals():
+            resolved = _v83_resolve_fixture_light(base)
+            obj = _v81_snapshot_match_map().get(_v81_key_for_fixture(resolved))
+            if isinstance(obj, dict) and _v83_numeric_scores(obj):
+                return obj
+    except Exception:
+        pass
+    return None
+
+
+def _v83_winner_loser(match_id):
+    m = _v83_resolve_fixture_light(_v83_fixture_base(match_id) or {})
+    if not m:
+        return None, None
+    obj = _v83_result_obj_for_match_id(match_id)
+    if not isinstance(obj, dict) or not _v83_status_is_final(obj):
+        return None, None
+    scores = _v83_numeric_scores(obj)
+    if not scores:
+        return None, None
+    s1, s2 = scores
+    t1, t2 = _v83_canon_team(m.get('team1')), _v83_canon_team(m.get('team2'))
+    if s1 > s2:
+        return t1, t2
+    if s2 > s1:
+        return t2, t1
+    # في حال التعادل/ركلات الترجيح نحاول التقاط حقل فائز إن وجد.
+    for k in ['winner','winner_team','winnerName','qualified','advance_team']:
+        w = obj.get(k)
+        if w:
+            w = _v83_canon_team(w)
+            if _v83_team_key(w) == _v83_team_key(t1):
+                return t1, t2
+            if _v83_team_key(w) == _v83_team_key(t2):
+                return t2, t1
+    return None, None
+
+
+def _v83_slot_team(slot):
+    kind, match_id = slot
+    w, l = _v83_winner_loser(match_id)
+    return w if kind == 'W' else l
+
+
+_V83_PREV_APPLY_FIXTURE_UPDATES = globals().get('_apply_fixture_updates')
+def _apply_fixture_updates(match):
+    m = _V83_PREV_APPLY_FIXTURE_UPDATES(match) if callable(_V83_PREV_APPLY_FIXTURE_UPDATES) else dict(match or {})
+    return _v83_resolve_fixture_light(m)
+
+
+def _v83_knockout_fixtures(stage='all'):
+    try:
+        rows = [_apply_fixture_updates(m) for m in (globals().get('TOURNAMENT_FIXTURES') or [])]
+    except Exception:
+        rows = []
+    def ko(m):
+        mid = str(m.get('id',''))
+        return mid.startswith('R16-') or mid.startswith('QF-') or mid.startswith('SF-') or mid in ('3RD','FINAL')
+    if stage and stage != 'all':
+        title, pred = V83_KO_STAGE_MAP.get(stage, ('🏆 الأدوار الإقصائية', ko))
+        rows = [m for m in rows if pred(m)]
+    else:
+        rows = [m for m in rows if ko(m)]
+    try:
+        rows.sort(key=lambda x: (_date_key(x.get('date')) if '_date_key' in globals() else str(x.get('date')), str(x.get('time') or ''), str(x.get('id') or '')))
+    except Exception:
+        pass
+    return rows
+
+
+def _v83_match_line(m):
+    a = _v83_canon_team(m.get('team1') or 'لم يتحدد')
+    b = _v83_canon_team(m.get('team2') or 'لم يتحدد')
+    if 'تحدد' in a: a = 'لم يتحدد'
+    if 'تحدد' in b: b = 'لم يتحدد'
+    return f"{a} × {b}"
+
+
+def _v83_knockout_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('🏟️ دور الـ16', callback_data='v32|ko|r16'), InlineKeyboardButton('🏟️ ربع النهائي', callback_data='v32|ko|qf')],
+        [InlineKeyboardButton('🏟️ نصف النهائي', callback_data='v32|ko|sf'), InlineKeyboardButton('🥉 الثالث والرابع', callback_data='v32|ko|third')],
+        [InlineKeyboardButton('🏆 النهائي', callback_data='v32|ko|final'), InlineKeyboardButton('📅 كل الأدوار', callback_data='v32|ko|all')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+
+def _v83_knockout_text(stage='menu'):
+    if stage in ('menu','home',''):
+        return '🏆 الأدوار الإقصائية\n\nاختر الدور المطلوب:'
+    title = '📅 كل الأدوار الإقصائية' if stage == 'all' else V83_KO_STAGE_MAP.get(stage, ('🏆 الأدوار الإقصائية', None))[0]
+    rows = _v83_knockout_fixtures(stage)
+    lines = [title, '']
+    if not rows:
+        lines.append('لا توجد مباريات لهذا الدور حاليًا.')
+        return '\n'.join(lines).strip()
+    current_stage = None
+    for m in rows:
+        stg = str(m.get('stage') or '')
+        if stage == 'all' and stg != current_stage:
+            current_stage = stg
+            lines.append(f'━━━━━━━━━━━━━━━\n{stg}')
+        lines.append(_v83_match_line(m))
+        lines.append(f"🗓️ {m.get('day','')} {str(m.get('date',''))[:5]} — {m.get('time','')}")
+        if 'لم يتحدد' in _v83_match_line(m):
+            lines.append('⏳ بانتظار اكتمال الفائزين من المسار')
+        lines.append('')
+    return '\n'.join(lines).strip()
+
+
+def _v83_no_more_thirds_text():
+    return 'انتهى دور المجموعات، وتم إيقاف أفضل الثوالث ✅\n\nاستخدم الآن: 🏆 الأدوار الإقصائية'
+
+
+def _v83_contest_auth_load():
+    try:
+        return _v63_json_load(V83_CONTEST_AUTH_FILE, {'users': []}) if '_v63_json_load' in globals() else _json_load_file(V83_CONTEST_AUTH_FILE, {'users': []})
+    except Exception:
+        return {'users': []}
+
+
+def _v83_contest_auth_save(data):
+    try:
+        if '_v63_json_save' in globals():
+            _v63_json_save(V83_CONTEST_AUTH_FILE, data or {'users': []})
+        else:
+            _json_save_file(V83_CONTEST_AUTH_FILE, data or {'users': []})
+    except Exception:
+        pass
+
+
+def _v83_user_id(update):
+    try:
+        return str(update.effective_user.id)
+    except Exception:
+        return ''
+
+
+def _v83_contest_authorized(update):
+    try:
+        if is_admin_user(update):
+            return True
+    except Exception:
+        pass
+    uid = _v83_user_id(update)
+    data = _v83_contest_auth_load()
+    return uid and uid in set(str(x) for x in (data.get('users') or []))
+
+
+def _v83_contest_authorize(update):
+    uid = _v83_user_id(update)
+    if not uid:
+        return
+    data = _v83_contest_auth_load()
+    users = [str(x) for x in (data.get('users') or [])]
+    if uid not in users:
+        users.append(uid)
+    data['users'] = users
+    _v83_contest_auth_save(data)
+
+
+def _v83_contests_menu_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('🏆 مسابقة أبوخالد', callback_data='v32|contest|abokhaled')],
+        [InlineKeyboardButton('🏆 مسابقة أبوياسر', callback_data='v32|contest|aboyaser')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+
+def _v83_contests_gate_text():
+    return '🔐 أدخل الرقم السري للدخول إلى مسابقات المصيف:'
+
+
+def _v83_contests_menu_text():
+    return '🏆 مسابقات المصيف\n\nاختر المسابقة:'
+
+
+def _v83_contest_bg(width, height):
+    img = Image.new('RGB', (width, height), '#06152F')
+    draw = ImageDraw.Draw(img)
+    for y in range(height):
+        t = y / max(1, height)
+        draw.line((0, y, width, y), fill=(int(3+4*t), int(14+20*t), int(45+55*t)))
+    overlay = Image.new('RGBA', (width, height), (0,0,0,0))
+    od = ImageDraw.Draw(overlay)
+    od.ellipse((120, -230, width-80, 470), fill=(15, 92, 190, 95))
+    od.ellipse((width*0.55, 420, width*1.15, 1030), fill=(0, 102, 230, 50))
+    od.ellipse((-220, height*0.55, width*0.45, height+180), fill=(0, 115, 255, 34))
+    od.rectangle((width*0.66, 520, width*0.88, 720), fill=(0, 115, 255, 38))
+    od.rectangle((width*0.90, 610, width*1.08, 860), fill=(0, 105, 230, 42))
+    try:
+        overlay = overlay.filter(ImageFilter.GaussianBlur(8))
+    except Exception:
+        pass
+    img = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+    return img, ImageDraw.Draw(img)
+
+
+def _v83_eliminated_team_keys():
+    keys = set()
+    # مغادرون رسميًا من كاش البطولة.
+    try:
+        snap = _v80_load_tournament_cache_snapshot() if '_v80_load_tournament_cache_snapshot' in globals() else {}
+        for x in (snap.get('eliminated') or snap.get('out') or []):
+            if isinstance(x, dict):
+                x = x.get('team') or x.get('name') or ''
+            if x:
+                keys.add(_v83_team_key(x))
+    except Exception:
+        pass
+    # أي منتخب وصل دور الـ32 ثم خسر في خروج المغلوب يعتبر غادر/خرج من المنافسة.
+    try:
+        survivors = set(_v83_team_key(t) for pair in V83_R32_FIXED.values() for t in pair)
+        all_r32 = set(survivors)
+        for mid in list(V83_R32_FIXED.keys()) + [f'R16-{i}' for i in range(1,9)] + [f'QF-{i}' for i in range(1,5)] + ['SF-1','SF-2','FINAL']:
+            w, l = _v83_winner_loser(mid)
+            if w:
+                survivors.add(_v83_team_key(w))
+            if l:
+                k = _v83_team_key(l)
+                survivors.discard(k)
+                keys.add(k)
+        # المنتخبات غير الموجودة أصلًا في دور الـ32 تُعد مغادرة بعد نهاية المجموعات.
+        # لا نضيف كل منتخبات العالم هنا، بل عند فحص المشاركة إذا لم تكن ضمن R32 وكانت ليست مستمرة في كاش المتأهلين.
+    except Exception:
+        pass
+    return keys
+
+
+def _v83_team_is_out(team):
+    k = _v83_team_key(team)
+    if not k:
+        return False
+    out = _v83_eliminated_team_keys()
+    if k in out:
+        return True
+    try:
+        r32 = set(_v83_team_key(t) for pair in V83_R32_FIXED.values() for t in pair)
+        # بعد اكتمال دور المجموعات: أي اختيار ليس ضمن دور الـ32 يكون خرج.
+        if r32 and k not in r32:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _v83_render_contest(kind='abokhaled'):
+    rows = V83_ABOKHALED if kind == 'abokhaled' else V83_ABOYASER
+    title = 'مسابقة أبوخالد' if kind == 'abokhaled' else 'مسابقة أبوياسر'
+    subtitle = 'ترشيحات الفوز بكأس العالم' if kind == 'abokhaled' else 'المشارك / المنتخب / اللاعب'
+    width = 1080
+    row_h = 58 if kind == 'abokhaled' else 62
+    height = max(1500, 260 + len(rows)*row_h + 150)
+    img, draw = _v83_contest_bg(width, height)
+    draw_text(draw, (width//2, 70), title, get_font(56), fill='#FFFFFF', max_width=900)
+    draw_text(draw, (width//2, 132), subtitle, get_font(32), fill='#FDE68A', max_width=880)
+    updated = _v81_now_text() if '_v81_now_text' in globals() else (_now_riyadh_text() if '_now_riyadh_text' in globals() else '')
+    updated = str(updated).replace('/', ' ')
+    draw_text(draw, (width//2, 178), f'آخر تحديث: {updated}', get_font(24), fill='#CFE8FF', max_width=820)
+    x0, x1 = 60, width-60
+    y = 225
+    # header
+    try:
+        rounded_rect(draw, (x0, y, x1, y+46), radius=18, fill='#0B2A5CCC', outline='#38BDF8', width=2)
+    except Exception:
+        draw.rounded_rectangle((x0, y, x1, y+46), radius=18, fill='#0B2A5C')
+    if kind == 'abokhaled':
+        draw_text(draw, (855, y+24), 'المشارك', get_font(24), fill='#FFFFFF')
+        draw_text(draw, (520, y+24), 'المنتخب', get_font(24), fill='#FFFFFF')
+        draw_text(draw, (215, y+24), 'الحالة', get_font(24), fill='#FFFFFF')
+    else:
+        draw_text(draw, (875, y+24), 'المشارك', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (575, y+24), 'المنتخب', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (300, y+24), 'اللاعب', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (115, y+24), 'الحالة', get_font(23), fill='#FFFFFF')
+    y += 56
+    for i, r in enumerate(rows, start=1):
+        out = _v83_team_is_out(r.get('team'))
+        fill = '#071A36DD' if not out else '#2B1018DD'
+        outline = '#1D9BFF88' if not out else '#FF4B4B99'
+        try:
+            rounded_rect(draw, (x0, y, x1, y+row_h-8), radius=16, fill=fill, outline=outline, width=1)
+        except Exception:
+            draw.rounded_rectangle((x0, y, x1, y+row_h-8), radius=16, fill=fill)
+        cy = y + (row_h-8)//2
+        name = f"{i}  {r.get('name','')}"
+        team = _v83_canon_team(r.get('team',''))
+        status = 'غادر' if out else 'مستمر'
+        status_color = '#FF5555' if out else '#A7F3D0'
+        if kind == 'abokhaled':
+            draw_text(draw, (855, cy), name, get_font(26), fill='#FFFFFF', max_width=330)
+            draw_text(draw, (520, cy), team, get_font(26), fill='#FDE68A', max_width=260)
+            draw_text(draw, (215, cy), status, get_font(24), fill=status_color, max_width=220)
+        else:
+            draw_text(draw, (875, cy), name, get_font(24), fill='#FFFFFF', max_width=300)
+            draw_text(draw, (575, cy), team, get_font(24), fill='#FDE68A', max_width=230)
+            draw_text(draw, (300, cy), str(r.get('player','')), get_font(24), fill='#E0F2FE', max_width=210)
+            draw_text(draw, (115, cy), status, get_font(22), fill=status_color, max_width=100)
+        if out:
+            # شطب خفيف أحمر على كامل السطر داخل الصورة.
+            try:
+                draw.line((x0+35, cy, x1-35, cy), fill='#FF4040', width=3)
+            except Exception:
+                pass
+        y += row_h
+    draw_text(draw, (width//2, height-60), 'مونديال المصيف 2026', get_font(28), fill='#FBBF24')
+    try:
+        ensure_generated_dir()
+    except Exception:
+        os.makedirs(globals().get('GENERATED_DIR','generated'), exist_ok=True)
+    out_path = os.path.join(globals().get('GENERATED_DIR','generated'), f"contest_{kind}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.jpg")
+    img.save(out_path, quality=94)
+    return out_path
+
+
+async def _v83_send_contest_image(message, kind):
+    path = _v83_render_contest(kind)
+    cap = '🏆 مسابقة أبوخالد' if kind == 'abokhaled' else '🏆 مسابقة أبوياسر'
+    try:
+        await send_photo_path(message, path, cap)
+    except Exception:
+        with open(path, 'rb') as f:
+            await message.reply_photo(photo=f, caption=cap)
+
+
+# قوائم نهائية بعد V82: إزالة أفضل الثوالث ودور32 وإضافة الأدوار الإقصائية والمسابقات.
+try:
+    if 'V32_FINAL_MENU_LABELS' in globals():
+        V32_FINAL_MENU_LABELS.difference_update(V83_NO_LONGER_MENU_TEXTS)
+        V32_FINAL_MENU_LABELS.update({'🏆 الأدوار الإقصائية','🏆 مسابقات المصيف','🏆 مسابقة أبوخالد','🏆 مسابقة أبوياسر'})
+except Exception:
+    pass
+
+
+def _v75_public_main_rows():
+    return [
+        ['📊 إحصائيات البطولة', '🏆 لوحة البطولة'],
+        ['📺 مباشر الآن', '🔔 تنبيهات المباراة'],
+        ['✅❌ التأهل والمغادرة', '🏆 الأدوار الإقصائية'],
+        ['🏆 مسابقات المصيف'],
+        ['📅 المباريات القادمة', '📋 نتائج المباريات'],
+        ['🗂️ أرشيف البطولة', '🎮 فانتزي'],
+    ]
+
+
+def _public_main_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        _v75_public_main_rows(),
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder='اكتب اسم منتخب أو اختر من القائمة',
+    )
+
+
+def _public_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('📊 إحصائيات البطولة', callback_data='v32|stats'), InlineKeyboardButton('🏆 لوحة البطولة', callback_data='v32|board')],
+        [InlineKeyboardButton('📺 مباشر الآن', callback_data='mainmenu|live'), InlineKeyboardButton('🔔 تنبيهات المباراة', callback_data='v63goal|menu')],
+        [InlineKeyboardButton('✅❌ التأهل والمغادرة', callback_data='v32|status_home'), InlineKeyboardButton('🏆 الأدوار الإقصائية', callback_data='v32|ko_menu')],
+        [InlineKeyboardButton('🏆 مسابقات المصيف', callback_data='mainmenu|contests')],
+        [InlineKeyboardButton('📅 المباريات القادمة', callback_data='mainmenu|fixtures'), InlineKeyboardButton('📋 نتائج المباريات', callback_data='mainmenu|results')],
+        [InlineKeyboardButton('🗂️ أرشيف البطولة', callback_data='v32|archive'), InlineKeyboardButton('🎮 فانتزي', callback_data='v32|fantasy_gate')],
+    ])
+
+
+def _v32_board_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('✅❌ التأهل والمغادرة', callback_data='v32|status_home'), InlineKeyboardButton('🏆 الأدوار الإقصائية', callback_data='v32|ko_menu')],
+        [InlineKeyboardButton('📊 إحصائيات البطولة', callback_data='v32|stats')],
+        [InlineKeyboardButton('🔄 تحديث الآن', callback_data='v32|board_force'), InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+
+def _v34_stats_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('📈 إحصائيات سريعة', callback_data='v32|quick_stats')],
+        [InlineKeyboardButton('📊 ترتيب المجموعات', callback_data='mainmenu|groups'), InlineKeyboardButton('🏆 هدافين البطولة', callback_data='mainmenu|scorers')],
+        [InlineKeyboardButton('✅❌ التأهل والمغادرة', callback_data='v32|status_home'), InlineKeyboardButton('🏆 الأدوار الإقصائية', callback_data='v32|ko_menu')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+
+def _v75_disabled_feature_text():
+    return (
+        'تم تعطيل هذا القسم بعد نهاية دور المجموعات ✅\n\n'
+        'الأقسام الشغالة الآن:\n'
+        '📺 مباشر الآن\n'
+        '🔔 تنبيهات المباراة\n'
+        '✅❌ التأهل والمغادرة\n'
+        '🏆 الأدوار الإقصائية\n'
+        '📊 إحصائيات البطولة\n'
+        '🏆 مسابقات المصيف'
+    )
+
+
+_V83_PREV_ADMIN_KEYBOARD = globals().get('_v38e_admin_keyboard')
+def _v38e_admin_keyboard():
+    try:
+        kb = _V83_PREV_ADMIN_KEYBOARD() if callable(_V83_PREV_ADMIN_KEYBOARD) else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    def exists(cb):
+        return any(str(getattr(btn, 'callback_data', '') or '') == cb for row in rows for btn in row)
+    if not exists('v32adm|contest|abokhaled'):
+        rows.append([InlineKeyboardButton('🏆 مسابقة أبوخالد', callback_data='v32adm|contest|abokhaled'), InlineKeyboardButton('🏆 مسابقة أبوياسر', callback_data='v32adm|contest|aboyaser')])
+    return InlineKeyboardMarkup(rows)
+
+
+# راوترات نهائية
+_V83_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'mainmenu|home':
+        try: await q.answer()
+        except Exception: pass
+        try: await q.message.reply_text('🏆 مونديال 2026\nحياك في بوت مونديال المصيف 2026 🏆\nاختر من القائمة', reply_markup=_public_main_reply_keyboard())
+        except Exception: pass
+        try: await q.edit_message_text('اختر من القائمة:', reply_markup=_public_main_keyboard())
+        except Exception: pass
+        return
+    if data == 'mainmenu|contests':
+        try: await q.answer()
+        except Exception: pass
+        if _v83_contest_authorized(update):
+            try: await q.edit_message_text(_v83_contests_menu_text(), reply_markup=_v83_contests_menu_keyboard())
+            except Exception: await q.message.reply_text(_v83_contests_menu_text(), reply_markup=_v83_contests_menu_keyboard())
+        else:
+            try: context.user_data['v83_wait_contest_code'] = True
+            except Exception: pass
+            try: await q.edit_message_text(_v83_contests_gate_text())
+            except Exception: await q.message.reply_text(_v83_contests_gate_text())
+        return
+    if callable(_V83_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V83_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+_V83_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in ('thirds','thirds_force'):
+        try: await q.answer('انتهى دور المجموعات', show_alert=False)
+        except Exception: pass
+        try: await q.edit_message_text(_v83_no_more_thirds_text(), reply_markup=_public_main_keyboard())
+        except Exception: await q.message.reply_text(_v83_no_more_thirds_text(), reply_markup=_public_main_reply_keyboard())
+        return
+    if action in ('r32','round32'):
+        try: await q.answer('تم استبداله بالأدوار الإقصائية', show_alert=False)
+        except Exception: pass
+        try: await q.edit_message_text(_v83_knockout_text('menu'), reply_markup=_v83_knockout_keyboard())
+        except Exception: await q.message.reply_text(_v83_knockout_text('menu'), reply_markup=_v83_knockout_keyboard())
+        return
+    if action == 'ko_menu':
+        try: await q.answer()
+        except Exception: pass
+        try: await q.edit_message_text(_v83_knockout_text('menu'), reply_markup=_v83_knockout_keyboard())
+        except Exception: await q.message.reply_text(_v83_knockout_text('menu'), reply_markup=_v83_knockout_keyboard())
+        return
+    if action == 'ko':
+        stage = parts[2] if len(parts) > 2 else 'all'
+        try: await q.answer()
+        except Exception: pass
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ الأدوار الإقصائية', callback_data='v32|ko_menu'), InlineKeyboardButton('⬅️ الرئيسية', callback_data='mainmenu|home')]])
+        try: await q.edit_message_text(_v83_knockout_text(stage), reply_markup=kb)
+        except Exception: await q.message.reply_text(_v83_knockout_text(stage), reply_markup=kb)
+        return
+    if action == 'contest':
+        kind = parts[2] if len(parts) > 2 else ''
+        if not _v83_contest_authorized(update):
+            try: context.user_data['v83_wait_contest_code'] = True
+            except Exception: pass
+            try: await q.answer('أدخل الرقم السري', show_alert=False)
+            except Exception: pass
+            await q.message.reply_text(_v83_contests_gate_text())
+            return
+        try: await q.answer('جاري تجهيز التصميم...')
+        except Exception: pass
+        await _v83_send_contest_image(q.message, 'aboyaser' if kind == 'aboyaser' else 'abokhaled')
+        return
+    if callable(_V83_PREV_V32_CALLBACK):
+        return await _V83_PREV_V32_CALLBACK(update, context)
+
+
+_V83_PREV_ADMIN_CALLBACK = globals().get('v32_admin_callback')
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'contest':
+        if not is_admin_user(update):
+            try: await q.answer('للمشرف فقط', show_alert=True)
+            except Exception: pass
+            return
+        kind = parts[2] if len(parts) > 2 else 'abokhaled'
+        try: await q.answer('جاري تجهيز التصميم...')
+        except Exception: pass
+        await _v83_send_contest_image(q.message, 'aboyaser' if kind == 'aboyaser' else 'abokhaled')
+        return
+    if callable(_V83_PREV_ADMIN_CALLBACK):
+        return await _V83_PREV_ADMIN_CALLBACK(update, context)
+
+
+_V83_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try: _v32_track_user(update)
+    except Exception: pass
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    if txt in ('🏆 الأدوار الإقصائية', 'الأدوار الإقصائية'):
+        await update.effective_message.reply_text(_v83_knockout_text('menu'), reply_markup=_v83_knockout_keyboard())
+        return
+    if txt in V83_NO_LONGER_MENU_TEXTS:
+        await update.effective_message.reply_text(_v83_no_more_thirds_text(), reply_markup=_public_main_reply_keyboard())
+        return
+    if txt == '🏆 مسابقات المصيف':
+        if _v83_contest_authorized(update):
+            await update.effective_message.reply_text(_v83_contests_menu_text(), reply_markup=_v83_contests_menu_keyboard())
+        else:
+            try: context.user_data['v83_wait_contest_code'] = True
+            except Exception: pass
+            await update.effective_message.reply_text(_v83_contests_gate_text())
+        return
+    if txt in ('🏆 مسابقة أبوخالد','مسابقة أبوخالد'):
+        if _v83_contest_authorized(update):
+            await _v83_send_contest_image(update.effective_message, 'abokhaled')
+        else:
+            try: context.user_data['v83_wait_contest_code'] = True
+            except Exception: pass
+            await update.effective_message.reply_text(_v83_contests_gate_text())
+        return
+    if txt in ('🏆 مسابقة أبوياسر','مسابقة أبوياسر'):
+        if _v83_contest_authorized(update):
+            await _v83_send_contest_image(update.effective_message, 'aboyaser')
+        else:
+            try: context.user_data['v83_wait_contest_code'] = True
+            except Exception: pass
+            await update.effective_message.reply_text(_v83_contests_gate_text())
+        return
+    if callable(_V83_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V83_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V83_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    try:
+        waiting = bool(context.user_data.get('v83_wait_contest_code'))
+    except Exception:
+        waiting = False
+    if waiting:
+        try: context.user_data.pop('v83_wait_contest_code', None)
+        except Exception: pass
+        if txt == V83_CONTEST_SECRET:
+            _v83_contest_authorize(update)
+            await update.effective_message.reply_text('✅ تم فتح مسابقات المصيف', reply_markup=_v83_contests_menu_keyboard())
+        else:
+            await update.effective_message.reply_text('❌ الرقم السري غير صحيح', reply_markup=_public_main_reply_keyboard())
+        return
+    if txt in {'🏆 الأدوار الإقصائية','🏆 مسابقات المصيف','🏆 مسابقة أبوخالد','🏆 مسابقة أبوياسر'} or txt in V83_NO_LONGER_MENU_TEXTS:
+        return await public_reply_menu_router(update, context)
+    if callable(_V83_PREV_TEXT_STATE_ROUTER):
+        return await _V83_PREV_TEXT_STATE_ROUTER(update, context)
+
+# ==================== END V83 KNOCKOUT + MASEEF CONTESTS PATCH ====================
+
 if __name__ == "__main__":
     main()
