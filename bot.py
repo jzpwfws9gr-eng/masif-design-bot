@@ -56998,5 +56998,208 @@ async def v74_post_init(application):
 
 # ==================== END V84.1 KNOCKOUT PATH + TOURNAMENT TRACK PATCH — FAHAD ====================
 
+
+# ==================== V84.1.1 STARTUP SAFE HOTFIX — FAHAD ====================
+# سبب الإصلاح: منع أي طلبات ESPN ثقيلة من تعطيل /start أو ستارت.
+# الآن عرض القائمة والملخص واللوحة يعتمد على الكاش/السنابشوت فقط،
+# والتحديث الخارجي للإقصائيات يتم في الخلفية وبحد أقصى للمباريات المستحقة فقط.
+
+try:
+    _V841_HOTFIX_ORIG_ESPN_OBJ_BY_MATCH_ID = _v841_espn_obj_by_match_id
+except Exception:
+    _V841_HOTFIX_ORIG_ESPN_OBJ_BY_MATCH_ID = None
+try:
+    _V841_HOTFIX_PREV_V74_POST_INIT = v74_post_init
+except Exception:
+    _V841_HOTFIX_PREV_V74_POST_INIT = None
+
+V841_BG_FETCH_RUNNING = False
+V841_BG_FETCH_MAX_PER_RUN = 2
+V841_BG_FETCH_TIMEOUT = 22
+V841_BG_FETCH_GRACE_BEFORE_MIN = 45
+V841_BG_FETCH_GRACE_AFTER_HOURS = 9
+
+
+def _v841_match_kickoff_dt(match_id):
+    try:
+        m = _v841_fixture(match_id)
+        d = _normalize_date_arg((m or {}).get('date')) if '_normalize_date_arg' in globals() else str((m or {}).get('date') or '')
+        dt = _v84_date_obj(d) if '_v84_date_obj' in globals() else None
+        if not dt:
+            return None
+        mins = _v84_time_minutes((m or {}).get('time')) if '_v84_time_minutes' in globals() else 0
+        return dt + timedelta(minutes=int(mins or 0))
+    except Exception:
+        return None
+
+
+def _v841_match_due_for_fetch(match_id):
+    try:
+        ko = _v841_match_kickoff_dt(match_id)
+        if not ko:
+            return False
+        now = _v84_now_riyadh_dt() if '_v84_now_riyadh_dt' in globals() else (datetime.utcnow() + timedelta(hours=3))
+        return (ko - timedelta(minutes=V841_BG_FETCH_GRACE_BEFORE_MIN)) <= now <= (ko + timedelta(hours=V841_BG_FETCH_GRACE_AFTER_HOURS))
+    except Exception:
+        return False
+
+
+def _v841_cache_obj_for_match_id(match_id):
+    try:
+        cache = _v841_json_load(V841_ESPN_KO_CACHE_FILE, {})
+        rec = cache.get(str(match_id)) if isinstance(cache, dict) else None
+        if isinstance(rec, dict):
+            obj = rec.get('obj')
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        pass
+    return None
+
+
+def _v841_try_local_result_obj(match_id):
+    # قراءة آمنة من كاش البوت والسنابشوت بدون أي اتصال خارجي.
+    try:
+        obj = _V841_PREV_RESULT_OBJ_FOR_MATCH_ID(match_id) if callable(globals().get('_V841_PREV_RESULT_OBJ_FOR_MATCH_ID')) else None
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+    try:
+        m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(match_id)
+        eid = V841_ESPN_EVENT_IDS.get(str(match_id))
+        if eid:
+            m = dict(m or {})
+            m['event_id'] = eid
+        if '_v33_get_cached_match_result' in globals():
+            obj = _v33_get_cached_match_result(m)
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        pass
+    try:
+        if '_v81_snapshot_match_map' in globals() and '_v81_key_for_fixture' in globals():
+            m = _v83_resolve_fixture_light(_v841_fixture(match_id)) if '_v83_resolve_fixture_light' in globals() else _v841_fixture(match_id)
+            obj = _v81_snapshot_match_map().get(_v81_key_for_fixture(m))
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        pass
+    return None
+
+
+def _v841_espn_obj_by_match_id(match_id, force=False):
+    # لا نسمح للعرض أو /start بفتح 31 طلب ESPN متتالية.
+    # الاتصال الخارجي مسموح فقط داخل مهمة الخلفية الآمنة.
+    obj = _v841_cache_obj_for_match_id(match_id)
+    if isinstance(obj, dict):
+        try:
+            rec_final = _v841_is_final_obj(obj)
+            cache = _v841_json_load(V841_ESPN_KO_CACHE_FILE, {})
+            rec = cache.get(str(match_id)) if isinstance(cache, dict) else None
+            if rec_final:
+                return obj
+            # كاش غير نهائي قصير، لكنه يكفي لمنع التعليق أثناء ستارت.
+            if isinstance(rec, dict) and _v841_now_ts() - float(rec.get('ts') or 0) < 90:
+                return obj
+        except Exception:
+            return obj
+    local = _v841_try_local_result_obj(match_id)
+    if isinstance(local, dict):
+        return local
+    if not globals().get('V841_IN_BG_FETCH'):
+        return obj if isinstance(obj, dict) else None
+    if not _v841_match_due_for_fetch(match_id):
+        return obj if isinstance(obj, dict) else None
+    if callable(_V841_HOTFIX_ORIG_ESPN_OBJ_BY_MATCH_ID):
+        return _V841_HOTFIX_ORIG_ESPN_OBJ_BY_MATCH_ID(match_id, force=True)
+    return obj if isinstance(obj, dict) else None
+
+
+def _v841_bg_fetch_due_ko_cache(max_fetch=None):
+    max_fetch = int(max_fetch or V841_BG_FETCH_MAX_PER_RUN)
+    done = 0
+    for rk in ('r32', 'r16', 'qf', 'sf', 'final'):
+        for mid in V841_ROUND_IDS.get(rk, []):
+            if done >= max_fetch:
+                return done
+            try:
+                cached = _v841_cache_obj_for_match_id(mid)
+                if isinstance(cached, dict) and _v841_is_final_obj(cached):
+                    continue
+                if not _v841_match_due_for_fetch(mid):
+                    continue
+                globals()['V841_IN_BG_FETCH'] = True
+                try:
+                    _v841_espn_obj_by_match_id(mid, force=True)
+                    done += 1
+                finally:
+                    globals()['V841_IN_BG_FETCH'] = False
+            except Exception:
+                try:
+                    globals()['V841_IN_BG_FETCH'] = False
+                except Exception:
+                    pass
+                continue
+    return done
+
+
+async def v841_knockout_notifications_job(context):
+    # تحديث ESPN في الخلفية فقط، ولا يوقف أوامر المستخدم.
+    global V841_BG_FETCH_RUNNING
+    if not V841_BG_FETCH_RUNNING:
+        V841_BG_FETCH_RUNNING = True
+        try:
+            await asyncio.wait_for(asyncio.to_thread(_v841_bg_fetch_due_ko_cache, V841_BG_FETCH_MAX_PER_RUN), timeout=V841_BG_FETCH_TIMEOUT)
+        except Exception:
+            pass
+        finally:
+            V841_BG_FETCH_RUNNING = False
+
+    sent = _v841_json_load(V841_NOTIFICATIONS_FILE, {'sent': {}})
+    store = sent.setdefault('sent', {})
+    changed = False
+    for rk in ('r32', 'r16', 'qf', 'sf', 'final'):
+        for mid in V841_ROUND_IDS.get(rk, []):
+            w, l = _v83_winner_loser(mid)
+            if not w or not l:
+                continue
+            if store.get(mid):
+                continue
+            round_name, next_name, _den = V841_ROUND_META.get(rk, (rk, '', 0))
+            if rk == 'final':
+                win_txt = f'🏆 بطل مونديال المصيف 2026 🏆\n\n{w} بطل البطولة 👑\n\nرحلة بدأت من 48 منتخبًا وانتهت ببطل واحد فقط.\n\n🚪 مغادرو البطولة: 47/48\n👑 البطل: {w}'
+                lose_txt = f'🚪 غادر البطولة\n\n{l} تنهي مشوارها في مونديال المصيف 2026 بعد النهائي.\nشكرًا على الرحلة 👏'
+            else:
+                win_txt = f'🎉 تأهل رسميًا!\n\n{w} إلى {next_name} ✅\n\nبعد الفوز على {l}\nوتواصل مشوارها في مونديال المصيف 2026 🏆'
+                lose_txt = f'🚪 غادر البطولة\n\n{l} تنهي مشوارها في مونديال المصيف 2026\n\nبعد الخسارة من {w} في {round_name}.\nشكرًا على الرحلة 👏'
+            try:
+                await _v841_send_to_all(context.bot, win_txt, InlineKeyboardMarkup([[_v841_team_button(w)]]))
+                await _v841_send_to_all(context.bot, lose_txt, InlineKeyboardMarkup([[_v841_team_button(l)]]))
+                store[mid] = {'winner': w, 'loser': l, 'ts': _v841_now_ts()}
+                changed = True
+            except Exception:
+                pass
+    if changed:
+        _v841_json_save(V841_NOTIFICATIONS_FILE, sent)
+
+
+async def v74_post_init(application):
+    # شغّل post_init السابق، لكن بدون أي انتظار طويل.
+    if callable(_V841_HOTFIX_PREV_V74_POST_INIT):
+        try:
+            await _V841_HOTFIX_PREV_V74_POST_INIT(application)
+        except Exception:
+            pass
+    try:
+        if getattr(application, 'job_queue', None):
+            application.job_queue.run_repeating(v841_knockout_notifications_job, interval=V841_KO_NOTIFY_INTERVAL, first=55, name='v841_ko_path_notifications_safe')
+        else:
+            asyncio.create_task(_v841_notifications_loop(application))
+    except Exception:
+        pass
+
+# ==================== END V84.1.1 STARTUP SAFE HOTFIX — FAHAD ====================
+
 if __name__ == "__main__":
     main()
