@@ -58402,5 +58402,159 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V84.1.4 FINAL LOCAL PATH + BRACKET TREE PATCH — FAHAD ====================
 
+
+# ==================== V84.1.5 HOTFIX RESULTS + TREE ROUTERS — FAHAD ====================
+# إصلاح فهد: نتائج المباريات وشجرة البطولة لا تظهر.
+# النطاق فقط: ربط الأزرار صراحةً في النص والإنلاين بدون لمس /start أو نتائج/مباشر كمصدر.
+
+V8415_VERSION = 'V84.1.5_HOTFIX_RESULTS_TREE_ROUTERS'
+
+async def _v8415_show_results_menu(target, context=None, edit=False):
+    """يعرض قائمة نتائج المباريات بنفس دوال البوت القديمة، بدون تغيير المصدر."""
+    try:
+        dates = _v28_previous_result_dates() if '_v28_previous_result_dates' in globals() else []
+        if not dates:
+            text = 'ما قدرت أقرأ تواريخ البطولة من الجدول حاليًا.'
+            msg = getattr(target, 'message', None) or target
+            if edit and hasattr(msg, 'edit_text'):
+                try:
+                    await msg.edit_text(text)
+                    return
+                except Exception:
+                    pass
+            await msg.reply_text(text)
+            return
+        kb = _v28_previous_results_keyboard() if '_v28_previous_results_keyboard' in globals() else None
+        msg = getattr(target, 'message', None) or target
+        if edit and hasattr(msg, 'edit_text'):
+            try:
+                await msg.edit_text('اختر تاريخ النتائج:', reply_markup=kb)
+                return
+            except Exception:
+                pass
+        await msg.reply_text('اختر تاريخ النتائج:', reply_markup=kb)
+    except Exception as e:
+        try:
+            msg = getattr(target, 'message', None) or target
+            await msg.reply_text('تعذر عرض نتائج المباريات مؤقتًا.')
+        except Exception:
+            pass
+
+
+def _v8415_is_results_text(txt):
+    return str(txt or '').strip() in ('📋 نتائج المباريات', '📋 نتائج البطولة', 'نتائج المباريات', 'نتايج المباريات')
+
+
+def _v8415_is_tree_text(txt):
+    return str(txt or '').strip() in (globals().get('V841_TREE_BUTTON', '🏆 شجرة البطولة'), '🏆 شجرة البطولة', 'شجرة البطولة')
+
+
+def _v8415_is_path_text(txt):
+    return str(txt or '').strip() in (globals().get('V841_PATH_BUTTON', '🏆 مسار البطولة'), '🏆 مسار البطولة', '✅❌ التأهل والمغادرة', 'مسار البطولة')
+
+
+async def _v8415_show_bracket_tree(target):
+    """يعرض شجرة البطولة، وإذا تعذر إرسال الصورة لا يسكت ويرسل رسالة واضحة."""
+    try:
+        path = _v8414_generate_bracket_tree_image(force=True) if '_v8414_generate_bracket_tree_image' in globals() else ''
+        msg = getattr(target, 'message', None) or target
+        if path and os.path.exists(path):
+            try:
+                await send_photo_path(msg, path, '🏆 شجرة البطولة — أعلام فقط')
+                return
+            except Exception:
+                # بديل مباشر إذا دالة send_photo_path اختلفت بين النسخ
+                try:
+                    with open(path, 'rb') as f:
+                        await msg.reply_photo(photo=f, caption='🏆 شجرة البطولة — أعلام فقط')
+                        return
+                except Exception:
+                    pass
+        # لا نخلي الزر يختفي بصمت
+        await msg.reply_text('تعذر تجهيز صورة شجرة البطولة حاليًا.\nجرّب لاحقًا أو تأكد من تثبيت Pillow/الخطوط.', reply_markup=_v34_status_keyboard() if '_v34_status_keyboard' in globals() else None)
+    except Exception:
+        try:
+            msg = getattr(target, 'message', None) or target
+            await msg.reply_text('تعذر تجهيز شجرة البطولة حاليًا.')
+        except Exception:
+            pass
+
+
+_V8415_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try: _v32_track_user(update)
+    except Exception: pass
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if _v8415_is_results_text(txt):
+        await _v8415_show_results_menu(update.effective_message, context=context, edit=False)
+        return
+    if _v8415_is_tree_text(txt):
+        await _v8415_show_bracket_tree(update.effective_message)
+        return
+    if _v8415_is_path_text(txt):
+        await update.effective_message.reply_text(_v841_status_text(False), reply_markup=_v34_status_keyboard())
+        return
+    if callable(_V8415_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V8415_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V8415_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if _v8415_is_results_text(txt) or _v8415_is_tree_text(txt) or _v8415_is_path_text(txt):
+        return await public_reply_menu_router(update, context)
+    if callable(_V8415_PREV_TEXT_STATE_ROUTER):
+        return await _V8415_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+_V8415_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'mainmenu|results':
+        try: await q.answer()
+        except Exception: pass
+        await _v8415_show_results_menu(q.message, context=context, edit=True)
+        return
+    if data in ('mainmenu|bracket_tree', 'tree|bracket', 'v841|bracket_tree'):
+        try: await q.answer('🏆 تجهيز الشجرة...', show_alert=False)
+        except Exception: pass
+        await _v8415_show_bracket_tree(q.message)
+        return
+    if callable(_V8415_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V8415_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+_V8415_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'bracket_tree':
+        try: await q.answer('🏆 تجهيز الشجرة...', show_alert=False)
+        except Exception: pass
+        await _v8415_show_bracket_tree(q.message)
+        return
+    if action in ('results', 'results_home'):
+        try: await q.answer()
+        except Exception: pass
+        await _v8415_show_results_menu(q.message, context=context, edit=True)
+        return
+    if callable(_V8415_PREV_V32_CALLBACK):
+        return await _V8415_PREV_V32_CALLBACK(update, context)
+
+# ==================== END V84.1.5 HOTFIX RESULTS + TREE ROUTERS — FAHAD ====================
+
 if __name__ == "__main__":
     main()
