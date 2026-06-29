@@ -56047,6 +56047,92 @@ try:
 except Exception:
     pass
 
+# ==================== V84.0.2 CONTESTS PENALTY WINNER/LOSER FIX — FAHAD ====================
+# إصلاح مهم: مسابقات أبوخالد/أبوياسر كانت تعتمد على الفائز من النتيجة الأساسية فقط.
+# إذا انتهت مباراة خروج مغلوب بالتعادل ثم ركلات ترجيح، لازم الخاسر بالترجيح يظهر "غادر".
+
+_V8402_PREV_V83_WINNER_LOSER = globals().get('_v83_winner_loser')
+
+def _v8402_penalty_value(obj, *names):
+    if not isinstance(obj, dict):
+        return None
+    for name in names:
+        try:
+            v = obj.get(name)
+            if v is not None and str(v).strip() != '':
+                return int(str(v).strip())
+        except Exception:
+            pass
+    return None
+
+
+def _v8402_winner_name_from_obj(obj):
+    if not isinstance(obj, dict):
+        return None
+    for k in ['winner', 'winner_team', 'winnerName', 'qualified', 'advance_team', 'advanced_team', 'winnerTeam']:
+        try:
+            w = obj.get(k)
+            if isinstance(w, dict):
+                w = w.get('name') or w.get('displayName') or w.get('shortDisplayName') or w.get('team')
+            if w:
+                return _v83_canon_team(w) if '_v83_canon_team' in globals() else str(w)
+        except Exception:
+            pass
+    return None
+
+
+def _v83_winner_loser(match_id):
+    """نسخة مسابقات محسنة: تقرأ الفائز والخاسر من البلنتيات عند تعادل النتيجة الأساسية."""
+    try:
+        base = _v83_fixture_base(match_id)
+        m = _v83_resolve_fixture_light(base or {})
+        if not m:
+            return None, None
+        obj = _v83_result_obj_for_match_id(match_id)
+        if not isinstance(obj, dict) or not _v83_status_is_final(obj):
+            return None, None
+        try:
+            obj = _v84p_enrich_match_obj(dict(obj), fixture=m) if '_v84p_enrich_match_obj' in globals() else dict(obj)
+        except Exception:
+            obj = dict(obj)
+        scores = _v83_numeric_scores(obj)
+        if not scores:
+            return None, None
+        s1, s2 = scores
+        t1 = _v83_canon_team(m.get('team1'))
+        t2 = _v83_canon_team(m.get('team2'))
+        if s1 > s2:
+            return t1, t2
+        if s2 > s1:
+            return t2, t1
+
+        # تعادل في خروج المغلوب: البلنتيات هي الحكم الحقيقي للمسابقات.
+        p1 = _v8402_penalty_value(obj, 'penalty1', 'pen1', 'shootout1', 'p1')
+        p2 = _v8402_penalty_value(obj, 'penalty2', 'pen2', 'shootout2', 'p2')
+        if p1 is not None and p2 is not None and p1 != p2:
+            return (t1, t2) if p1 > p2 else (t2, t1)
+
+        # fallback: إذا المصدر حفظ اسم الفائز صراحة.
+        w = _v8402_winner_name_from_obj(obj)
+        if w:
+            if _v83_team_key(w) == _v83_team_key(t1):
+                return t1, t2
+            if _v83_team_key(w) == _v83_team_key(t2):
+                return t2, t1
+
+        # fallback أخير للنسخة السابقة إن كانت تعرف الفائز بطريقة أخرى.
+        if callable(_V8402_PREV_V83_WINNER_LOSER):
+            try:
+                return _V8402_PREV_V83_WINNER_LOSER(match_id)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None, None
+
+# ==================== END V84.0.2 CONTESTS PENALTY WINNER/LOSER FIX ====================
+
+
 # ==================== END V84.0.1 PENALTIES FIX PATCH ====================
 
 
