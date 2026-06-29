@@ -1,6 +1,26 @@
-V84.3.1 emergency stable rollback
-- Based on V84.2 stable bot.py
-- Keeps fixed flags_map.json
-- Clean requirements.txt with job-queue once
-- Does not include experimental V84.3 dynamic board changes
-Upload bot.py, flags_map.json, requirements.txt, updater.py to repo root. Keep assets/flags/ as already uploaded.
+V84.0.1 - رجوع مستقر + إصلاح ركلات الترجيح
+
+هذه النسخة مبنية على نسخة الرجوع المستقرة بعد تعديل مسابقات المصيف.
+
+التعديل الوحيد المهم:
+- إصلاح قراءة مباريات خروج المغلوب التي تنتهي بالتعادل في الوقت الأصلي/الإضافي وتحسم بركلات الترجيح.
+- إذا ESPN/API يرجع النتيجة 1-1 ومعها shootout/penalty مثل 5-4 يعرضها كذا:
+  كندا فازت على جنوب أفريقيا بركلات الترجيح 5-4 بعد التعادل 1-1
+- لا يقبل كاش قديم لمباراة إقصائية متعادلة بدون بلنتيات؛ يجبر التحديث حتى لا تظهر كتعادل فقط.
+- دعم قراءة penalty/shootout من ESPN و API-Football وبعض نصوص Google.
+
+لم يتم تغيير:
+- /start
+- مسابقات المصيف إلا نفس تحسينات V84 الموجودة
+- مباشر الآن كمصدر
+- نتائج المباريات كمصدر
+- الشجرة/مسار البطولة غير مضافة هنا
+
+ارفع الملفات التالية فقط في جذر المشروع:
+- bot.py
+- updater.py
+- requirements.txt
+
+بعد الرفع في GitHub انتظر Railway Deploy، ثم جرّب:
+- /start
+- نتائج المباريات ثم تحديث اليوم/المباراة التي فيها ركلات ترجيح
