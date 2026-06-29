@@ -58556,5 +58556,480 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== END V84.1.5 HOTFIX RESULTS + TREE ROUTERS — FAHAD ====================
 
+
+# ==================== V84.1.6 HOTFIX SPEED + MATCHES + REAL DRAWN FLAGS — FAHAD ====================
+# إصلاح سريع حسب اعتماد فهد:
+# - إصلاح "too many values to unpack" في مباريات اليوم بدون تغيير مصدر المباريات.
+# - شجرة البطولة سريعة: لا تعتمد على إيموجي الأعلام، بل ترسم أعلامًا/ألوانًا داخل الدوائر حتى لا تظهر مربعات.
+# - زر الشجرة يعرض صورة كاش إذا لم تتغير حالة الشجرة، ولا يحسب ESPN ولا يبني مسارات 48 منتخب.
+# - المصدر يبقى: نتائج المباريات المحفوظة ثم كاش/بيانات مباشر الآن فقط.
+
+V8416_VERSION = 'V84.1.6_FAST_TREE_AND_MATCHES_HOTFIX'
+V8416_TREE_SIG_FILE = os.path.join(globals().get('GENERATED_DIR', 'generated'), 'v8416_bracket_tree_flags.sig')
+
+
+def _v8416_match_tuple(m):
+    """يحوّل أي شكل مباراة إلى (team1, team2, time) حتى لا تتعطل دوال التصميم القديمة."""
+    try:
+        if isinstance(m, dict):
+            mm = dict(m)
+            try:
+                if '_v83_resolve_fixture_light' in globals():
+                    mm = _v83_resolve_fixture_light(mm) or mm
+            except Exception:
+                pass
+            a = mm.get('team1') or mm.get('home') or mm.get('home_team') or mm.get('team_a') or ''
+            b = mm.get('team2') or mm.get('away') or mm.get('away_team') or mm.get('team_b') or ''
+            t = mm.get('time') or mm.get('kickoff') or mm.get('hour') or ''
+            a = _v841_wait_label(a) if '_v841_wait_label' in globals() else str(a or '')
+            b = _v841_wait_label(b) if '_v841_wait_label' in globals() else str(b or '')
+            return str(a or 'انتظار'), str(b or 'انتظار'), str(t or '')
+        if isinstance(m, (list, tuple)):
+            vals = list(m)
+            while len(vals) < 3:
+                vals.append('')
+            return str(vals[0] or 'انتظار'), str(vals[1] or 'انتظار'), str(vals[2] or '')
+        return str(m or ''), 'انتظار', ''
+    except Exception:
+        return 'انتظار', 'انتظار', ''
+
+
+def _v8416_normalize_matches(matches):
+    return [_v8416_match_tuple(m) for m in (matches or [])]
+
+
+_V8416_PREV_CREATE_FULL = globals().get('create_matches_today_v31_full_image')
+def create_matches_today_v31_full_image(day_name, matches):
+    if callable(_V8416_PREV_CREATE_FULL):
+        return _V8416_PREV_CREATE_FULL(day_name, _v8416_normalize_matches(matches))
+    return ''
+
+
+_V8416_PREV_CREATE_CLEAN = globals().get('create_matches_today_v31_clean_image')
+def create_matches_today_v31_clean_image(day_name, matches):
+    if callable(_V8416_PREV_CREATE_CLEAN):
+        return _V8416_PREV_CREATE_CLEAN(day_name, _v8416_normalize_matches(matches))
+    return ''
+
+
+_V8416_PREV_BUILD_DESIGN_CAPTION = globals().get('build_design_matches_caption')
+def build_design_matches_caption(day_name, matches):
+    matches = _v8416_normalize_matches(matches)
+    if callable(_V8416_PREV_BUILD_DESIGN_CAPTION):
+        try:
+            return _V8416_PREV_BUILD_DESIGN_CAPTION(day_name, matches)
+        except Exception:
+            pass
+    lines = ['🏆 مونديال المصيف 2026 🏆', f'🔥 مباريات اليوم ( {day_name} ) 🔥', '']
+    for a, b, t in matches:
+        lines.append(f'{a} × {b} — {t}')
+    return '\n'.join(lines).strip()
+
+
+# أنماط ألوان أعلام مبسطة وسريعة الرسم، حتى لا تظهر مربعات إيموجي على Railway.
+# الشكل داخل الشجرة أعلام فقط بدون أسماء.
+V8416_FLAG_STYLES = {
+    'كندا': ('v', ['#d52b1e', '#ffffff', '#d52b1e'], '#d52b1e'),
+    'جنوب أفريقيا': ('h', ['#de3831', '#ffffff', '#007a4d', '#ffffff', '#002395'], '#ffb612'),
+    'البرازيل': ('solid', ['#009c3b'], '#ffdf00'),
+    'اليابان': ('solid', ['#ffffff'], '#bc002d'),
+    'ألمانيا': ('h', ['#000000', '#dd0000', '#ffce00'], None),
+    'باراغواي': ('h', ['#d52b1e', '#ffffff', '#0038a8'], None),
+    'هولندا': ('h', ['#ae1c28', '#ffffff', '#21468b'], None),
+    'المغرب': ('solid', ['#c1272d'], '#006233'),
+    'ساحل العاج': ('v', ['#f77f00', '#ffffff', '#009e60'], None),
+    'النرويج': ('solid', ['#ba0c2f'], '#00205b'),
+    'فرنسا': ('v', ['#0055a4', '#ffffff', '#ef4135'], None),
+    'السويد': ('solid', ['#006aa7'], '#fecc00'),
+    'المكسيك': ('v', ['#006847', '#ffffff', '#ce1126'], '#a67c52'),
+    'الإكوادور': ('h', ['#ffdd00', '#034ea2', '#ed1c24'], None),
+    'إنجلترا': ('solid', ['#ffffff'], '#cf142b'),
+    'الكونغو الديمقراطية': ('solid', ['#007fff'], '#f7d618'),
+    'بلجيكا': ('v', ['#000000', '#fae042', '#ed2939'], None),
+    'السنغال': ('v', ['#00853f', '#fdef42', '#e31b23'], '#00853f'),
+    'الولايات المتحدة': ('h', ['#b22234', '#ffffff', '#b22234', '#ffffff', '#b22234'], '#3c3b6e'),
+    'البوسنة والهرسك': ('solid', ['#002f6c'], '#fdb913'),
+    'إسبانيا': ('h', ['#aa151b', '#f1bf00', '#aa151b'], None),
+    'النمسا': ('h', ['#ed2939', '#ffffff', '#ed2939'], None),
+    'البرتغال': ('v', ['#006600', '#ff0000'], '#ffcc00'),
+    'كرواتيا': ('h', ['#ff0000', '#ffffff', '#171796'], '#ffffff'),
+    'سويسرا': ('solid', ['#d52b1e'], '#ffffff'),
+    'الجزائر': ('v', ['#006233', '#ffffff'], '#d21034'),
+    'أستراليا': ('solid', ['#00008b'], '#ffffff'),
+    'مصر': ('h', ['#ce1126', '#ffffff', '#000000'], '#c09300'),
+    'الأرجنتين': ('h', ['#74acdf', '#ffffff', '#74acdf'], '#f6b40e'),
+    'الرأس الأخضر': ('h', ['#003893', '#ffffff', '#cf2027', '#ffffff', '#003893'], '#f7d116'),
+    'كولومبيا': ('h', ['#fcd116', '#003893', '#ce1126'], None),
+    'غانا': ('h', ['#ce1126', '#fcd116', '#006b3f'], '#000000'),
+    'التشيك': ('h', ['#ffffff', '#d7141a'], '#11457e'),
+    'قطر': ('v', ['#8a1538', '#ffffff'], None),
+    'هايتي': ('h', ['#00209f', '#d21034'], '#ffffff'),
+    'تركيا': ('solid', ['#e30a17'], '#ffffff'),
+    'كوراساو': ('solid', ['#002b7f'], '#f9e814'),
+    'تونس': ('solid', ['#e70013'], '#ffffff'),
+    'نيوزيلندا': ('solid', ['#00247d'], '#cc142b'),
+    'السعودية': ('solid', ['#006c35'], '#ffffff'),
+    'العراق': ('h', ['#ce1126', '#ffffff', '#000000'], '#007a3d'),
+    'الأردن': ('h', ['#000000', '#ffffff', '#007a3d'], '#ce1126'),
+    'أوزبكستان': ('h', ['#0099b5', '#ffffff', '#1eb53a'], '#ce1126'),
+    'بنما': ('h', ['#ffffff', '#d21034', '#005293', '#ffffff'], None),
+    'إيران': ('h', ['#239f40', '#ffffff', '#da0000'], None),
+    'كوريا الجنوبية': ('solid', ['#ffffff'], '#c60c30'),
+    'اسكتلندا': ('solid', ['#0065bd'], '#ffffff'),
+    'أوروجواي': ('h', ['#ffffff', '#75aadb', '#ffffff', '#75aadb', '#ffffff'], '#fcd116'),
+}
+
+
+def _v8416_flag_style(team):
+    try:
+        t = _v8414_canon(team) if '_v8414_canon' in globals() else str(team or '').strip()
+    except Exception:
+        t = str(team or '').strip()
+    if t in V8416_FLAG_STYLES:
+        return V8416_FLAG_STYLES[t]
+    # ألوان ثابتة حسب الاسم للمنتخبات غير المعرفة.
+    palette = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#f8fafc']
+    h = abs(hash(t))
+    return ('h', [palette[h % len(palette)], '#ffffff', palette[(h // 7) % len(palette)]], None)
+
+
+def _v8416_draw_flag_circle(base_img, draw, x, y, team, size=56):
+    """رسم علم دائري مبسط بدون نصوص أو إيموجي."""
+    from PIL import Image, ImageDraw
+    x = int(x); y = int(y); size = int(size)
+    r = size // 2
+    box = (x-r, y-r, x+r, y+r)
+    if not team:
+        draw.ellipse(box, fill='#151515', outline='#555555', width=2)
+        return
+    orient, colors, mark = _v8416_flag_style(team)
+    colors = colors or ['#ffffff']
+    flag = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    fd = ImageDraw.Draw(flag)
+    if orient == 'v':
+        n = len(colors)
+        for i, c in enumerate(colors):
+            fd.rectangle((int(i*size/n), 0, int((i+1)*size/n)+1, size), fill=c)
+    elif orient == 'solid':
+        fd.rectangle((0, 0, size, size), fill=colors[0])
+        # للبرازيل: شكل ماسة مبسط
+        try:
+            t = _v8414_canon(team) if '_v8414_canon' in globals() else str(team or '')
+            if t == 'البرازيل':
+                fd.polygon([(size//2, 8), (size-8, size//2), (size//2, size-8), (8, size//2)], fill='#ffdf00')
+                fd.ellipse((size*0.34, size*0.34, size*0.66, size*0.66), fill='#002776')
+        except Exception:
+            pass
+    else:
+        n = len(colors)
+        for i, c in enumerate(colors):
+            fd.rectangle((0, int(i*size/n), size, int((i+1)*size/n)+1), fill=c)
+    if mark:
+        # علامة وسطية بسيطة لتمييز بعض الأعلام.
+        try:
+            rr = max(4, size//7)
+            fd.ellipse((size//2-rr, size//2-rr, size//2+rr, size//2+rr), fill=mark)
+        except Exception:
+            pass
+    mask = Image.new('L', (size, size), 0)
+    md = ImageDraw.Draw(mask)
+    md.ellipse((0, 0, size-1, size-1), fill=255)
+    base_img.paste(flag, (x-r, y-r), mask)
+    draw.ellipse(box, outline='#d1a64a', width=3)
+
+
+def _v8416_tree_signature():
+    try:
+        parts = []
+        for rk in ['outer','r16','qf','sf','finalists','champion']:
+            try:
+                parts.append(rk + ':' + ','.join([str(x or '') for x in (_v8414_round_team_slots(rk) or [])]))
+            except Exception:
+                parts.append(rk + ':')
+        return '|'.join(parts)
+    except Exception:
+        return str(time.time())
+
+
+def _v8416_sig_same(sig):
+    try:
+        return os.path.exists(V8414_TREE_IMAGE_FILE) and os.path.exists(V8416_TREE_SIG_FILE) and open(V8416_TREE_SIG_FILE, 'r', encoding='utf-8').read() == sig
+    except Exception:
+        return False
+
+
+def _v8414_generate_bracket_tree_image(force=False):
+    """V84.1.6: شجرة سريعة بالأعلام المرسومة، مع كاش حسب حالة الشجرة."""
+    try:
+        from PIL import Image, ImageDraw
+        import math, os
+        out_dir = os.path.dirname(V8414_TREE_IMAGE_FILE) or '.'
+        os.makedirs(out_dir, exist_ok=True)
+        sig = _v8416_tree_signature()
+        if not force and _v8416_sig_same(sig):
+            return V8414_TREE_IMAGE_FILE
+        W, H = 1200, 1200
+        cx, cy = W // 2, H // 2
+        img = Image.new('RGB', (W, H), '#101010')
+        draw = ImageDraw.Draw(img)
+        # خلفية خفيفة وهالة الوسط
+        for r, col in [(175, '#2b2113'), (125, '#3b2a12'), (74, '#7c520f')]:
+            draw.ellipse((cx-r, cy-r, cx+r, cy+r), outline=col, width=2)
+        radii = {'outer': 520, 'r16': 398, 'qf': 285, 'sf': 188, 'finalists': 112, 'champion': 58}
+        counts = {'outer': 32, 'r16': 16, 'qf': 8, 'sf': 4, 'finalists': 2}
+        # خطوط المسار
+        for rk, cnt in counts.items():
+            r = radii[rk]
+            next_r = radii['r16'] if rk == 'outer' else radii['qf'] if rk == 'r16' else radii['sf'] if rk == 'qf' else radii['finalists'] if rk == 'sf' else radii['champion']
+            for i in range(cnt):
+                ang = -math.pi/2 + 2*math.pi*i/cnt
+                x1, y1 = cx + math.cos(ang)*r, cy + math.sin(ang)*r
+                parent_i = i // 2
+                parent_cnt = max(1, cnt // 2)
+                pang = -math.pi/2 + 2*math.pi*(parent_i + 0.5)/parent_cnt
+                x2, y2 = cx + math.cos(pang)*next_r, cy + math.sin(pang)*next_r
+                draw.line((x1, y1, x2, y2), fill='#3f3f3f', width=3)
+        # الدوائر/الأعلام
+        for rk in ['outer','r16','qf','sf','finalists']:
+            teams = _v8414_round_team_slots(rk) if '_v8414_round_team_slots' in globals() else []
+            cnt = len(teams) or 1
+            r = radii[rk]
+            for i, team in enumerate(teams):
+                ang = -math.pi/2 + 2*math.pi*i/cnt
+                size = 58 if rk == 'outer' else 50 if rk == 'r16' else 46 if rk == 'qf' else 42
+                _v8416_draw_flag_circle(img, draw, cx + math.cos(ang)*r, cy + math.sin(ang)*r, team, size=size)
+        champ = (_v8414_round_team_slots('champion') if '_v8414_round_team_slots' in globals() else ['']) or ['']
+        if champ and champ[0]:
+            _v8416_draw_flag_circle(img, draw, cx, cy-78, champ[0], size=62)
+        # الكأس في الوسط بدون الاعتماد على إيموجي ملون: رسم كأس مبسط ذهبي.
+        draw.ellipse((cx-68, cy-68, cx+68, cy+68), fill='#1a1205', outline='#c69336', width=3)
+        gold = '#f5c542'
+        draw.pieslice((cx-42, cy-44, cx+42, cy+48), 0, 180, fill=gold, outline='#fff3b0')
+        draw.rectangle((cx-19, cy-2, cx+19, cy+45), fill=gold)
+        draw.rectangle((cx-38, cy+45, cx+38, cy+57), fill=gold)
+        draw.arc((cx-72, cy-34, cx-22, cy+28), 270, 90, fill=gold, width=6)
+        draw.arc((cx+22, cy-34, cx+72, cy+28), 90, 270, fill=gold, width=6)
+        # توقيع صغير
+        try:
+            font = _v8414_text_font(20) if '_v8414_text_font' in globals() else None
+            if font:
+                draw.text((cx-82, H-35), 'MONDIAL AL MASEEF 2026', font=font, fill='#cbd5e1')
+        except Exception:
+            pass
+        img.save(V8414_TREE_IMAGE_FILE, quality=94)
+        try:
+            with open(V8416_TREE_SIG_FILE, 'w', encoding='utf-8') as f:
+                f.write(sig)
+        except Exception:
+            pass
+        return V8414_TREE_IMAGE_FILE
+    except Exception:
+        return ''
+
+
+async def _v8415_show_bracket_tree(target):
+    """عرض سريع للشجرة: يستخدم الكاش إذا لم تتغير حالة الشجرة."""
+    try:
+        msg = getattr(target, 'message', None) or target
+        path = _v8414_generate_bracket_tree_image(force=False)
+        if path and os.path.exists(path):
+            try:
+                with open(path, 'rb') as f:
+                    await msg.reply_photo(photo=f, caption='🏆 شجرة البطولة — أعلام فقط')
+                return
+            except Exception:
+                try:
+                    await send_photo_path(msg, path, '🏆 شجرة البطولة — أعلام فقط')
+                    return
+                except Exception:
+                    pass
+        await msg.reply_text('تعذر تجهيز صورة شجرة البطولة حاليًا.')
+    except Exception:
+        try:
+            msg = getattr(target, 'message', None) or target
+            await msg.reply_text('تعذر تجهيز شجرة البطولة حاليًا.')
+        except Exception:
+            pass
+
+
+async def _v8414_send_bracket_tree(target):
+    return await _v8415_show_bracket_tree(target)
+
+
+
+# ==================== V84.1.7 REAL PNG FLAGS FOR BRACKET TREE — FAHAD ====================
+# طلب فهد: شجرة البطولة بالأعلام الرسمية كملفات PNG داخل دوائر، وليس إيموجي/ألوان مرسومة.
+# المصدر ما زال نتائج المباريات + مباشر الآن/الكاش فقط. لا ESPN داخل زر الشجرة.
+V8417_VERSION = 'V84.1.7_REAL_PNG_FLAG_FILES_TREE'
+V8417_FLAGS_DIR = os.path.join('assets', 'flags')
+V8417_FLAG_FILE_MAP = {
+    'المكسيك': 'mexico.png',
+    'جنوب أفريقيا': 'south_africa.png',
+    'كوريا الجنوبية': 'south_korea.png',
+    'التشيك': 'czechia.png',
+    'كندا': 'canada.png',
+    'البوسنة والهرسك': 'bosnia.png',
+    'قطر': 'qatar.png',
+    'سويسرا': 'switzerland.png',
+    'البرازيل': 'brazil.png',
+    'المغرب': 'morocco.png',
+    'هايتي': 'haiti.png',
+    'اسكتلندا': 'scotland.png',
+    'تركيا': 'turkey.png',
+    'الولايات المتحدة': 'usa.png',
+    'أمريكا': 'usa.png',
+    'باراغواي': 'paraguay.png',
+    'أستراليا': 'australia.png',
+    'ألمانيا': 'germany.png',
+    'كوراساو': 'curacao.png',
+    'ساحل العاج': 'ivory_coast.png',
+    'كوت ديفوار': 'ivory_coast.png',
+    'الإكوادور': 'ecuador.png',
+    'هولندا': 'netherlands.png',
+    'اليابان': 'japan.png',
+    'السويد': 'sweden.png',
+    'تونس': 'tunisia.png',
+    'بلجيكا': 'belgium.png',
+    'مصر': 'egypt.png',
+    'إيران': 'iran.png',
+    'نيوزيلندا': 'new_zealand.png',
+    'إسبانيا': 'spain.png',
+    'الرأس الأخضر': 'cape_verde.png',
+    'كاب فيردي': 'cape_verde.png',
+    'السعودية': 'saudi_arabia.png',
+    'أوروجواي': 'uruguay.png',
+    'فرنسا': 'france.png',
+    'السنغال': 'senegal.png',
+    'العراق': 'iraq.png',
+    'النرويج': 'norway.png',
+    'الأرجنتين': 'argentina.png',
+    'الجزائر': 'algeria.png',
+    'النمسا': 'austria.png',
+    'الأردن': 'jordan.png',
+    'البرتغال': 'portugal.png',
+    'الكونغو الديمقراطية': 'dr_congo.png',
+    'الكونغو': 'dr_congo.png',
+    'أوزبكستان': 'uzbekistan.png',
+    'كولومبيا': 'colombia.png',
+    'إنجلترا': 'england.png',
+    'كرواتيا': 'croatia.png',
+    'غانا': 'ghana.png',
+    'بنما': 'panama.png',
+}
+
+_V8417_PREV_DRAW_FLAG_CIRCLE = globals().get('_v8416_draw_flag_circle')
+
+
+def _v8417_flag_path(team):
+    """يرجع مسار ملف العلم PNG للمنتخب إن وجد."""
+    try:
+        t = _v8414_canon(team) if '_v8414_canon' in globals() else str(team or '').strip()
+    except Exception:
+        t = str(team or '').strip()
+    filename = V8417_FLAG_FILE_MAP.get(t)
+    if not filename:
+        return ''
+    candidates = [
+        os.path.join(V8417_FLAGS_DIR, filename),
+        os.path.join('/app', V8417_FLAGS_DIR, filename),
+        os.path.join(globals().get('FLAGS_DIR', V8417_FLAGS_DIR), filename),
+    ]
+    for path in candidates:
+        try:
+            if path and os.path.exists(path):
+                return path
+        except Exception:
+            pass
+    return ''
+
+
+def _v8416_draw_flag_circle(base_img, draw, x, y, team, size=56):
+    """V84.1.7: يرسم العلم الرسمي من ملف PNG داخل دائرة. fallback للنسخة السابقة إذا العلم ناقص."""
+    try:
+        from PIL import Image, ImageDraw, ImageFilter
+        x = int(x); y = int(y); size = int(size)
+        r = size // 2
+        box = (x-r, y-r, x+r, y+r)
+        if not team:
+            draw.ellipse(box, fill='#151515', outline='#555555', width=2)
+            return
+        path = _v8417_flag_path(team)
+        if not path:
+            if callable(_V8417_PREV_DRAW_FLAG_CIRCLE):
+                return _V8417_PREV_DRAW_FLAG_CIRCLE(base_img, draw, x, y, team, size=size)
+            draw.ellipse(box, fill='#151515', outline='#555555', width=2)
+            return
+        # خلفية دائرية داكنة + العلم PNG في الوسط. الملف نفسه علم رسمي، وليس إيموجي وقت الرسم.
+        icon = Image.open(path).convert('RGBA')
+        # حجم العلم داخل الدائرة مع هامش ذهبي خفيف.
+        icon.thumbnail((int(size * 0.86), int(size * 0.86)), Image.Resampling.LANCZOS)
+        circle = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        cd = ImageDraw.Draw(circle)
+        cd.ellipse((1, 1, size-2, size-2), fill='#0b0b0bcc')
+        # ظل بسيط تحت العلم
+        shadow = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shadow)
+        sd.ellipse((7, 10, size-7, size-4), fill=(0, 0, 0, 92))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(3))
+        circle.alpha_composite(shadow, (0, 0))
+        ix = (size - icon.width) // 2
+        iy = (size - icon.height) // 2
+        circle.alpha_composite(icon, (ix, iy))
+        # قناع دائري يضمن أن أي جزء خارج الدائرة لا يظهر
+        mask = Image.new('L', (size, size), 0)
+        md = ImageDraw.Draw(mask)
+        md.ellipse((0, 0, size-1, size-1), fill=255)
+        base_img.paste(circle, (x-r, y-r), mask)
+        draw.ellipse(box, outline='#d1a64a', width=max(2, size//20))
+    except Exception:
+        if callable(_V8417_PREV_DRAW_FLAG_CIRCLE):
+            return _V8417_PREV_DRAW_FLAG_CIRCLE(base_img, draw, x, y, team, size=size)
+        try:
+            draw.ellipse((int(x)-size//2, int(y)-size//2, int(x)+size//2, int(y)+size//2), fill='#151515', outline='#555555', width=2)
+        except Exception:
+            pass
+
+
+# Caption أوضح: أعلام PNG رسمية داخل دوائر.
+async def _v8415_show_bracket_tree(target):
+    """عرض سريع للشجرة: يستخدم الكاش إذا لم تتغير حالة الشجرة، مع أعلام PNG رسمية."""
+    try:
+        msg = getattr(target, 'message', None) or target
+        path = _v8414_generate_bracket_tree_image(force=False)
+        if path and os.path.exists(path):
+            caption = '🏆 شجرة البطولة — أعلام رسمية دائرية'
+            try:
+                with open(path, 'rb') as f:
+                    await msg.reply_photo(photo=f, caption=caption)
+                return
+            except Exception:
+                try:
+                    await send_photo_path(msg, path, caption)
+                    return
+                except Exception:
+                    pass
+        await msg.reply_text('تعذر تجهيز صورة شجرة البطولة حاليًا.')
+    except Exception:
+        try:
+            msg = getattr(target, 'message', None) or target
+            await msg.reply_text('تعذر تجهيز شجرة البطولة حاليًا.')
+        except Exception:
+            pass
+
+
+async def _v8414_send_bracket_tree(target):
+    return await _v8415_show_bracket_tree(target)
+
+# إجبار إعادة توليد الشجرة بعد تغيير طريقة رسم الأعلام من ألوان إلى PNG.
+try:
+    if os.path.exists(globals().get('V8416_TREE_SIG_FILE', '')):
+        os.remove(globals().get('V8416_TREE_SIG_FILE'))
+except Exception:
+    pass
+
+# ==================== END V84.1.7 REAL PNG FLAGS FOR BRACKET TREE — FAHAD ====================
+
+# ==================== END V84.1.6 HOTFIX SPEED + MATCHES + REAL DRAWN FLAGS — FAHAD ====================
+
 if __name__ == "__main__":
     main()
