@@ -1,22 +1,6 @@
-# V84.3 — فهد
-
-## أهم التعديلات
-- نقل تشغيل `main()` إلى آخر الملف حتى كل باتشات V84.2/V84.3 تشتغل فعليًا قبل تشغيل البوت.
-- لوحة بطولة ديناميكية جديدة "الطريق إلى النهائي" بتصميم مستطيل واضح قريب من المثال، تعتمد على أعلام PNG.
-- زر `🏆 شجرة البطولة` يعرض اللوحة الجديدة بدل الشجرة الدائرية/الثقيلة.
-- لا يوجد ESPN داخل زر الشجرة/اللوحة: المصدر نتائج المباريات المحفوظة ثم كاش مباشر الآن.
-- إصلاح التعليق عبر كاش صورة بتوقيع للحالة؛ إذا النتائج ما تغيرت يرسل الصورة المحفوظة مباشرة.
-- إصلاح الإشعارات بإضافة JobQueue + fallback loop احتياطي لتقليل احتمال توقف التنبيهات.
-- إصلاح أعلام مباريات اليوم يعتمد على `assets/flags/` و `flags_map.json`.
-
-## مهم عند الرفع
-ارفع هذه الملفات في جذر المشروع:
-- `bot.py`
-- `flags_map.json`
-- `requirements.txt`
-- `README_DEPLOY.md`
-
-وارفع/حدّث مجلد:
-- `assets/flags/`
-
-لا تضع الأعلام داخل `assets/templates`.
+V84.3.1 emergency stable rollback
+- Based on V84.2 stable bot.py
+- Keeps fixed flags_map.json
+- Clean requirements.txt with job-queue once
+- Does not include experimental V84.3 dynamic board changes
+Upload bot.py, flags_map.json, requirements.txt, updater.py to repo root. Keep assets/flags/ as already uploaded.
