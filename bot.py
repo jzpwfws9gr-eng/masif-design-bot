@@ -59031,5 +59031,898 @@ except Exception:
 
 # ==================== END V84.1.6 HOTFIX SPEED + MATCHES + REAL DRAWN FLAGS — FAHAD ====================
 
+# ==================== V84.1.8 CLEAR FLAG CARDS FOR BRACKET TREE — FAHAD ====================
+# اعتماد فهد: الأعلام في شجرة البطولة لا تُقص كدوائر لأنها لا توضح على الجوال.
+# الحل: أعلام PNG رسمية داخل بطاقات مستطيلة بزوايا دائرية وإطار ذهبي خفيف، بدون أسماء.
+# المصدر يبقى نتائج المباريات + كاش مباشر الآن فقط. لا ESPN داخل زر الشجرة/المسار.
+V8418_VERSION = 'V84.1.8_CLEAR_RECTANGLE_FLAG_CARDS_TREE'
+
+
+def _v8418_rounded_mask(size, radius):
+    from PIL import Image, ImageDraw
+    w, h = size
+    mask = Image.new('L', (w, h), 0)
+    d = ImageDraw.Draw(mask)
+    try:
+        d.rounded_rectangle((0, 0, w-1, h-1), radius=radius, fill=255)
+    except Exception:
+        d.rectangle((0, 0, w-1, h-1), fill=255)
+    return mask
+
+
+def _v8418_fit_cover(img, target_w, target_h):
+    """قص خفيف بنظام cover حتى يبقى العلم واضحًا وممتلئًا داخل البطاقة."""
+    from PIL import Image
+    if not img:
+        return None
+    img = img.convert('RGBA')
+    iw, ih = img.size
+    if iw <= 0 or ih <= 0:
+        return Image.new('RGBA', (target_w, target_h), (20,20,20,255))
+    scale = max(target_w / iw, target_h / ih)
+    nw, nh = max(1, int(iw * scale)), max(1, int(ih * scale))
+    img = img.resize((nw, nh), Image.Resampling.LANCZOS)
+    left = max(0, (nw - target_w) // 2)
+    top = max(0, (nh - target_h) // 2)
+    return img.crop((left, top, left + target_w, top + target_h))
+
+
+def _v8416_draw_flag_circle(base_img, draw, x, y, team, size=56):
+    """V84.1.8: الاسم القديم يبقى للتوافق، لكن الرسم صار بطاقة علم مستطيلة واضحة بدل دائرة."""
+    try:
+        from PIL import Image, ImageDraw, ImageFilter
+        x = int(x); y = int(y); size = int(size)
+        # حجم البطاقة: أوضح من الدائرة ولا يقص تفاصيل العلم كثيرًا.
+        card_w = int(size * 1.55)
+        card_h = int(size * 0.92)
+        radius = max(8, int(card_h * 0.22))
+        x1, y1 = x - card_w // 2, y - card_h // 2
+        x2, y2 = x1 + card_w, y1 + card_h
+
+        # الخانة غير المحددة تبقى نقطة/دائرة خفيفة حتى لا تزحم الشجرة.
+        if not team:
+            rr = max(16, size // 2)
+            draw.ellipse((x-rr, y-rr, x+rr, y+rr), fill='#111111', outline='#555555', width=2)
+            return
+
+        path = _v8417_flag_path(team) if '_v8417_flag_path' in globals() else ''
+        if not path or not os.path.exists(path):
+            # إذا نقص ملف العلم، لا نرسم ألوان عشوائية. نخليها بطاقة انتظار واضحة.
+            try:
+                draw.rounded_rectangle((x1, y1, x2, y2), radius=radius, fill='#111111', outline='#d1a64a', width=2)
+                rr = 4
+                draw.ellipse((x-rr, y-rr, x+rr, y+rr), fill='#d1a64a')
+            except Exception:
+                draw.rectangle((x1, y1, x2, y2), fill='#111111', outline='#d1a64a', width=2)
+            return
+
+        # ظل خفيف خلف البطاقة
+        shadow = Image.new('RGBA', base_img.size, (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shadow)
+        try:
+            sd.rounded_rectangle((x1+3, y1+5, x2+3, y2+5), radius=radius, fill=(0, 0, 0, 110))
+        except Exception:
+            sd.rectangle((x1+3, y1+5, x2+3, y2+5), fill=(0, 0, 0, 110))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(3))
+        base_img.alpha_composite(shadow)
+
+        # بطاقة العلم
+        flag = Image.open(path).convert('RGBA')
+        flag = _v8418_fit_cover(flag, card_w, card_h)
+        mask = _v8418_rounded_mask((card_w, card_h), radius)
+        base_img.paste(flag, (x1, y1), mask)
+        # إطار ذهبي خفيف + خط داخلي داكن لإبراز العلم على الخلفية
+        try:
+            draw.rounded_rectangle((x1-1, y1-1, x2+1, y2+1), radius=radius+1, outline='#d1a64a', width=max(2, size//28))
+            draw.rounded_rectangle((x1+2, y1+2, x2-2, y2-2), radius=max(4, radius-2), outline='#00000066', width=1)
+        except Exception:
+            draw.rectangle((x1-1, y1-1, x2+1, y2+1), outline='#d1a64a', width=2)
+    except Exception:
+        try:
+            rr = max(16, int(size)//2)
+            draw.ellipse((int(x)-rr, int(y)-rr, int(x)+rr, int(y)+rr), fill='#151515', outline='#555555', width=2)
+        except Exception:
+            pass
+
+
+async def _v8415_show_bracket_tree(target):
+    """عرض شجرة البطولة ببطاقات أعلام PNG واضحة، بدون أسماء وبدون حساب ثقيل وقت الضغط."""
+    try:
+        msg = getattr(target, 'message', None) or target
+        path = _v8414_generate_bracket_tree_image(force=False)
+        if path and os.path.exists(path):
+            caption = '🏆 شجرة البطولة — أعلام واضحة فقط'
+            try:
+                with open(path, 'rb') as f:
+                    await msg.reply_photo(photo=f, caption=caption)
+                return
+            except Exception:
+                try:
+                    await send_photo_path(msg, path, caption)
+                    return
+                except Exception:
+                    pass
+        await msg.reply_text('تعذر تجهيز صورة شجرة البطولة حاليًا.')
+    except Exception:
+        try:
+            msg = getattr(target, 'message', None) or target
+            await msg.reply_text('تعذر تجهيز شجرة البطولة حاليًا.')
+        except Exception:
+            pass
+
+
+async def _v8414_send_bracket_tree(target):
+    return await _v8415_show_bracket_tree(target)
+
+# إجبار إعادة توليد الشجرة بعد تحويل الأعلام من دوائر إلى بطاقات مستطيلة واضحة.
+try:
+    sigfile = globals().get('V8416_TREE_SIG_FILE', '')
+    if sigfile and os.path.exists(sigfile):
+        os.remove(sigfile)
+except Exception:
+    pass
+try:
+    treefile = globals().get('V8414_TREE_IMAGE_FILE', '')
+    if treefile and os.path.exists(treefile):
+        os.remove(treefile)
+except Exception:
+    pass
+
+# ==================== END V84.1.8 CLEAR FLAG CARDS FOR BRACKET TREE — FAHAD ====================
+
+
+# ==================== V84.1.9 REMOVE PATH BUTTON KEEP FAST TREE — FAHAD ====================
+# اعتماد فهد: زر "🏆 مسار البطولة" يسبب تعليق، لذلك تم إلغاؤه من الواجهة.
+# البديل المعتمد: "🏆 شجرة البطولة" فقط للصورة، مع بقاء لوحة البطولة/نتائج المباريات/مباشر كما هي.
+# أي ضغط قديم على مسار البطولة أو callback=status_home لا ينفذ الحساب الثقيل، بل يرد برسالة خفيفة.
+V8419_VERSION = 'V84.1.9_REMOVE_PATH_BUTTON_KEEP_TREE'
+V841_PATH_BUTTON_REMOVED = True
+
+
+def _v8419_tree_text_label():
+    return globals().get('V841_TREE_BUTTON', '🏆 شجرة البطولة')
+
+
+def _v8419_removed_path_text():
+    return (
+        'تم إلغاء زر 🏆 مسار البطولة مؤقتًا لأنه كان يسبب تعليقًا.\n\n'
+        'المعتمد الآن:\n'
+        '🏆 شجرة البطولة — صورة سريعة بالأعلام فقط\n'
+        '🏆 لوحة البطولة — ملخص البطولة بدون حساب ثقيل'
+    )
+
+def _v8419_tree_inline_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(_v8419_tree_text_label(), callback_data='v32|bracket_tree')],
+        [InlineKeyboardButton('🏆 لوحة البطولة', callback_data='v32|board'), InlineKeyboardButton('⬅️ الرئيسية', callback_data='mainmenu|home')],
+    ])
+
+
+def _v8419_is_removed_path_text(txt):
+    t = str(txt or '').strip()
+    return t in ('🏆 مسار البطولة', 'مسار البطولة', '✅❌ التأهل والمغادرة', 'حالة المنتخبات', '🏆 حالة المنتخبات')
+
+
+# لا نعتبر مسار البطولة زرًا نشطًا بعد الآن حتى لا يدخل في دوال الحالة الثقيلة.
+def _v8415_is_path_text(txt):
+    return False
+
+
+def _v8419_main_rows():
+    return [
+        ['📊 إحصائيات البطولة', '🏆 لوحة البطولة'],
+        ['📺 مباشر الآن', '🔔 تنبيهات المباراة'],
+        [_v8419_tree_text_label(), '🏆 الأدوار الإقصائية'],
+        ['🏆 مسابقات المصيف'],
+        ['📅 مباريات اليوم', '📅 المباريات القادمة'],
+        ['📋 نتائج المباريات', '🎮 فانتزي'],
+    ]
+
+
+def _v75_public_main_rows():
+    return _v8419_main_rows()
+
+
+def _public_main_reply_keyboard():
+    return ReplyKeyboardMarkup(_v8419_main_rows(), resize_keyboard=True, one_time_keyboard=False, input_field_placeholder='اكتب اسم منتخب أو اختر من القائمة')
+
+
+def _public_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('📊 إحصائيات البطولة', callback_data='v32|stats'), InlineKeyboardButton('🏆 لوحة البطولة', callback_data='v32|board')],
+        [InlineKeyboardButton('📺 مباشر الآن', callback_data='mainmenu|live'), InlineKeyboardButton('🔔 تنبيهات المباراة', callback_data='v63goal|menu')],
+        [InlineKeyboardButton(_v8419_tree_text_label(), callback_data='v32|bracket_tree'), InlineKeyboardButton('🏆 الأدوار الإقصائية', callback_data='v32|ko_menu')],
+        [InlineKeyboardButton('🏆 مسابقات المصيف', callback_data='mainmenu|contests')],
+        [InlineKeyboardButton('📅 مباريات اليوم', callback_data='mainmenu|today'), InlineKeyboardButton('📅 المباريات القادمة', callback_data='mainmenu|fixtures')],
+        [InlineKeyboardButton('📋 نتائج المباريات', callback_data='mainmenu|results'), InlineKeyboardButton('🎮 فانتزي', callback_data='v32|fantasy_gate')],
+    ])
+
+
+def _v32_board_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(_v8419_tree_text_label(), callback_data='v32|bracket_tree'), InlineKeyboardButton('🏆 الأدوار الإقصائية', callback_data='v32|ko_menu')],
+        [InlineKeyboardButton('📊 إحصائيات البطولة', callback_data='v32|stats'), InlineKeyboardButton('🔄 تحديث الآن', callback_data='v32|board_force')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+
+# حتى لو ظهرت أزرار قديمة في محادثة قديمة، لا نشغل مسار البطولة الثقيل.
+_V8419_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if _v8419_is_removed_path_text(txt):
+        await update.effective_message.reply_text(_v8419_removed_path_text(), reply_markup=_v8419_tree_inline_keyboard())
+        return
+    if callable(_V8419_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V8419_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+
+_V8419_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if _v8419_is_removed_path_text(txt):
+        return await public_reply_menu_router(update, context)
+    if callable(_V8419_PREV_TEXT_STATE_ROUTER):
+        return await _V8419_PREV_TEXT_STATE_ROUTER(update, context)
+
+
+_V8419_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+
+    # status_home/status_force كان مربوطًا بمسار البطولة الثقيل؛ تم تعطيله نهائيًا.
+    if action in ('status_home', 'status_force'):
+        try:
+            await q.answer('تم إلغاء مسار البطولة', show_alert=False)
+        except Exception:
+            pass
+        try:
+            await q.edit_message_text(_v8419_removed_path_text(), reply_markup=_v8419_tree_inline_keyboard())
+        except Exception:
+            try:
+                await q.message.reply_text(_v8419_removed_path_text(), reply_markup=_v8419_tree_inline_keyboard())
+            except Exception:
+                pass
+        return
+
+    if callable(_V8419_PREV_V32_CALLBACK):
+        return await _V8419_PREV_V32_CALLBACK(update, context)
+
+
+# تنظيف القوائم النهائية من الزر القديم إن كانت موجودة.
+try:
+    if 'V32_FINAL_MENU_LABELS' in globals():
+        V32_FINAL_MENU_LABELS.discard('🏆 مسار البطولة')
+        V32_FINAL_MENU_LABELS.discard('✅❌ التأهل والمغادرة')
+        V32_FINAL_MENU_LABELS.add(_v8419_tree_text_label())
+except Exception:
+    pass
+
+# ==================== END V84.1.9 REMOVE PATH BUTTON KEEP FAST TREE — FAHAD ====================
+
 if __name__ == "__main__":
     main()
+
+# ==================== V84.2 FLAGS + BOARD SUMMARY FIX — FAHAD ====================
+# اعتماد فهد: توحيد مصدر الأعلام لكل التصاميم + إصلاح لوحة البطولة بدون حسابات ثقيلة.
+# - flags_map.json قد يكون بصيغة مسطحة {"المغرب":"morocco.png"} أو بصيغة {"aliases":{...}}
+# - كل التصاميم تقرأ من assets/flags + flags_map.json
+# - إذا نقص علم: لا نترك مربع أبيض، بل بطاقة انتظار داكنة خفيفة.
+# - لوحة البطولة: تصحح عداد المباريات المنتهية والأهداف من الكاش المحفوظ + live snapshot + كاش الإقصائيات المحلي.
+# - لا لمس /start، لا تغيير مصدر نتائج المباريات، لا إعادة زر مسار البطولة، ولا سحب ESPN داخل لوحة البطولة.
+V842_VERSION = 'V84.2_FLAGS_AND_BOARD_SUMMARY_FIX'
+
+
+def _v842_read_json_file(path, default=None):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            obj = json.load(f)
+        return obj if obj is not None else (default if default is not None else {})
+    except Exception:
+        return default if default is not None else {}
+
+
+def _v842_ar_key_variants(name):
+    s0 = normalize_name(name)
+    if not s0:
+        return []
+    variants = set([s0, s0.lower()])
+    try:
+        import re as _re
+        base = s0
+        # إزالة التشكيل وتوحيد الهمزات/الألف/الياء/التاء المربوطة للاحتياط.
+        base = _re.sub(r'[\u064B-\u065F\u0670]', '', base)
+        norm = base.replace('أ', 'ا').replace('إ', 'ا').replace('آ', 'ا')
+        norm = norm.replace('ى', 'ي').replace('ة', 'ه')
+        norm = _re.sub(r'\s+', ' ', norm).strip()
+        variants.update([norm, norm.lower()])
+        if norm.startswith('ال') and len(norm) > 2:
+            variants.add(norm[2:])
+            variants.add(norm[2:].lower())
+        if s0.startswith('ال') and len(s0) > 2:
+            variants.add(s0[2:])
+            variants.add(s0[2:].lower())
+        variants.add(norm.replace(' ', ''))
+        variants.add(s0.replace(' ', ''))
+    except Exception:
+        pass
+    return [v for v in variants if v]
+
+
+def _v842_put_flag_alias(data, alias, filename):
+    if not alias or not filename:
+        return
+    fn = str(filename).strip()
+    if not fn:
+        return
+    for k in _v842_ar_key_variants(alias):
+        data[k] = fn
+
+
+def _v842_static_flag_aliases():
+    # أسماء إضافية عشان الأعلام تطلع حتى لو مصدر المباريات غيّر التسمية أو حذف الهمزة.
+    return {
+        'المكسيك': 'mexico.png', 'مكسيك': 'mexico.png', 'Mexico': 'mexico.png',
+        'جنوب أفريقيا': 'south_africa.png', 'جنوب افريقيا': 'south_africa.png', 'South Africa': 'south_africa.png',
+        'كوريا الجنوبية': 'south_korea.png', 'كوريا الجنوبيه': 'south_korea.png', 'South Korea': 'south_korea.png',
+        'التشيك': 'czechia.png', 'تشيكيا': 'czechia.png', 'Czechia': 'czechia.png', 'Czech Republic': 'czechia.png',
+        'كندا': 'canada.png', 'Canada': 'canada.png',
+        'البوسنة والهرسك': 'bosnia.png', 'البوسنة': 'bosnia.png', 'بوسنيا': 'bosnia.png', 'Bosnia': 'bosnia.png', 'Bosnia and Herzegovina': 'bosnia.png',
+        'قطر': 'qatar.png', 'Qatar': 'qatar.png',
+        'سويسرا': 'switzerland.png', 'Switzerland': 'switzerland.png',
+        'البرازيل': 'brazil.png', 'برازيل': 'brazil.png', 'Brazil': 'brazil.png',
+        'المغرب': 'morocco.png', 'Morocco': 'morocco.png',
+        'هايتي': 'haiti.png', 'Haiti': 'haiti.png',
+        'اسكتلندا': 'scotland.png', 'إسكتلندا': 'scotland.png', 'سكوتلندا': 'scotland.png', 'Scotland': 'scotland.png',
+        'تركيا': 'turkey.png', 'تركيا': 'turkey.png', 'Turkey': 'turkey.png',
+        'الولايات المتحدة': 'usa.png', 'الولايات المتحدة الأمريكية': 'usa.png', 'امريكا': 'usa.png', 'أمريكا': 'usa.png', 'USA': 'usa.png', 'United States': 'usa.png',
+        'باراغواي': 'paraguay.png', 'بارجواي': 'paraguay.png', 'الباراغواي': 'paraguay.png', 'Paraguay': 'paraguay.png',
+        'أستراليا': 'australia.png', 'استراليا': 'australia.png', 'Australia': 'australia.png',
+        'ألمانيا': 'germany.png', 'المانيا': 'germany.png', 'Germany': 'germany.png',
+        'كوراساو': 'curacao.png', 'كوراسا': 'curacao.png', 'Curacao': 'curacao.png', 'Curaçao': 'curacao.png',
+        'ساحل العاج': 'ivory_coast.png', 'كوت ديفوار': 'ivory_coast.png', 'Ivory Coast': 'ivory_coast.png', "Côte d’Ivoire": 'ivory_coast.png',
+        'الإكوادور': 'ecuador.png', 'الاكوادور': 'ecuador.png', 'إكوادور': 'ecuador.png', 'Ecuador': 'ecuador.png',
+        'هولندا': 'netherlands.png', 'Netherlands': 'netherlands.png', 'Netherland': 'netherlands.png',
+        'اليابان': 'japan.png', 'Japan': 'japan.png',
+        'السويد': 'sweden.png', 'سويد': 'sweden.png', 'Sweden': 'sweden.png',
+        'تونس': 'tunisia.png', 'Tunisia': 'tunisia.png',
+        'بلجيكا': 'belgium.png', 'Belgium': 'belgium.png',
+        'مصر': 'egypt.png', 'Egypt': 'egypt.png',
+        'إيران': 'iran.png', 'ايران': 'iran.png', 'Iran': 'iran.png',
+        'نيوزيلندا': 'new_zealand.png', 'نيو زيلندا': 'new_zealand.png', 'New Zealand': 'new_zealand.png',
+        'إسبانيا': 'spain.png', 'اسبانيا': 'spain.png', 'Spain': 'spain.png',
+        'الرأس الأخضر': 'cape_verde.png', 'الراس الاخضر': 'cape_verde.png', 'كاب فيردي': 'cape_verde.png', 'Cape Verde': 'cape_verde.png',
+        'السعودية': 'saudi_arabia.png', 'السعوديه': 'saudi_arabia.png', 'Saudi Arabia': 'saudi_arabia.png',
+        'أوروجواي': 'uruguay.png', 'اوروجواي': 'uruguay.png', 'أوروغواي': 'uruguay.png', 'Uruguay': 'uruguay.png',
+        'فرنسا': 'france.png', 'France': 'france.png',
+        'السنغال': 'senegal.png', 'سنغال': 'senegal.png', 'Senegal': 'senegal.png',
+        'العراق': 'iraq.png', 'Iraq': 'iraq.png',
+        'النرويج': 'norway.png', 'Norway': 'norway.png',
+        'الأرجنتين': 'argentina.png', 'الارجنتين': 'argentina.png', 'Argentina': 'argentina.png',
+        'الجزائر': 'algeria.png', 'Algeria': 'algeria.png',
+        'النمسا': 'austria.png', 'Austria': 'austria.png',
+        'الأردن': 'jordan.png', 'الاردن': 'jordan.png', 'Jordan': 'jordan.png',
+        'البرتغال': 'portugal.png', 'Portugal': 'portugal.png',
+        'الكونغو الديمقراطية': 'dr_congo.png', 'الكونغو الديموقراطية': 'dr_congo.png', 'الكونغو': 'dr_congo.png', 'DR Congo': 'dr_congo.png', 'Congo DR': 'dr_congo.png',
+        'أوزبكستان': 'uzbekistan.png', 'اوزبكستان': 'uzbekistan.png', 'Uzbekistan': 'uzbekistan.png',
+        'كولومبيا': 'colombia.png', 'Colombia': 'colombia.png',
+        'إنجلترا': 'england.png', 'انجلترا': 'england.png', 'England': 'england.png',
+        'كرواتيا': 'croatia.png', 'Croatia': 'croatia.png',
+        'غانا': 'ghana.png', 'Ghana': 'ghana.png',
+        'بنما': 'panama.png', 'Panama': 'panama.png',
+    }
+
+
+def load_flags_map():
+    ensure_flags_assets()
+    data = {}
+    obj = _v842_read_json_file(globals().get('FLAGS_JSON', 'flags_map.json'), {})
+    pairs = {}
+    if isinstance(obj, dict):
+        if isinstance(obj.get('aliases'), dict):
+            pairs.update(obj.get('aliases') or {})
+        # يدعم flags_map.json المسطح مباشرة.
+        for k, v in obj.items():
+            if k == 'aliases' or isinstance(v, (dict, list, tuple)):
+                continue
+            pairs[k] = v
+    for k, v in pairs.items():
+        _v842_put_flag_alias(data, k, v)
+    for k, v in _v842_static_flag_aliases().items():
+        # لا نطغى على الربط الرسمي إذا كان موجودًا؛ فقط نكمل النواقص.
+        found = False
+        for kk in _v842_ar_key_variants(k):
+            if kk in data:
+                found = True
+                break
+        if not found:
+            _v842_put_flag_alias(data, k, v)
+    return data
+
+
+def _v842_existing_flag_file(filename):
+    if not filename:
+        return None
+    fn = str(filename).strip()
+    # يدعم لو الملف مكتوب بمسار كامل أو باسم فقط.
+    candidates = []
+    if os.path.isabs(fn) or os.path.sep in fn:
+        candidates.append(fn)
+    candidates.append(os.path.join(globals().get('FLAGS_DIR', os.path.join('assets', 'flags')), fn))
+    # جرّب lowercase لو GitHub/النظام حساس للأحرف.
+    try:
+        root = globals().get('FLAGS_DIR', os.path.join('assets', 'flags'))
+        if os.path.isdir(root):
+            lower = fn.lower()
+            for item in os.listdir(root):
+                if item.lower() == lower:
+                    candidates.append(os.path.join(root, item))
+    except Exception:
+        pass
+    for p in candidates:
+        try:
+            if p and os.path.exists(p):
+                return p
+        except Exception:
+            pass
+    return None
+
+
+def flag_path_for(team_name):
+    flags = load_flags_map()
+    for key in _v842_ar_key_variants(team_name):
+        filename = flags.get(key) or flags.get(str(key).lower())
+        path = _v842_existing_flag_file(filename)
+        if path:
+            return path
+    return None
+
+
+def _v842_crop_alpha_content(im):
+    try:
+        if im.mode != 'RGBA':
+            im = im.convert('RGBA')
+        bbox = im.getchannel('A').getbbox()
+        if bbox:
+            return im.crop(bbox)
+    except Exception:
+        pass
+    return im
+
+
+def _v842_fit_contain(im, w, h, pad=0):
+    im = _v842_crop_alpha_content(im.convert('RGBA'))
+    ww, hh = max(1, int(w - pad*2)), max(1, int(h - pad*2))
+    scale = min(ww / max(1, im.width), hh / max(1, im.height))
+    nw, nh = max(1, int(im.width * scale)), max(1, int(im.height * scale))
+    return im.resize((nw, nh), Image.LANCZOS)
+
+
+def _v842_draw_missing_flag(base, team_name, box, radius=12):
+    try:
+        x1, y1, x2, y2 = [int(v) for v in box]
+        d = ImageDraw.Draw(base)
+        rounded_rect(d, (x1, y1, x2, y2), radius=radius, fill='#07132FCC', outline='#FBBF2466', width=2)
+        txt = normalize_name(team_name)[:2] or '؟'
+        draw_text(d, ((x1+x2)//2, (y1+y2)//2), txt, get_font(max(18, min(30, (y2-y1)//2))), fill='#FDE68A', max_width=max(30, x2-x1-8))
+    except Exception:
+        pass
+
+
+def paste_flag(base, team_name, box):
+    if not Image:
+        return
+    x1, y1, x2, y2 = [int(v) for v in box]
+    w, h = max(1, x2-x1), max(1, y2-y1)
+    path = flag_path_for(team_name)
+    try:
+        if path and os.path.exists(path):
+            flag = Image.open(path).convert('RGBA')
+            flag = _v842_fit_contain(flag, w, h, pad=max(1, min(w, h)//18))
+            px = x1 + (w - flag.width)//2
+            py = y1 + (h - flag.height)//2
+            base.paste(flag, (px, py), flag)
+            return
+    except Exception:
+        pass
+    _v842_draw_missing_flag(base, team_name, (x1, y1, x2, y2), radius=max(10, min(w, h)//5))
+
+
+def _v31_paste_flag(img, team_name, box):
+    # أعلام مباريات اليوم/المباريات القادمة: لا مربعات بيضاء، خلفية داكنة + العلم من assets/flags.
+    if not Image:
+        return
+    x1, y1, x2, y2 = [int(v) for v in box]
+    w, h = max(1, x2-x1), max(1, y2-y1)
+    d = ImageDraw.Draw(img)
+    try:
+        rounded_rect(d, (x1, y1, x2, y2), radius=max(8, min(w, h)//5), fill='#07132FCC', outline='#FBBF2477', width=1)
+    except Exception:
+        pass
+    path = flag_path_for(team_name)
+    try:
+        if path and os.path.exists(path):
+            flag = Image.open(path).convert('RGBA')
+            flag = _v842_fit_contain(flag, w, h, pad=max(1, min(w, h)//12))
+            px = x1 + (w - flag.width)//2
+            py = y1 + (h - flag.height)//2
+            img.paste(flag, (px, py), flag)
+            return
+    except Exception:
+        pass
+    _v842_draw_missing_flag(img, team_name, (x1, y1, x2, y2), radius=max(8, min(w, h)//5))
+
+
+def _v842_score_int(v):
+    try:
+        if v is None or v == '':
+            return None
+        return int(str(v).strip())
+    except Exception:
+        return None
+
+
+def _v842_is_final_status(node):
+    if not isinstance(node, dict):
+        return False
+    parts = []
+    for k in ('status', 'phase', 'bucket', 'state', 'detail', 'shortDetail'):
+        try:
+            parts.append(str(node.get(k) or ''))
+        except Exception:
+            pass
+    try:
+        obj = node.get('obj')
+        if isinstance(obj, dict):
+            for k in ('status', 'phase', 'bucket', 'state', 'detail', 'shortDetail'):
+                parts.append(str(obj.get(k) or ''))
+    except Exception:
+        pass
+    text = ' '.join(parts).lower()
+    if any(x in text for x in ('scheduled', 'pre', 'not started', 'لم تبدأ', 'تبدأ', 'live', 'in_progress', 'in progress', 'مباشر', 'half', '1h', '2h')):
+        return False
+    return any(x in text for x in ('complete', 'completed', 'final', 'full time', 'ft', 'ended', 'finished', 'post', 'انتهت', 'نهائية', 'نهاية'))
+
+
+def _v842_result_key(team1, team2):
+    try:
+        k1 = simple_key(team1) if 'simple_key' in globals() else str(team1 or '').strip().lower()
+        k2 = simple_key(team2) if 'simple_key' in globals() else str(team2 or '').strip().lower()
+    except Exception:
+        k1, k2 = str(team1 or '').strip().lower(), str(team2 or '').strip().lower()
+    return tuple(sorted([k1, k2]))
+
+
+def _v842_record_from_score_obj(node, require_final=False, source='cache'):
+    if not isinstance(node, dict):
+        return None
+    team1 = node.get('team1') or node.get('home_team') or node.get('homeTeam') or node.get('home')
+    team2 = node.get('team2') or node.get('away_team') or node.get('awayTeam') or node.get('away')
+    if isinstance(team1, dict):
+        team1 = team1.get('name') or team1.get('displayName') or team1.get('shortName')
+    if isinstance(team2, dict):
+        team2 = team2.get('name') or team2.get('displayName') or team2.get('shortName')
+    s1 = _v842_score_int(node.get('score1') if 'score1' in node else node.get('home_score') if 'home_score' in node else node.get('homeScore'))
+    s2 = _v842_score_int(node.get('score2') if 'score2' in node else node.get('away_score') if 'away_score' in node else node.get('awayScore'))
+    if s1 is None and isinstance(node.get('obj'), dict):
+        return _v842_record_from_score_obj(node.get('obj'), require_final=require_final, source=source)
+    if not team1 or not team2 or s1 is None or s2 is None:
+        return None
+    if require_final and not _v842_is_final_status(node):
+        return None
+    return {'team1': str(team1).strip(), 'team2': str(team2).strip(), 'score1': int(s1), 'score2': int(s2), 'source': source, 'id': str(node.get('id') or node.get('match_id') or '')}
+
+
+def _v842_deep_result_scan(node, out=None, require_final=True, source='cache', depth=0):
+    if out is None:
+        out = []
+    if depth > 8:
+        return out
+    if isinstance(node, dict):
+        rec = _v842_record_from_score_obj(node, require_final=require_final, source=source)
+        if rec:
+            out.append(rec)
+        for v in node.values():
+            if isinstance(v, (dict, list)):
+                _v842_deep_result_scan(v, out, require_final=require_final, source=source, depth=depth+1)
+    elif isinstance(node, list):
+        for v in node:
+            if isinstance(v, (dict, list)):
+                _v842_deep_result_scan(v, out, require_final=require_final, source=source, depth=depth+1)
+    return out
+
+
+def _v842_cached_extra_results(group_seen=None):
+    seen = set(group_seen or set())
+    out = []
+    # 1) live snapshot: مباريات اليوم المنتهية/المباشرة المحفوظة محليًا.
+    try:
+        snap = _v81_load_snapshot() if '_v81_load_snapshot' in globals() else {}
+        for rec in (snap.get('matches') or []):
+            if not isinstance(rec, dict):
+                continue
+            # لا نضيف المباشر كمنتهية، فقط النهائي/المكتمل.
+            if not _v842_is_final_status(rec):
+                continue
+            r = _v842_record_from_score_obj(rec, require_final=False, source='live_snapshot')
+            if not r:
+                continue
+            key = _v842_result_key(r.get('team1'), r.get('team2'))
+            if key in seen:
+                continue
+            seen.add(key); out.append(r)
+    except Exception:
+        pass
+    # 2) كاش الإقصائيات المحلي، بدون أي سحب خارجي.
+    for f in [globals().get('V841_ESPN_KO_CACHE_FILE', 'v841_espn_ko_cache.json'), globals().get('RESULT_MATCH_CACHE_FILE', 'match_results_by_fixture_cache.json'), globals().get('MATCH_RESULTS_CACHE_FILE', 'match_results_cache.json')]:
+        try:
+            data = _v842_read_json_file(f, {})
+            for r in _v842_deep_result_scan(data, require_final=True, source=f):
+                key = _v842_result_key(r.get('team1'), r.get('team2'))
+                if key in seen:
+                    continue
+                seen.add(key); out.append(r)
+        except Exception:
+            pass
+    return out
+
+
+def _v842_all_cached_completed_results():
+    group_results = []
+    try:
+        group_results = _v80_results_from_cached_snapshot() if '_v80_results_from_cached_snapshot' in globals() else []
+    except Exception:
+        group_results = []
+    seen = set()
+    out = []
+    for r in group_results or []:
+        try:
+            rr = {'team1': r.get('team1'), 'team2': r.get('team2'), 'score1': int(r.get('score1') or 0), 'score2': int(r.get('score2') or 0), 'source': 'groups'}
+            key = _v842_result_key(rr.get('team1'), rr.get('team2'))
+            if key in seen:
+                continue
+            seen.add(key); out.append(rr)
+        except Exception:
+            pass
+    out.extend(_v842_cached_extra_results(seen))
+    return out
+
+
+def _v842_live_count_and_goals(results_seen=None):
+    live_count = 0
+    live_goals = 0
+    seen = set(results_seen or set())
+    try:
+        snap = _v81_load_snapshot() if '_v81_load_snapshot' in globals() else {}
+        for rec in (snap.get('matches') or []):
+            if not isinstance(rec, dict):
+                continue
+            bucket = str(rec.get('bucket') or rec.get('phase') or '').lower()
+            if bucket != 'live' and 'مباشر' not in bucket:
+                continue
+            live_count += 1
+            key = _v842_result_key(rec.get('team1'), rec.get('team2'))
+            if key in seen:
+                continue
+            s1 = _v842_score_int(rec.get('score1')) or 0
+            s2 = _v842_score_int(rec.get('score2')) or 0
+            live_goals += int(s1) + int(s2)
+    except Exception:
+        pass
+    return live_count, live_goals
+
+
+def _v842_biggest_result_from_results(results):
+    best = None
+    for r in results or []:
+        try:
+            s1 = int(r.get('score1') or 0); s2 = int(r.get('score2') or 0)
+            diff = abs(s1 - s2); total = s1 + s2
+            if best is None or (diff, total) > best[0]:
+                best = ((diff, total), r)
+        except Exception:
+            pass
+    if not best:
+        return '-'
+    r = best[1]
+    return f"{r.get('team1')} {int(r.get('score1') or 0)}-{int(r.get('score2') or 0)} {r.get('team2')}"
+
+
+def _v842_attack_defense_from_results(results):
+    stats = {}
+    def ensure(t):
+        t = str(t or '').strip()
+        if not t:
+            return None
+        if t not in stats:
+            stats[t] = {'team': t, 'gf': 0, 'ga': 0, 'played': 0}
+        return stats[t]
+    for r in results or []:
+        try:
+            a = ensure(r.get('team1')); b = ensure(r.get('team2'))
+            if not a or not b:
+                continue
+            s1 = int(r.get('score1') or 0); s2 = int(r.get('score2') or 0)
+            a['gf'] += s1; a['ga'] += s2; a['played'] += 1
+            b['gf'] += s2; b['ga'] += s1; b['played'] += 1
+        except Exception:
+            pass
+    rows = [v for v in stats.values() if v.get('played')]
+    if not rows:
+        return '-', '-'
+    atk = sorted(rows, key=lambda x: (-int(x.get('gf') or 0), int(x.get('ga') or 0), str(x.get('team'))))[0]
+    dfn = sorted(rows, key=lambda x: (int(x.get('ga') or 0), -int(x.get('played') or 0), str(x.get('team'))))[0]
+    return f"{atk.get('team')} — {int(atk.get('gf') or 0)} أهداف", f"{dfn.get('team')} — استقبل {int(dfn.get('ga') or 0)}"
+
+
+def _v842_round_finished_counts_from_local_cache():
+    counts = {'r32': 0, 'r16': 0, 'qf': 0, 'sf': 0, 'final': 0}
+    round_ids = globals().get('V841_ROUND_IDS', {}) or {}
+    # من كاش الإقصائيات المحلي: المفاتيح غالبًا R32-1 / R16-1 ...
+    try:
+        ko = _v842_read_json_file(globals().get('V841_ESPN_KO_CACHE_FILE', 'v841_espn_ko_cache.json'), {})
+        if isinstance(ko, dict):
+            for rk, ids in round_ids.items():
+                for mid in ids or []:
+                    rec = ko.get(str(mid)) or ko.get(mid)
+                    obj = rec.get('obj') if isinstance(rec, dict) else rec
+                    if isinstance(obj, dict) and _v842_record_from_score_obj(obj, require_final=True, source='ko'):
+                        counts[rk] = counts.get(rk, 0) + 1
+    except Exception:
+        pass
+    # من live snapshot إذا فيه fixture.id مطابق.
+    try:
+        snap = _v81_load_snapshot() if '_v81_load_snapshot' in globals() else {}
+        for rec in (snap.get('matches') or []):
+            if not isinstance(rec, dict) or not _v842_is_final_status(rec):
+                continue
+            mid = str((rec.get('fixture') or {}).get('id') or rec.get('id') or '')
+            for rk, ids in round_ids.items():
+                if mid in [str(x) for x in (ids or [])]:
+                    # لا نزيد إذا محسوبة من الكاش المحلي.
+                    counts[rk] = max(counts.get(rk, 0), 1 if rk == 'final' else counts.get(rk, 0) + 1)
+    except Exception:
+        pass
+    return counts
+
+
+def _v842_current_round_summary(counts, ko_total):
+    # يطلع سطر التأهل المناسب للمرحلة الحالية.
+    phase = ''
+    try:
+        phase = _v841_phase_title() if '_v841_phase_title' in globals() else ''
+    except Exception:
+        phase = ''
+    phase = str(phase or '')
+    if 'دور 32' in phase:
+        return '✅ المتأهلون لدور 16', max(int(counts.get('r32') or 0), min(ko_total, 16)), 16
+    if 'دور 16' in phase:
+        return '✅ المتأهلون لربع النهائي', int(counts.get('r16') or 0), 8
+    if 'ربع' in phase:
+        return '✅ المتأهلون لنصف النهائي', int(counts.get('qf') or 0), 4
+    if 'نصف' in phase:
+        return '✅ المتأهلون للنهائي', int(counts.get('sf') or 0), 2
+    if 'نهائي' in phase:
+        return '🏆 بطل البطولة', int(counts.get('final') or 0), 1
+    return '', 0, 0
+
+
+def _v841_board_summary(force=False):
+    # ملخص سريع من الكاش فقط، ويصحح completed/goals حتى لو snap يحتوي goals بدون completed.
+    try:
+        snap = _v80_load_tournament_cache_snapshot() if '_v80_load_tournament_cache_snapshot' in globals() else {}
+    except Exception:
+        snap = {}
+    results = _v842_all_cached_completed_results()
+    results_seen = {_v842_result_key(r.get('team1'), r.get('team2')) for r in results or []}
+    live_count, live_goals = _v842_live_count_and_goals(results_seen)
+    try:
+        snap_completed = int((snap or {}).get('completed') or (snap or {}).get('completed_count') or (snap or {}).get('finished_count') or 0)
+    except Exception:
+        snap_completed = 0
+    completed = max(snap_completed, len(results or []))
+    try:
+        snap_goals = int((snap or {}).get('goals') or 0)
+    except Exception:
+        snap_goals = 0
+    try:
+        calc_goals = sum(int(r.get('score1') or 0) + int(r.get('score2') or 0) for r in results or [])
+    except Exception:
+        calc_goals = 0
+    goals = max(snap_goals, calc_goals) + int(live_goals or 0)
+    biggest = _v842_biggest_result_from_results(results) or '-'
+    if biggest == '-':
+        try:
+            biggest = _v80_biggest_result_from_cached() if '_v80_biggest_result_from_cached' in globals() else '-'
+        except Exception:
+            biggest = '-'
+    atk, dfn = _v842_attack_defense_from_results(results)
+    if atk == '-' or dfn == '-':
+        try:
+            atk, dfn = _v75_single_attack_defense_lines(False)
+        except Exception:
+            pass
+    try:
+        live_snap = _v81_load_snapshot() if '_v81_load_snapshot' in globals() else {}
+    except Exception:
+        live_snap = {}
+    updated = (live_snap or {}).get('updated_at') or (snap or {}).get('updated_at') or (_now_riyadh_text() if '_now_riyadh_text' in globals() else _v841_updated_text())
+    counts = _v842_round_finished_counts_from_local_cache()
+    # إذا ما قدرنا نحدد كل مباراة إقصائية بالـ ID، نستنتجها من إجمالي المباريات بعد 72 مباراة مجموعات.
+    group_completed = max(72 if completed >= 72 else 0, len([r for r in results if r.get('source') == 'groups']))
+    ko_total = max(sum(int(v or 0) for v in counts.values()), max(0, completed - group_completed))
+    try:
+        eliminated_count = max(16 + ko_total, _v841_all_eliminated_count() if '_v841_all_eliminated_count' in globals() else 0)
+    except Exception:
+        eliminated_count = 16 + ko_total
+    try:
+        phase_title = _v841_phase_title() if '_v841_phase_title' in globals() else 'دور 32'
+    except Exception:
+        phase_title = 'دور 32'
+    q_label, q_count, q_denom = _v842_current_round_summary(counts, ko_total)
+    lines = [
+        '📌 ملخص البطولة', f'آخر تحديث: {updated}', '',
+        f'📺 مباشر الآن: {int(live_count or 0)}',
+        f'✅ مباريات منتهية بالبطولة: {completed}',
+    ]
+    if ko_total > 0:
+        lines.append(f'🏁 مباريات إقصائية منتهية: {ko_total}/16')
+    lines += [
+        f'🥅 إجمالي الأهداف: {goals}',
+        f'🔥 أكبر نتيجة: {biggest}',
+        f'⚔️ أقوى هجوم: {atk}',
+        f'🛡️ أقوى دفاع: {dfn}',
+        f'🏆 المرحلة الحالية: {phase_title}',
+    ]
+    if q_label and q_denom:
+        lines.append(f'{q_label}: {q_count}/{q_denom}')
+    lines.append(f'🚪 مغادرو البطولة: {int(eliminated_count)}/48')
+    try:
+        final_rows = _v841_round_completed('final') if '_v841_round_completed' in globals() else []
+        if final_rows:
+            lines.append(f'🏆 بطل البطولة: {final_rows[0][1]}')
+    except Exception:
+        pass
+    return '\n'.join(lines).strip()
+
+
+def _v32_tournament_board_text(force=False):
+    return _v841_board_summary(force=force)
+
+
+def _v39_board_text(force=False):
+    return _v32_tournament_board_text(force=force)
+
+# حتى زر البورد بعد V84.1.9 يستخدم الملخص الجديد.
+def _v842_board_keyboard():
+    try:
+        return _v32_board_keyboard()
+    except Exception:
+        return InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ الرئيسية', callback_data='mainmenu|home')]])
+
+# إجبار إعادة توليد شجرة البطولة بعد إصلاح ربط الأعلام.
+try:
+    sigfile = globals().get('V8416_TREE_SIG_FILE', '')
+    if sigfile and os.path.exists(sigfile):
+        os.remove(sigfile)
+except Exception:
+    pass
+try:
+    treefile = globals().get('V8414_TREE_IMAGE_FILE', '')
+    if treefile and os.path.exists(treefile):
+        os.remove(treefile)
+except Exception:
+    pass
+
+# ==================== END V84.2 FLAGS + BOARD SUMMARY FIX — FAHAD ====================
