@@ -57437,5 +57437,454 @@ async def v32_team_needs_command(update: Update, context: ContextTypes.DEFAULT_T
 
 # ==================== END V84.0.7 LIVE + PENALTIES + NO PATH HARDENING — FAHAD ====================
 
+
+# ==================== V84.0.8 R32 ONLY FAST MODE — FAHAD ====================
+# اعتماد فهد النهائي الحالي:
+# - البطولة داخل البوت تبدأ من دور 32 فقط.
+# - لا نعتمد على مجموعات/تأهل/أفضل ثوالث/لوحة بطولة/إحصائيات عامة في التشغيل الحالي.
+# - المهم الآن: تصميم مباريات اليوم + مسابقات المصيف + مباشر خفيف عند الحاجة.
+# - ESPN لا يحدد لنا المباريات؛ فقط يحدّث النتيجة/البلنتيات إذا وُجدت.
+
+V8408_R32_FIXTURES = [
+    {'id':'R32-1','date':'28/06/2026','day':'الأحد','time':'10:00 م','team1':'جنوب أفريقيا','team2':'كندا','stage':'دور الـ32','note':'جنوب أفريقيا × كندا'},
+    {'id':'R32-2','date':'29/06/2026','day':'الإثنين','time':'8:00 م','team1':'البرازيل','team2':'اليابان','stage':'دور الـ32','note':'البرازيل × اليابان'},
+    {'id':'R32-3','date':'29/06/2026','day':'الإثنين','time':'11:30 م','team1':'ألمانيا','team2':'باراغواي','stage':'دور الـ32','note':'ألمانيا × باراغواي'},
+    {'id':'R32-4','date':'30/06/2026','day':'الثلاثاء','time':'4:00 فجراً','team1':'هولندا','team2':'المغرب','stage':'دور الـ32','note':'هولندا × المغرب'},
+    {'id':'R32-5','date':'30/06/2026','day':'الثلاثاء','time':'8:00 م','team1':'ساحل العاج','team2':'النرويج','stage':'دور الـ32','note':'ساحل العاج × النرويج'},
+    {'id':'R32-6','date':'01/07/2026','day':'الأربعاء','time':'12:00 منتصف الليل','team1':'فرنسا','team2':'السويد','stage':'دور الـ32','note':'فرنسا × السويد'},
+    {'id':'R32-7','date':'01/07/2026','day':'الأربعاء','time':'4:00 فجراً','team1':'المكسيك','team2':'الإكوادور','stage':'دور الـ32','note':'المكسيك × الإكوادور'},
+    {'id':'R32-8','date':'01/07/2026','day':'الأربعاء','time':'7:00 م','team1':'إنجلترا','team2':'الكونغو الديمقراطية','stage':'دور الـ32','note':'إنجلترا × الكونغو الديمقراطية'},
+    {'id':'R32-9','date':'01/07/2026','day':'الأربعاء','time':'11:00 م','team1':'بلجيكا','team2':'السنغال','stage':'دور الـ32','note':'بلجيكا × السنغال'},
+    {'id':'R32-10','date':'02/07/2026','day':'الخميس','time':'3:00 فجراً','team1':'الولايات المتحدة','team2':'البوسنة والهرسك','stage':'دور الـ32','note':'الولايات المتحدة × البوسنة والهرسك'},
+    {'id':'R32-11','date':'02/07/2026','day':'الخميس','time':'10:00 م','team1':'إسبانيا','team2':'النمسا','stage':'دور الـ32','note':'إسبانيا × النمسا'},
+    {'id':'R32-12','date':'03/07/2026','day':'الجمعة','time':'2:00 فجراً','team1':'البرتغال','team2':'كرواتيا','stage':'دور الـ32','note':'البرتغال × كرواتيا'},
+    {'id':'R32-13','date':'03/07/2026','day':'الجمعة','time':'6:00 صباحاً','team1':'سويسرا','team2':'الجزائر','stage':'دور الـ32','note':'سويسرا × الجزائر'},
+    {'id':'R32-14','date':'03/07/2026','day':'الجمعة','time':'9:00 م','team1':'أستراليا','team2':'مصر','stage':'دور الـ32','note':'أستراليا × مصر'},
+    {'id':'R32-15','date':'04/07/2026','day':'السبت','time':'1:00 فجراً','team1':'الأرجنتين','team2':'الرأس الأخضر','stage':'دور الـ32','note':'الأرجنتين × الرأس الأخضر'},
+    {'id':'R32-16','date':'04/07/2026','day':'السبت','time':'4:30 فجراً','team1':'كولومبيا','team2':'غانا','stage':'دور الـ32','note':'كولومبيا × غانا'},
+]
+
+# ثبّت دور 32 في قاموس المسابقات أيضًا حتى لا يرجع لأي placeholders.
+try:
+    V83_R32_FIXED = {m['id']: (m['team1'], m['team2']) for m in V8408_R32_FIXTURES}
+except Exception:
+    pass
+
+# جدول دور 32 فقط: لا مجموعات، لا مسار بطولة، لا R16 placeholders.
+def _v8408_all_fixtures_raw():
+    return [dict(m) for m in V8408_R32_FIXTURES]
+
+# اجعل كل منطق اليوم الرياضي يقرأ من دور 32 فقط.
+def _v8406_all_fixtures_raw():
+    return _v8408_all_fixtures_raw()
+
+
+def _v8408_sports_day_rows(date_str):
+    d = _v8406_norm_date(date_str)
+    nd = _v8406_date_shift(d, 1)
+    rows = []
+    for m in V8408_R32_FIXTURES:
+        try:
+            md = _v8406_norm_date(m.get('date'))
+            tm = m.get('time') or ''
+            if md == d and not _v8406_is_am_time(tm):
+                rows.append(dict(m))
+            elif md == nd and _v8406_is_am_time(tm):
+                rows.append(dict(m))
+        except Exception:
+            pass
+    rows = sorted(rows, key=_v8406_sports_sort_key)
+    for i, m in enumerate(rows):
+        m['v46_idx'] = str(i)
+        m['sports_day'] = d
+    return rows
+
+
+def _v8406_sports_day_rows(date_str):
+    return _v8408_sports_day_rows(date_str)
+
+# أي دالة قديمة تطلب مباريات تاريخ محدد تأخذ نفس اليوم الرياضي من جدول دور 32.
+def _fixtures_for_date(date):
+    return _v8408_sports_day_rows(date)
+
+def _v46_fixtures_for_date(d):
+    return _v8408_sports_day_rows(d)
+
+
+def _v8408_available_sports_dates():
+    vals = set()
+    for m in V8408_R32_FIXTURES:
+        md = _v8406_norm_date(m.get('date'))
+        if not md:
+            continue
+        if _v8406_is_am_time(m.get('time')):
+            vals.add(_v8406_date_shift(md, -1))
+        else:
+            vals.add(md)
+    return sorted(vals, key=lambda x: _date_key(x) if '_date_key' in globals() else x)
+
+
+def _v8406_available_sports_dates():
+    return _v8408_available_sports_dates()
+
+
+def _v8408_active_sports_date(now=None):
+    try:
+        now = now or (_v33_now_riyadh_dt() if '_v33_now_riyadh_dt' in globals() else (datetime.utcnow() + timedelta(hours=3)))
+    except Exception:
+        now = datetime.utcnow() + timedelta(hours=3)
+    try:
+        base = now.date()
+        # قبل 4 العصر تابع لليوم الرياضي السابق.
+        if int(now.hour) < 16:
+            base = base - timedelta(days=1)
+        d = base.strftime('%d/%m/%Y')
+    except Exception:
+        d = ''
+    try:
+        if d and _v8408_sports_day_rows(d):
+            return d
+        dates = _v8408_available_sports_dates()
+        target = _date_key(d) if '_date_key' in globals() else d
+        prev = None
+        for dd in dates:
+            try:
+                if (_date_key(dd) if '_date_key' in globals() else dd) <= target:
+                    prev = dd
+            except Exception:
+                pass
+        return prev or (dates[0] if dates else d)
+    except Exception:
+        return d
+
+
+def _v8406_active_sports_date(now=None):
+    return _v8408_active_sports_date(now)
+
+def _v29_active_fixture_date(now=None):
+    return _v8408_active_sports_date(now)
+
+def _v41_active_live_date(now=None):
+    return _v8408_active_sports_date(now)
+
+def _v40_active_live_date(now=None):
+    return _v8408_active_sports_date(now)
+
+def _v33_active_live_date(now=None):
+    return _v8408_active_sports_date(now)
+
+
+def _v8408_fixture_title(date):
+    d = _v8406_norm_date(date)
+    day = ''
+    for m in V8408_R32_FIXTURES:
+        if _v8406_norm_date(m.get('date')) == d and not _v8406_is_am_time(m.get('time')):
+            day = m.get('day') or ''
+            break
+    if not day:
+        for m in _v8408_sports_day_rows(d):
+            day = m.get('day') or ''
+            break
+    return f"{day} {d[:5]}".strip()
+
+
+def _v8406_fixture_title(date):
+    return _v8408_fixture_title(date)
+
+def _v26_fixture_title(date):
+    return _v8408_fixture_title(date)
+
+def _fixture_title(date):
+    return _v8408_fixture_title(date)
+
+
+def _v8408_team_pair_match(obj, fixture):
+    try:
+        t1 = fixture.get('team1') or ''
+        t2 = fixture.get('team2') or ''
+        a, b = _v8404_obj_team_pair(obj) if '_v8404_obj_team_pair' in globals() else ('','')
+        if not a or not b:
+            a = obj.get('team1') or obj.get('home_team') or obj.get('home') or ''
+            b = obj.get('team2') or obj.get('away_team') or obj.get('away') or ''
+        ak = _v83_team_key(a) if '_v83_team_key' in globals() else simple_key(a)
+        bk = _v83_team_key(b) if '_v83_team_key' in globals() else simple_key(b)
+        t1k = _v83_team_key(t1) if '_v83_team_key' in globals() else simple_key(t1)
+        t2k = _v83_team_key(t2) if '_v83_team_key' in globals() else simple_key(t2)
+        return (ak == t1k and bk == t2k) or (ak == t2k and bk == t1k)
+    except Exception:
+        return False
+
+
+def _v8408_cached_obj_for_fixture(m):
+    # كاش خفيف للعرض فقط، ولا نقبل نتيجة تخص مباراة ثانية.
+    for getter in ('_v33_get_cached_match_result', '_v43_get_cached_match_result'):
+        try:
+            fn = globals().get(getter)
+            if callable(fn):
+                obj = fn(m)
+                if isinstance(obj, dict) and _v8408_team_pair_match(obj, m):
+                    return _v8404_normalize_obj_order(obj, m.get('team1'), m.get('team2')) if '_v8404_normalize_obj_order' in globals() else obj
+        except Exception:
+            pass
+    try:
+        obj = _v8404_search_all_result_caches(m.get('team1'), m.get('team2'), m.get('id')) if '_v8404_search_all_result_caches' in globals() else None
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+    return None
+
+
+def _v8408_scores(obj):
+    if not isinstance(obj, dict):
+        return None
+    for a, b in [('score1','score2'), ('home_score','away_score'), ('s1','s2')]:
+        try:
+            if obj.get(a) is not None and obj.get(b) is not None:
+                return int(obj.get(a)), int(obj.get(b))
+        except Exception:
+            pass
+    try:
+        return _patch6_numeric_score(obj)
+    except Exception:
+        return None
+
+
+def _v8408_penalties(obj):
+    try:
+        p1 = _v8402_penalty_value(obj, 'penalty1', 'pen1', 'shootout1', 'p1') if '_v8402_penalty_value' in globals() else None
+        p2 = _v8402_penalty_value(obj, 'penalty2', 'pen2', 'shootout2', 'p2') if '_v8402_penalty_value' in globals() else None
+        if p1 is not None and p2 is not None:
+            return int(p1), int(p2)
+    except Exception:
+        pass
+    return None
+
+
+def _v8408_live_label(m):
+    t1 = _v83_canon_team(m.get('team1')) if '_v83_canon_team' in globals() else (canonical_team_name(m.get('team1')) or m.get('team1') or '')
+    t2 = _v83_canon_team(m.get('team2')) if '_v83_canon_team' in globals() else (canonical_team_name(m.get('team2')) or m.get('team2') or '')
+    obj = _v8408_cached_obj_for_fixture(m)
+    sc = _v8408_scores(obj)
+    if sc:
+        s1, s2 = sc
+        pen = _v8408_penalties(obj)
+        tail = ''
+        try:
+            if _v83_status_is_final(obj):
+                tail = ' ✅'
+        except Exception:
+            pass
+        if pen and s1 == s2:
+            return f"{tail or '✅'} {t1} {s1}-{s2} {t2} | ترجيح {pen[0]}-{pen[1]}".strip()
+        return f"{tail or '✅'} {t1} {s1}-{s2} {t2}".strip()
+    return f"⏳ {m.get('time','')} — {t1} × {t2}"
+
+
+def _v29_live_today_text(date_str=None):
+    active = _v8406_norm_date(date_str) if date_str else _v8408_active_sports_date()
+    rows = _v8408_sports_day_rows(active)
+    title = _v8408_fixture_title(active)
+    if not rows:
+        return '📺 مباشر الآن\n\nلا توجد مباريات في اليوم الرياضي الحالي من دور 32.'
+    lines = [f'📺 مباشر الآن — اليوم الرياضي {title}', 'المصدر: جدول دور 32 الثابت + نتائج ESPN إذا توفرت', '']
+    for m in rows:
+        lines.append(_v8408_live_label(m))
+    return '\n'.join(lines).strip()
+
+
+def _v29_live_today_keyboard(date_str=None):
+    active = _v8406_norm_date(date_str) if date_str else _v8408_active_sports_date()
+    rows_btn = []
+    code = _v46_date_code(active) if '_v46_date_code' in globals() else active.replace('/','')
+    rows_btn.append([InlineKeyboardButton('🔄 تحديث نتائج دور 32 لهذا اليوم من ESPN', callback_data=f'livefx|refreshday|{code}')])
+    matches = _v8408_sports_day_rows(active)
+    for idx, m in enumerate(matches):
+        rows_btn.append([InlineKeyboardButton(_v8408_live_label(m)[:62], callback_data=f'livefx|match|{code}|{idx}')])
+    if not matches:
+        rows_btn.append([InlineKeyboardButton('لا توجد مباريات', callback_data='noop')])
+    rows_btn.append([InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')])
+    return InlineKeyboardMarkup(rows_btn)
+
+
+def _v8408_refresh_sports_day_results(d, force=True):
+    updated = 0
+    dbg = []
+    for m in _v8408_sports_day_rows(d):
+        try:
+            obj = _v40_fetch_live_for_fixture(m, bool(force)) if '_v40_fetch_live_for_fixture' in globals() else None
+            if isinstance(obj, dict) and _v8408_scores(obj):
+                updated += 1
+                dbg.append(_v8408_live_label(m))
+            else:
+                dbg.append(f"لم يتم تحديث: {m.get('team1')} × {m.get('team2')}")
+        except Exception as e:
+            dbg.append(f"{m.get('team1')} × {m.get('team2')}: {str(e)[:70]}")
+    return updated, dbg
+
+
+def _v8406_refresh_sports_day_results(d, force=True):
+    return _v8408_refresh_sports_day_results(d, force)
+
+# تصميم مباريات اليوم: دور 32 فقط، بلا ESPN، وبمهلة قصيرة جداً.
+async def _v8406_send_matches_today(message, style='full'):
+    d = _v8408_active_sports_date()
+    rows = _v8408_sports_day_rows(d)
+    if not rows:
+        await message.reply_text('ما لقيت مباريات دور 32 لهذا اليوم الرياضي.', reply_markup=_public_main_reply_keyboard())
+        return
+    title = _v8408_fixture_title(d)
+    wait = await message.reply_text('⏳ جاري تصميم مباريات اليوم من جدول دور 32...')
+    try:
+        path = await asyncio.wait_for(asyncio.to_thread(_v8406_render_matches_image, title, rows, style), timeout=12)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        await send_photo_path(message, path, _v8406_matches_caption(title, rows))
+    except Exception as e:
+        try:
+            await wait.edit_text(_v8406_matches_text(title, rows, str(e)))
+        except Exception:
+            await message.reply_text(_v8406_matches_text(title, rows, str(e)), reply_markup=_public_main_reply_keyboard())
+
+async def _send_public_matches_today(message):
+    await _v8406_send_matches_today(message, 'full')
+
+async def matches_today_v31_full_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _v8406_send_matches_today(update.effective_message, 'full')
+
+async def matches_today_v31_clean_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _v8406_send_matches_today(update.effective_message, 'clean')
+
+# قائمة أبسط: الأشياء المهمة الآن فقط.
+def _public_main_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ['📅 مباريات اليوم', '📺 مباشر الآن'],
+            ['🏆 مسابقات المصيف', '📋 نتائج المباريات'],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder='اختر من القائمة',
+    )
+
+
+def _public_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('📅 مباريات اليوم', callback_data='mainmenu|today'), InlineKeyboardButton('📺 مباشر الآن', callback_data='mainmenu|live')],
+        [InlineKeyboardButton('🏆 مسابقات المصيف', callback_data='mainmenu|contests'), InlineKeyboardButton('📋 نتائج المباريات', callback_data='mainmenu|results')],
+    ])
+
+
+def _v8408_disabled_feature_text():
+    return (
+        'تم إلغاء لوحة البطولة ومسار التأهل والإحصائيات العامة من هذه النسخة ✅\n\n'
+        'المعتمد الآن:\n'
+        '📅 تصميم مباريات اليوم من دور 32\n'
+        '🏆 مسابقات المصيف\n'
+        '📺 مباشر الآن لتحديث نتائج دور 32 والبلنتيات فقط'
+    )
+
+# تحديث نص تعطيل الأقسام الثقيلة.
+def _v8407_disabled_feature_text():
+    return _v8408_disabled_feature_text()
+
+def _v8403_disabled_feature_text():
+    return _v8408_disabled_feature_text()
+
+# مسابقات المصيف: من ليس ضمن دور 32 خرج، ومن خسر في دور 32/بالبلنتيات خرج.
+def _v83_team_is_out(team):
+    k = _v83_team_key(team) if '_v83_team_key' in globals() else simple_key(team)
+    if not k:
+        return False
+    try:
+        r32 = set((_v83_team_key(t) if '_v83_team_key' in globals() else simple_key(t)) for pair in V83_R32_FIXED.values() for t in pair)
+        if k not in r32:
+            return True
+    except Exception:
+        pass
+    try:
+        out = _v83_eliminated_team_keys()
+        if k in out:
+            return True
+    except Exception:
+        pass
+    return False
+
+# راوتر سريع للردود النصية.
+_V8408_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if txt in {'📅 مباريات اليوم', 'مباريات اليوم'}:
+        await _v8406_send_matches_today(update.effective_message, 'full')
+        return
+    if txt in {'📺 مباشر الآن', 'بث مباشر', 'مباشر الآن'}:
+        await update.effective_message.reply_text(_v29_live_today_text(), reply_markup=_v29_live_today_keyboard())
+        return
+    if txt in {'🏆 لوحة البطولة','لوحة البطولة','🏁 سباق التأهل','✅❌ التأهل والمغادرة','🥉 أفضل الثوالث الآن','📊 إحصائيات البطولة','🏆 مسار البطولة','🏆 شجرة البطولة'}:
+        await update.effective_message.reply_text(_v8408_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+        return
+    if callable(_V8408_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V8408_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+# راوتر أزرار القائمة.
+_V8408_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    if data == 'mainmenu|home':
+        try:
+            await q.edit_message_text('اختر من القائمة:', reply_markup=_public_main_keyboard())
+        except Exception:
+            await q.message.reply_text('اختر من القائمة:', reply_markup=_public_main_reply_keyboard())
+        return
+    if data == 'mainmenu|today':
+        try:
+            await q.message.reply_text('⏳ جاري تجهيز تصميم مباريات اليوم...')
+        except Exception:
+            pass
+        await _v8406_send_matches_today(q.message, 'full')
+        return
+    if data == 'mainmenu|live':
+        try:
+            await q.edit_message_text(_v29_live_today_text(), reply_markup=_v29_live_today_keyboard())
+        except Exception:
+            await q.message.reply_text(_v29_live_today_text(), reply_markup=_v29_live_today_keyboard())
+        return
+    if any(x in data for x in ['board','path','bracket','tree','race','thirds','stats','status_home','how','calc','ko_menu','route']):
+        try:
+            await q.edit_message_text(_v8408_disabled_feature_text(), reply_markup=_public_main_keyboard())
+        except Exception:
+            await q.message.reply_text(_v8408_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+        return
+    if callable(_V8408_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V8408_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+# أوامر قديمة ثقيلة تصبح رسالة خفيفة.
+async def v32_tournament_board_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8408_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+async def v32_qualification_race_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8408_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+async def v32_qualification_pdf_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8408_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+async def v32_best_thirds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8408_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+async def v32_decisive_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8408_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+async def v32_team_needs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8408_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+# ==================== END V84.0.8 R32 ONLY FAST MODE — FAHAD ====================
+
 if __name__ == "__main__":
     main()
