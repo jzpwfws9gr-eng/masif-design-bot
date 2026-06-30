@@ -56136,5 +56136,172 @@ def _v83_winner_loser(match_id):
 # ==================== END V84.0.1 PENALTIES FIX PATCH ====================
 
 
+# ==================== V84.0.3 SAFE MENU PATCH: REMOVE QUALIFICATION PATH + TOURNAMENT BOARD ====================
+# طلب فهد: إلغاء مسار/سباق التأهل ولوحة البطولة بالكامل لأنها تسبب تعليق.
+# هذه الطبقة لا تلمس /start ولا نتائج المباريات ولا مباشر الآن ولا مسابقات المصيف ولا إصلاح البلنتيات.
+
+_V8403_DISABLED_TEXTS = {
+    '🏆 لوحة البطولة', '🏆 لوحة البطولة الآن',
+    '🏁 سباق التأهل', '🏁 سباق التاهل',
+    '✅ كيف تتأهل؟', 'كيف تتأهل؟', '✅ كيف تتأهل', 'كيف تتأهل',
+    '🧮 حاسبة التأهل', 'حاسبة التأهل',
+    '✅❌ التأهل والمغادرة', 'التأهل والمغادرة',
+    '✅ المتأهلون رسميًا', '❌ المستبعدون رسميًا',
+    '✅ المتأهلون لدور 32', '🚪 المغادرون من البطولة',
+    '🥉 أفضل الثوالث', '🥉 أفضل الثوالث الآن',
+    '🔥 مباريات الحسم', '🏟️ مواجهات دور الـ32',
+}
+
+_V8403_DISABLED_ACTIONS = {
+    'board', 'board_force',
+    'race', 'race_force',
+    'how_start', 'how_team', 'how',
+    'calc_start', 'calc_team', 'calc',
+    'qualified', 'qualified_force', 'eliminated', 'eliminated_force',
+    'thirds', 'thirds_force',
+    'decisive', 'decisive_force',
+    'r32', 'round32',
+    'status_home',
+}
+
+def _v8403_disabled_feature_text():
+    return (
+        'تم إلغاء لوحة البطولة ومسار التأهل مؤقتًا ✅\n\n'
+        'السبب: كانت تسبب ثقل/تعليق في البوت.\n'
+        'المتاح الآن: مباشر الآن، مباريات اليوم، المباريات القادمة، النتائج، الفانتزي، ومسابقات المصيف.'
+    )
+
+def _public_main_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ['📺 مباشر الآن', '📅 المباريات القادمة'],
+            ['📊 إحصائيات البطولة', '🗂️ أرشيف البطولة'],
+            ['🎮 فانتزي', '🏆 مسابقات المصيف'],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder='اكتب اسم منتخب أو اختر من القائمة',
+    )
+
+def _public_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('📺 مباشر الآن', callback_data='mainmenu|live'), InlineKeyboardButton('📅 المباريات القادمة', callback_data='mainmenu|fixtures')],
+        [InlineKeyboardButton('📊 إحصائيات البطولة', callback_data='v32|stats'), InlineKeyboardButton('🗂️ أرشيف البطولة', callback_data='v32|archive')],
+        [InlineKeyboardButton('🎮 فانتزي', callback_data='v32|fantasy_gate'), InlineKeyboardButton('🏆 مسابقات المصيف', callback_data='mainmenu|contests')],
+    ])
+
+def _v34_stats_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('📊 ترتيب المجموعات', callback_data='mainmenu|groups'), InlineKeyboardButton('🏆 هدافين البطولة', callback_data='mainmenu|scorers')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+def _v32_board_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ الرئيسية', callback_data='mainmenu|home')]])
+
+# لا نخلي هذه الأزرار القديمة تظهر كخيارات نهائية أو تدخل على وظائف ثقيلة.
+try:
+    V32_FINAL_MENU_LABELS.difference_update(_V8403_DISABLED_TEXTS)
+    V32_FINAL_MENU_LABELS.update({'📺 مباشر الآن','📅 المباريات القادمة','📊 إحصائيات البطولة','🗂️ أرشيف البطولة','🎮 فانتزي','🏆 مسابقات المصيف','القائمة','ستارت','ابدا','ابدأ'})
+except Exception:
+    pass
+try:
+    V83_NO_LONGER_MENU_TEXTS.update(_V8403_DISABLED_TEXTS)
+except Exception:
+    pass
+
+_V8403_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if txt in _V8403_DISABLED_TEXTS:
+        await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+        return
+    if callable(_V8403_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V8403_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+_V8403_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if txt in _V8403_DISABLED_TEXTS:
+        return await public_reply_menu_router(update, context)
+    if callable(_V8403_PREV_TEXT_STATE_ROUTER):
+        return await _V8403_PREV_TEXT_STATE_ROUTER(update, context)
+
+_V8403_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action in _V8403_DISABLED_ACTIONS:
+        try:
+            await q.answer('تم إلغاء هذا القسم لتخفيف البوت', show_alert=False)
+        except Exception:
+            pass
+        try:
+            await q.edit_message_text(_v8403_disabled_feature_text(), reply_markup=_public_main_keyboard())
+        except Exception:
+            try:
+                await q.message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+            except Exception:
+                pass
+        return
+    if callable(_V8403_PREV_V32_CALLBACK):
+        return await _V8403_PREV_V32_CALLBACK(update, context)
+
+_V8403_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    # حماية احتياطية لأي زر قديم من لوحة أو مسار التأهل.
+    if data in {'v32|board','v32|board_force','v32|race','v32|race_force','v32|how_start','v32|calc_start','v34|status_home'}:
+        try:
+            await q.answer('تم إلغاء هذا القسم لتخفيف البوت', show_alert=False)
+        except Exception:
+            pass
+        try:
+            await q.edit_message_text(_v8403_disabled_feature_text(), reply_markup=_public_main_keyboard())
+        except Exception:
+            try:
+                await q.message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+            except Exception:
+                pass
+        return
+    if callable(_V8403_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V8403_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+
+# أوامر السلاش القديمة الخاصة بلوحة/مسار التأهل تتحول لرسالة خفيفة بدل تشغيل الحسبة الثقيلة.
+async def v32_tournament_board_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+async def v32_qualification_race_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+async def v32_qualification_pdf_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+async def v32_best_thirds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+async def v32_decisive_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+async def v32_team_needs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+# ==================== END V84.0.3 SAFE MENU PATCH ====================
+
+
 if __name__ == "__main__":
     main()
