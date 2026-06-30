@@ -39196,5 +39196,104 @@ if 'v48_refresh_exit_probs_command' not in globals():
     v48_refresh_exit_probs_command = _v8411_disabled_admin_command
 # ==================== END V84.0.11 STARTUP FALLBACKS — FAHAD ====================
 
+
+# ==================== V84.0.11.2 DIRECT CONTEST ROUTER FIX — FAHAD ====================
+# زر مسابقات المصيف يفتح مباشرة بدون المرور بسلسلة راوترات قديمة.
+_V84112_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'mainmenu|contests':
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        if _v83_contest_authorized(update):
+            try:
+                await q.edit_message_text(_v83_contests_menu_text(), reply_markup=_v83_contests_menu_keyboard())
+            except Exception:
+                await q.message.reply_text(_v83_contests_menu_text(), reply_markup=_v83_contests_menu_keyboard())
+        else:
+            try:
+                context.user_data['v83_wait_contest_code'] = True
+            except Exception:
+                pass
+            try:
+                await q.edit_message_text(_v83_contests_gate_text())
+            except Exception:
+                await q.message.reply_text(_v83_contests_gate_text())
+        return
+    if callable(_V84112_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V84112_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+_V84112_PREV_PUBLIC_REPLY_MENU_ROUTER = globals().get('public_reply_menu_router')
+async def public_reply_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    if txt in {'🏆 مسابقات المصيف', 'مسابقات المصيف'}:
+        if _v83_contest_authorized(update):
+            await update.effective_message.reply_text(_v83_contests_menu_text(), reply_markup=_v83_contests_menu_keyboard())
+        else:
+            try:
+                context.user_data['v83_wait_contest_code'] = True
+            except Exception:
+                pass
+            await update.effective_message.reply_text(_v83_contests_gate_text())
+        return
+    if txt in ('🏆 مسابقة أبوخالد','مسابقة أبوخالد'):
+        if _v83_contest_authorized(update):
+            await _v83_send_contest_image(update.effective_message, 'abokhaled')
+        else:
+            try:
+                context.user_data['v83_wait_contest_code'] = True
+            except Exception:
+                pass
+            await update.effective_message.reply_text(_v83_contests_gate_text())
+        return
+    if txt in ('🏆 مسابقة أبوياسر','مسابقة أبوياسر'):
+        if _v83_contest_authorized(update):
+            await _v83_send_contest_image(update.effective_message, 'aboyaser')
+        else:
+            try:
+                context.user_data['v83_wait_contest_code'] = True
+            except Exception:
+                pass
+            await update.effective_message.reply_text(_v83_contests_gate_text())
+        return
+    if callable(_V84112_PREV_PUBLIC_REPLY_MENU_ROUTER):
+        return await _V84112_PREV_PUBLIC_REPLY_MENU_ROUTER(update, context)
+
+_V84112_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = normalize_name(getattr(update.effective_message, 'text', '') or '').strip()
+    except Exception:
+        txt = ''
+    try:
+        waiting = bool(context.user_data.get('v83_wait_contest_code'))
+    except Exception:
+        waiting = False
+    if waiting:
+        try:
+            context.user_data.pop('v83_wait_contest_code', None)
+        except Exception:
+            pass
+        if txt == V83_CONTEST_SECRET:
+            _v83_contest_authorize(update)
+            await update.effective_message.reply_text('✅ تم فتح مسابقات المصيف', reply_markup=_v83_contests_menu_keyboard())
+        else:
+            await update.effective_message.reply_text('❌ الرقم السري غير صحيح', reply_markup=_public_main_reply_keyboard())
+        return
+    if txt in {'🏆 مسابقات المصيف','مسابقات المصيف','🏆 مسابقة أبوخالد','مسابقة أبوخالد','🏆 مسابقة أبوياسر','مسابقة أبوياسر'}:
+        return await public_reply_menu_router(update, context)
+    if callable(_V84112_PREV_TEXT_STATE_ROUTER):
+        return await _V84112_PREV_TEXT_STATE_ROUTER(update, context)
+
+# ==================== END V84.0.11.2 DIRECT CONTEST ROUTER FIX — FAHAD ====================
+
 if __name__ == "__main__":
     main()
