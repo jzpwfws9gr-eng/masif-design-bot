@@ -3,6 +3,7 @@ import re
 import json
 import shutil
 import asyncio
+import hashlib
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 import difflib
@@ -57921,6 +57922,158 @@ async def v32_team_needs_command(update: Update, context: ContextTypes.DEFAULT_T
     await update.effective_message.reply_text(_v8408_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
 
 # ==================== END V84.0.8 R32 ONLY FAST MODE — FAHAD ====================
+
+
+# ==================== V84.0.10 ULTRA FAST CONTESTS — FAHAD ====================
+# الهدف: صورة المسابقة أهم شيء، بدون حسابات ثقيلة وقت الضغط.
+# لا يسحب ESPN عند فتح أبوخالد/أبوياسر، ولا يمر على مسارات البطولة.
+V8410_R32_MANUAL_OUT = {
+    'جنوب أفريقيا',
+    'اليابان',
+    'ألمانيا',
+}
+
+_V8410_CONTEST_CACHE = {}
+
+def _v8410_team_is_out_fast(team):
+    """حساب سريع جدًا لحالة المسابقة: خارج دور 32 = غادر، ومعروف خاسر في دور 32 = غادر."""
+    try:
+        k = _v83_team_key(team)
+    except Exception:
+        k = simple_key(team) if 'simple_key' in globals() else str(team or '').strip().lower()
+    if not k:
+        return False
+    try:
+        r32 = set(_v83_team_key(t) for pair in V83_R32_FIXED.values() for t in pair)
+        if r32 and k not in r32:
+            return True
+    except Exception:
+        pass
+    try:
+        manual_out = set(_v83_team_key(t) for t in V8410_R32_MANUAL_OUT)
+        if k in manual_out:
+            return True
+    except Exception:
+        pass
+    return False
+
+def _v8410_contest_signature(kind='abokhaled'):
+    rows = V83_ABOKHALED if kind == 'abokhaled' else V83_ABOYASER
+    parts = [str(kind)]
+    for r in rows:
+        team = _v83_canon_team(r.get('team',''))
+        player = str(r.get('player',''))
+        status = '1' if _v8410_team_is_out_fast(team) else '0'
+        parts.append(f"{r.get('name','')}|{team}|{player}|{status}")
+    raw = '\n'.join(parts)
+    return hashlib.md5(raw.encode('utf-8')).hexdigest()[:12]
+
+def _v8410_render_contest_fast(kind='abokhaled'):
+    sig = _v8410_contest_signature(kind)
+    cache_key = f"{kind}:{sig}"
+    old = _V8410_CONTEST_CACHE.get(cache_key)
+    if old and os.path.exists(old) and os.path.getsize(old) > 0:
+        return old
+    rows = V83_ABOKHALED if kind == 'abokhaled' else V83_ABOYASER
+    title = 'مسابقة أبوخالد' if kind == 'abokhaled' else 'مسابقة أبوياسر'
+    subtitle = 'ترشيحات الفوز بكأس العالم' if kind == 'abokhaled' else 'المشارك / المنتخب / اللاعب'
+    width = 1080
+    row_h = 58 if kind == 'abokhaled' else 62
+    height = max(1500, 260 + len(rows)*row_h + 150)
+    img, draw = _v83_contest_bg(width, height)
+    draw_text(draw, (width//2, 70), title, get_font(56), fill='#FFFFFF', max_width=900)
+    draw_text(draw, (width//2, 132), subtitle, get_font(32), fill='#FDE68A', max_width=880)
+    try:
+        updated = _v81_now_text() if '_v81_now_text' in globals() else (_now_riyadh_text() if '_now_riyadh_text' in globals() else '')
+    except Exception:
+        updated = ''
+    updated = str(updated).replace('/', ' ')
+    draw_text(draw, (width//2, 178), f'آخر تحديث: {updated}', get_font(24), fill='#CFE8FF', max_width=820)
+    x0, x1 = 60, width-60
+    y = 225
+    try:
+        rounded_rect(draw, (x0, y, x1, y+46), radius=18, fill='#0B2A5CCC', outline='#38BDF8', width=2)
+    except Exception:
+        draw.rounded_rectangle((x0, y, x1, y+46), radius=18, fill='#0B2A5C')
+    if kind == 'abokhaled':
+        draw_text(draw, (855, y+24), 'المشارك', get_font(24), fill='#FFFFFF')
+        draw_text(draw, (520, y+24), 'المنتخب', get_font(24), fill='#FFFFFF')
+        draw_text(draw, (215, y+24), 'الحالة', get_font(24), fill='#FFFFFF')
+    else:
+        draw_text(draw, (875, y+24), 'المشارك', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (575, y+24), 'المنتخب', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (300, y+24), 'اللاعب', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (115, y+24), 'الحالة', get_font(23), fill='#FFFFFF')
+    y += 56
+    for r in rows:
+        team = _v83_canon_team(r.get('team',''))
+        out = _v8410_team_is_out_fast(team)
+        fill = '#071A36DD' if not out else '#2B1018DD'
+        outline = '#1D9BFF88' if not out else '#FF4B4B99'
+        try:
+            rounded_rect(draw, (x0, y, x1, y+row_h-8), radius=16, fill=fill, outline=outline, width=1)
+        except Exception:
+            draw.rounded_rectangle((x0, y, x1, y+row_h-8), radius=16, fill=fill)
+        cy = y + (row_h-8)//2
+        name = str(r.get('name',''))
+        status = 'غادر' if out else 'مستمر'
+        status_color = '#FF5555' if out else '#A7F3D0'
+        if kind == 'abokhaled':
+            draw_text(draw, (855, cy), name, get_font(26), fill='#FFFFFF', max_width=380)
+            draw_text(draw, (520, cy), team, get_font(26), fill='#FDE68A', max_width=270)
+            draw_text(draw, (215, cy), status, get_font(24), fill=status_color, max_width=220)
+        else:
+            draw_text(draw, (875, cy), name, get_font(23), fill='#FFFFFF', max_width=330)
+            draw_text(draw, (575, cy), team, get_font(23), fill='#FDE68A', max_width=235)
+            draw_text(draw, (300, cy), str(r.get('player','')), get_font(23), fill='#E0F2FE', max_width=220)
+            draw_text(draw, (115, cy), status, get_font(22), fill=status_color, max_width=110)
+        if out:
+            try:
+                draw.line((x0+55, cy, x1-55, cy), fill='#FF5A5A', width=2)
+            except Exception:
+                pass
+        y += row_h
+    draw_text(draw, (width//2, height-60), 'مونديال المصيف 2026', get_font(28), fill='#FBBF24')
+    try:
+        ensure_generated_dir()
+    except Exception:
+        os.makedirs(globals().get('GENERATED_DIR','generated'), exist_ok=True)
+    out_dir = globals().get('GENERATED_DIR','generated')
+    out_path = os.path.join(out_dir, f"contest_{kind}_{sig}_fast.jpg")
+    img.save(out_path, quality=88, optimize=True)
+    _V8410_CONTEST_CACHE[cache_key] = out_path
+    return out_path
+
+async def _v83_send_contest_image(message, kind):
+    cap = '🏆 مسابقة أبوخالد' if kind == 'abokhaled' else '🏆 مسابقة أبوياسر'
+    wait_msg = None
+    try:
+        wait_msg = await message.reply_text(f'⏳ جاري تجهيز صورة {cap}...')
+    except Exception:
+        pass
+    try:
+        path = await asyncio.to_thread(_v8410_render_contest_fast, kind)
+        try:
+            if wait_msg:
+                await wait_msg.delete()
+        except Exception:
+            pass
+        try:
+            await send_photo_path(message, path, cap)
+        except Exception:
+            with open(path, 'rb') as f:
+                await message.reply_photo(photo=f, caption=cap)
+    except Exception as e:
+        txt = f'❌ تعذر تجهيز صورة {cap}\n{str(e)[:180]}'
+        try:
+            if wait_msg:
+                await wait_msg.edit_text(txt)
+            else:
+                await message.reply_text(txt)
+        except Exception:
+            pass
+
+# ==================== END V84.0.10 ULTRA FAST CONTESTS — FAHAD ====================
 
 if __name__ == "__main__":
     main()
