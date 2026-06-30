@@ -39127,5 +39127,74 @@ async def _v83_send_contest_image(message, kind):
 
 # ==================== END V84.0.10 ULTRA FAST CONTESTS — FAHAD ====================
 
+
+# ==================== V84.0.11 STARTUP FALLBACKS — FAHAD ====================
+# بعض نسخ المشروع القديمة كانت تسجل أوامر اختيارية بأسماء غير موجودة، وهذا يوقف البوت عند التشغيل.
+# هذه التعريفات الاحتياطية تمنع الكراش ولا تغيّر الميزات الأساسية الحالية.
+try:
+    V49_LIVE_REFRESH_INTERVAL
+except NameError:
+    V49_LIVE_REFRESH_INTERVAL = 120
+try:
+    V63_GOAL_ALERT_INTERVAL
+except NameError:
+    V63_GOAL_ALERT_INTERVAL = 45
+
+async def _v8411_disabled_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.effective_message.reply_text('هذا الأمر الإداري القديم معطل في النسخة السريعة الحالية ✅')
+    except Exception:
+        pass
+
+if 'v61_manual_scorers_command' not in globals():
+    v61_manual_scorers_command = _v8411_disabled_admin_command
+if 'v62_update_menu_command' not in globals():
+    v62_update_menu_command = _v8411_disabled_admin_command
+if 'v49_refresh_exit_probs_command' not in globals():
+    v49_refresh_exit_probs_command = _v8411_disabled_admin_command
+if 'v64_goal_alerts_status_command' not in globals():
+    v64_goal_alerts_status_command = _v8411_disabled_admin_command
+if 'v64_goal_alerts_test_command' not in globals():
+    v64_goal_alerts_test_command = _v8411_disabled_admin_command
+
+if 'v63_goal_alerts_command' not in globals():
+    async def v63_goal_alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            await update.effective_message.reply_text('تنبيهات المباراة غير مفعلة في النسخة السريعة الحالية ✅')
+        except Exception:
+            pass
+
+if 'v63_goal_alerts_callback' not in globals():
+    async def v63_goal_alerts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            q = update.callback_query
+            if q:
+                await q.answer('تنبيهات المباراة غير مفعلة حاليًا', show_alert=False)
+        except Exception:
+            pass
+
+if 'v63_goal_alerts_job' not in globals():
+    async def v63_goal_alerts_job(context: ContextTypes.DEFAULT_TYPE):
+        return None
+
+if 'v64_goal_alerts_log' not in globals():
+    def _v64_goal_alerts_log(msg):
+        try:
+            print('[goal_alerts]', msg)
+        except Exception:
+            pass
+
+if 'v74_post_init' not in globals():
+    async def v74_post_init(app):
+        return None
+
+if 'v64_post_init' not in globals():
+    async def v64_post_init(app):
+        return None
+
+if 'v48_refresh_exit_probs_command' not in globals():
+    v48_refresh_exit_probs_command = _v8411_disabled_admin_command
+# ==================== END V84.0.11 STARTUP FALLBACKS — FAHAD ====================
+
 if __name__ == "__main__":
     main()
