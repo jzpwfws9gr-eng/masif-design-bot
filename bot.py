@@ -55167,6 +55167,18 @@ def _v83_team_is_out(team):
     return False
 
 
+def _v83_contest_signature(kind='abokhaled'):
+    rows = V83_ABOKHALED if kind == 'abokhaled' else V83_ABOYASER
+    parts = [str(kind)]
+    for r in rows:
+        team = _v83_canon_team(r.get('team',''))
+        player = str(r.get('player',''))
+        status = '1' if _v83_team_is_out(team) else '0'
+        parts.append(f"{r.get('name','')}|{team}|{player}|{status}")
+    raw = '\n'.join(parts)
+    return hashlib.md5(raw.encode('utf-8')).hexdigest()[:12]
+
+
 def _v83_render_contest(kind='abokhaled'):
     rows = V83_ABOKHALED if kind == 'abokhaled' else V83_ABOYASER
     title = 'مسابقة أبوخالد' if kind == 'abokhaled' else 'مسابقة أبوياسر'
@@ -55235,19 +55247,43 @@ def _v83_render_contest(kind='abokhaled'):
         ensure_generated_dir()
     except Exception:
         os.makedirs(globals().get('GENERATED_DIR','generated'), exist_ok=True)
-    out_path = os.path.join(globals().get('GENERATED_DIR','generated'), f"contest_{kind}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.jpg")
-    img.save(out_path, quality=94)
+    sig = _v83_contest_signature(kind)
+    out_dir = globals().get('GENERATED_DIR','generated')
+    out_path = os.path.join(out_dir, f"contest_{kind}_{sig}.jpg")
+    if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+        return out_path
+    img.save(out_path, quality=90, optimize=True)
     return out_path
 
 
 async def _v83_send_contest_image(message, kind):
-    path = _v83_render_contest(kind)
     cap = '🏆 مسابقة أبوخالد' if kind == 'abokhaled' else '🏆 مسابقة أبوياسر'
+    wait_text = f'⏳ جاري تجهيز صورة {cap}...'
+    wait_msg = None
     try:
-        await send_photo_path(message, path, cap)
+        wait_msg = await message.reply_text(wait_text)
     except Exception:
-        with open(path, 'rb') as f:
-            await message.reply_photo(photo=f, caption=cap)
+        wait_msg = None
+    try:
+        path = await asyncio.to_thread(_v83_render_contest, kind)
+        try:
+            if wait_msg:
+                await wait_msg.delete()
+        except Exception:
+            pass
+        try:
+            await send_photo_path(message, path, cap)
+        except Exception:
+            with open(path, 'rb') as f:
+                await message.reply_photo(photo=f, caption=cap)
+    except Exception as e:
+        try:
+            if wait_msg:
+                await wait_msg.edit_text(f'❌ تعذر تجهيز صورة {cap}\n{e}')
+                return
+        except Exception:
+            pass
+        await message.reply_text(f'❌ تعذر تجهيز صورة {cap}\n{e}')
 
 
 # قوائم نهائية بعد V82: إزالة أفضل الثوالث ودور32 وإضافة الأدوار الإقصائية والمسابقات.
@@ -55410,7 +55446,7 @@ async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         try: await q.answer('جاري تجهيز التصميم...')
         except Exception: pass
-        await _v83_send_contest_image(q.message, 'aboyaser' if kind == 'aboyaser' else 'abokhaled')
+        asyncio.create_task(_v83_send_contest_image(q.message, 'aboyaser' if kind == 'aboyaser' else 'abokhaled'))
         return
     if callable(_V83_PREV_V32_CALLBACK):
         return await _V83_PREV_V32_CALLBACK(update, context)
