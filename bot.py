@@ -57698,23 +57698,57 @@ def _v8408_penalties(obj):
     return None
 
 
+
+# ==================== V84.0.14 LIVE ZERO-ZERO GUARD — FAHAD ====================
+# لا نعامل 0-0 كمباراة منتهية إذا الحالة Scheduled/Pre/غير مباشرة.
+def _v8414_obj_is_live(obj):
+    if not isinstance(obj, dict):
+        return False
+    st = str(obj.get('status') or obj.get('shortStatus') or obj.get('phase') or obj.get('state') or obj.get('status_detail') or '').lower()
+    return any(x in st for x in [
+        'live','in progress','in_progress','1st','2nd','first half','second half','halftime','half time','ht',
+        'مباشر','الشوط','استراحة','الدقيقة','دقيقة','جارية'
+    ])
+
+def _v8414_obj_is_scheduled(obj):
+    if not isinstance(obj, dict):
+        return False
+    st = str(obj.get('status') or obj.get('shortStatus') or obj.get('phase') or obj.get('state') or obj.get('status_detail') or '').lower()
+    return any(x in st for x in [
+        'scheduled','pre','not started','not_started','fixture','لم تبدأ','لم تبدا','قادمة','مجدولة','قبل المباراة'
+    ])
+
+def _v8414_score_is_real_for_live_label(obj, sc):
+    if not sc:
+        return False
+    try:
+        s1, s2 = int(sc[0]), int(sc[1])
+    except Exception:
+        return False
+    try:
+        if _v83_status_is_final(obj):
+            return True
+    except Exception:
+        pass
+    if _v8414_obj_is_live(obj):
+        return True
+    # أي نتيجة فيها أهداف نعرضها، لأن هذا يعني غالبًا أن المباراة بدأت/انتهت حتى لو الحالة ناقصة.
+    if (s1, s2) != (0, 0) and not _v8414_obj_is_scheduled(obj):
+        return True
+    return False
+
 def _v8408_live_label(m):
     t1 = _v83_canon_team(m.get('team1')) if '_v83_canon_team' in globals() else (canonical_team_name(m.get('team1')) or m.get('team1') or '')
     t2 = _v83_canon_team(m.get('team2')) if '_v83_canon_team' in globals() else (canonical_team_name(m.get('team2')) or m.get('team2') or '')
     obj = _v8408_cached_obj_for_fixture(m)
     sc = _v8408_scores(obj)
-    if sc:
+    if sc and _v8414_score_is_real_for_live_label(obj, sc):
         s1, s2 = sc
         pen = _v8408_penalties(obj)
-        tail = ''
-        try:
-            if _v83_status_is_final(obj):
-                tail = ' ✅'
-        except Exception:
-            pass
+        icon = '🔴' if _v8414_obj_is_live(obj) and not _v83_status_is_final(obj) else '✅'
         if pen and s1 == s2:
-            return f"{tail or '✅'} {t1} {s1}-{s2} {t2} | ترجيح {pen[0]}-{pen[1]}".strip()
-        return f"{tail or '✅'} {t1} {s1}-{s2} {t2}".strip()
+            return f"{icon} {t1} {s1}-{s2} {t2} | ترجيح {pen[0]}-{pen[1]}".strip()
+        return f"{icon} {t1} {s1}-{s2} {t2}".strip()
     return f"⏳ {m.get('time','')} — {t1} × {t2}"
 
 
@@ -57750,11 +57784,12 @@ def _v8408_refresh_sports_day_results(d, force=True):
     for m in _v8408_sports_day_rows(d):
         try:
             obj = _v40_fetch_live_for_fixture(m, bool(force)) if '_v40_fetch_live_for_fixture' in globals() else None
-            if isinstance(obj, dict) and _v8408_scores(obj):
+            sc = _v8408_scores(obj) if isinstance(obj, dict) else None
+            if isinstance(obj, dict) and sc and _v8414_score_is_real_for_live_label(obj, sc):
                 updated += 1
                 dbg.append(_v8408_live_label(m))
             else:
-                dbg.append(f"لم يتم تحديث: {m.get('team1')} × {m.get('team2')}")
+                dbg.append(f"قيد الانتظار: {m.get('time','')} — {m.get('team1')} × {m.get('team2')}")
         except Exception as e:
             dbg.append(f"{m.get('team1')} × {m.get('team2')}: {str(e)[:70]}")
     return updated, dbg
@@ -58074,6 +58109,465 @@ async def _v83_send_contest_image(message, kind):
             pass
 
 # ==================== END V84.0.10 ULTRA FAST CONTESTS — FAHAD ====================
+
+
+# ==================== V84.0.15 CONTEST ADMIN MANUAL + PENALTY FIX — FAHAD ====================
+# مبني على آخر نسخة شغالة: لا يلمس مباشر الآن ولا الإشعارات.
+# المطلوب هنا:
+# - هولندا خاسرة أمام المغرب بركلات الترجيح 2-3 بعد 1-1.
+# - المسابقات تقرأ الخاسر من النتائج المثبتة أولاً، ثم من كاش مباشر الآن إذا انتهت مباراة جديدة.
+# - خيار إخراج/إرجاع يدوي واضح داخل لوحة الإشراف.
+
+V8415_FIXED_R32_RESULTS = [
+    {'id': 'R32-1', 'team1': 'جنوب أفريقيا', 'team2': 'كندا', 'score1': 0, 'score2': 1, 'winner': 'كندا', 'loser': 'جنوب أفريقيا'},
+    {'id': 'R32-2', 'team1': 'البرازيل', 'team2': 'اليابان', 'score1': 2, 'score2': 1, 'winner': 'البرازيل', 'loser': 'اليابان'},
+    {'id': 'R32-3', 'team1': 'ألمانيا', 'team2': 'باراغواي', 'score1': 1, 'score2': 1, 'penalty1': 3, 'penalty2': 4, 'winner': 'باراغواي', 'loser': 'ألمانيا'},
+    # ترتيب المباراة: هولندا × المغرب. المغرب فاز 3-2، إذن تخزن 2-3.
+    {'id': 'R32-4', 'team1': 'هولندا', 'team2': 'المغرب', 'score1': 1, 'score2': 1, 'penalty1': 2, 'penalty2': 3, 'winner': 'المغرب', 'loser': 'هولندا'},
+]
+
+try:
+    V8410_R32_MANUAL_OUT.update({'هولندا'})
+except Exception:
+    V8410_R32_MANUAL_OUT = {'جنوب أفريقيا', 'اليابان', 'ألمانيا', 'هولندا'}
+
+V8415_CONTEST_MANUAL_FILE = os.path.join(globals().get('DATA_DIR', '.'), 'v8415_contest_manual.json')
+_V8415_CONTEST_CACHE = {}
+
+def _v8415_kind(kind):
+    return 'aboyaser' if str(kind) == 'aboyaser' else 'abokhaled'
+
+def _v8415_rows(kind='abokhaled'):
+    return V83_ABOYASER if _v8415_kind(kind) == 'aboyaser' else V83_ABOKHALED
+
+def _v8415_team_key(team):
+    try:
+        return _v83_team_key(team)
+    except Exception:
+        try:
+            return simple_key(team)
+        except Exception:
+            return str(team or '').strip().lower()
+
+def _v8415_load_manual():
+    try:
+        if os.path.exists(V8415_CONTEST_MANUAL_FILE):
+            with open(V8415_CONTEST_MANUAL_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+def _v8415_save_manual(data):
+    try:
+        os.makedirs(os.path.dirname(V8415_CONTEST_MANUAL_FILE) or '.', exist_ok=True)
+        with open(V8415_CONTEST_MANUAL_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data or {}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+_V8415_MANUAL = _v8415_load_manual()
+
+def _v8415_get_override(kind, idx):
+    try:
+        return str((_V8415_MANUAL.get(_v8415_kind(kind), {}) or {}).get(str(int(idx)), '') or '')
+    except Exception:
+        return ''
+
+def _v8415_set_override(kind, idx, state='out'):
+    kind = _v8415_kind(kind)
+    try:
+        idx = int(idx)
+    except Exception:
+        return False
+    bucket = _V8415_MANUAL.setdefault(kind, {})
+    if state == 'out':
+        bucket[str(idx)] = 'out'
+    else:
+        bucket.pop(str(idx), None)
+        if not bucket:
+            _V8415_MANUAL.pop(kind, None)
+    _v8415_save_manual(_V8415_MANUAL)
+    try:
+        _V8410_CONTEST_CACHE.clear()
+    except Exception:
+        pass
+    try:
+        _V8415_CONTEST_CACHE.clear()
+    except Exception:
+        pass
+    return True
+
+def _v8415_fixed_loser_keys():
+    out = set()
+    for r in V8415_FIXED_R32_RESULTS:
+        loser = r.get('loser')
+        if loser:
+            out.add(_v8415_team_key(loser))
+    return out
+
+def _v8415_live_loser_keys():
+    out = set()
+    try:
+        fixtures = list(globals().get('V8408_R32_FIXTURES', []))
+    except Exception:
+        fixtures = []
+    for m in fixtures:
+        try:
+            obj = _v8408_cached_obj_for_fixture(m) if '_v8408_cached_obj_for_fixture' in globals() else None
+            if not isinstance(obj, dict):
+                continue
+            try:
+                final = bool(_v83_status_is_final(obj))
+            except Exception:
+                st = str(obj.get('status') or obj.get('shortStatus') or obj.get('state') or '').lower()
+                final = any(x in st for x in ['final', 'full time', 'complete', 'completed', 'انتهت', 'انتهى'])
+            if not final:
+                continue
+            t1 = _v83_canon_team(m.get('team1')) if '_v83_canon_team' in globals() else m.get('team1')
+            t2 = _v83_canon_team(m.get('team2')) if '_v83_canon_team' in globals() else m.get('team2')
+            sc = _v8408_scores(obj) if '_v8408_scores' in globals() else None
+            if not sc:
+                continue
+            s1, s2 = int(sc[0]), int(sc[1])
+            if s1 > s2:
+                out.add(_v8415_team_key(t2))
+            elif s2 > s1:
+                out.add(_v8415_team_key(t1))
+            else:
+                pen = _v8408_penalties(obj) if '_v8408_penalties' in globals() else None
+                if pen:
+                    p1, p2 = int(pen[0]), int(pen[1])
+                    if p1 > p2:
+                        out.add(_v8415_team_key(t2))
+                    elif p2 > p1:
+                        out.add(_v8415_team_key(t1))
+                else:
+                    # إذا الكاش يملك winner/loser جاهز نستخدمه بدل التخمين.
+                    loser = obj.get('loser') or obj.get('loser_team')
+                    if loser:
+                        out.add(_v8415_team_key(loser))
+        except Exception:
+            pass
+    return out
+
+def _v8410_team_is_out_fast(team):
+    """النسخة السريعة المعتمدة للمسابقات: ثابت + مباشر منتهي + خارج دور 32."""
+    k = _v8415_team_key(team)
+    if not k:
+        return False
+    try:
+        r32 = set(_v8415_team_key(t) for pair in V83_R32_FIXED.values() for t in pair)
+        if r32 and k not in r32:
+            return True
+    except Exception:
+        pass
+    try:
+        if k in _v8415_fixed_loser_keys():
+            return True
+    except Exception:
+        pass
+    try:
+        if k in _v8415_live_loser_keys():
+            return True
+    except Exception:
+        pass
+    try:
+        manual_out = set(_v8415_team_key(t) for t in V8410_R32_MANUAL_OUT)
+        if k in manual_out:
+            return True
+    except Exception:
+        pass
+    return False
+
+def _v8415_row_is_out(kind, idx, team):
+    if _v8415_get_override(kind, idx) == 'out':
+        return True
+    return _v8410_team_is_out_fast(team)
+
+def _v8410_contest_signature(kind='abokhaled'):
+    kind = _v8415_kind(kind)
+    rows = _v8415_rows(kind)
+    parts = [kind, json.dumps(_V8415_MANUAL, ensure_ascii=False, sort_keys=True)]
+    try:
+        parts.append('|'.join(sorted(_v8415_fixed_loser_keys())))
+        parts.append('|'.join(sorted(_v8415_live_loser_keys())))
+    except Exception:
+        pass
+    for idx, r in enumerate(rows):
+        team = _v83_canon_team(r.get('team',''))
+        player = str(r.get('player',''))
+        status = '1' if _v8415_row_is_out(kind, idx, team) else '0'
+        parts.append(f"{idx}|{r.get('name','')}|{team}|{player}|{status}|{_v8415_get_override(kind, idx)}")
+    raw = '\n'.join(parts)
+    return hashlib.md5(raw.encode('utf-8')).hexdigest()[:12]
+
+def _v8410_render_contest_fast(kind='abokhaled'):
+    kind = _v8415_kind(kind)
+    sig = _v8410_contest_signature(kind)
+    cache_key = f"{kind}:{sig}"
+    old = _V8415_CONTEST_CACHE.get(cache_key) or (globals().get('_V8410_CONTEST_CACHE', {}) or {}).get(cache_key)
+    if old and os.path.exists(old) and os.path.getsize(old) > 0:
+        return old
+    rows = _v8415_rows(kind)
+    title = 'مسابقة أبوخالد' if kind == 'abokhaled' else 'مسابقة أبوياسر'
+    subtitle = 'ترشيحات الفوز بكأس العالم' if kind == 'abokhaled' else 'المشارك / المنتخب / اللاعب'
+    width = 1080
+    row_h = 58 if kind == 'abokhaled' else 62
+    height = max(1500, 260 + len(rows)*row_h + 150)
+    img, draw = _v83_contest_bg(width, height)
+    draw_text(draw, (width//2, 70), title, get_font(56), fill='#FFFFFF', max_width=900)
+    draw_text(draw, (width//2, 132), subtitle, get_font(32), fill='#FDE68A', max_width=880)
+    try:
+        updated = _v81_now_text() if '_v81_now_text' in globals() else (_now_riyadh_text() if '_now_riyadh_text' in globals() else '')
+    except Exception:
+        updated = ''
+    updated = str(updated).replace('/', ' ')
+    draw_text(draw, (width//2, 178), f'آخر تحديث: {updated}', get_font(24), fill='#CFE8FF', max_width=820)
+    x0, x1 = 60, width-60
+    y = 225
+    try:
+        rounded_rect(draw, (x0, y, x1, y+46), radius=18, fill='#0B2A5CCC', outline='#38BDF8', width=2)
+    except Exception:
+        draw.rounded_rectangle((x0, y, x1, y+46), radius=18, fill='#0B2A5C')
+    if kind == 'abokhaled':
+        draw_text(draw, (855, y+24), 'المشارك', get_font(24), fill='#FFFFFF')
+        draw_text(draw, (520, y+24), 'المنتخب', get_font(24), fill='#FFFFFF')
+        draw_text(draw, (215, y+24), 'الحالة', get_font(24), fill='#FFFFFF')
+    else:
+        draw_text(draw, (875, y+24), 'المشارك', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (575, y+24), 'المنتخب', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (300, y+24), 'اللاعب', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (115, y+24), 'الحالة', get_font(23), fill='#FFFFFF')
+    y += 56
+    for idx, r in enumerate(rows):
+        team = _v83_canon_team(r.get('team',''))
+        out = _v8415_row_is_out(kind, idx, team)
+        fill = '#071A36DD' if not out else '#2B1018DD'
+        outline = '#1D9BFF88' if not out else '#FF4B4B99'
+        try:
+            rounded_rect(draw, (x0, y, x1, y+row_h-8), radius=16, fill=fill, outline=outline, width=1)
+        except Exception:
+            draw.rounded_rectangle((x0, y, x1, y+row_h-8), radius=16, fill=fill)
+        cy = y + (row_h-8)//2
+        name = str(r.get('name',''))
+        status = 'غادر' if out else 'مستمر'
+        status_color = '#FF5555' if out else '#A7F3D0'
+        if kind == 'abokhaled':
+            draw_text(draw, (855, cy), name, get_font(26), fill='#FFFFFF', max_width=380)
+            draw_text(draw, (520, cy), team, get_font(26), fill='#FDE68A', max_width=270)
+            draw_text(draw, (215, cy), status, get_font(24), fill=status_color, max_width=220)
+        else:
+            draw_text(draw, (875, cy), name, get_font(23), fill='#FFFFFF', max_width=330)
+            draw_text(draw, (575, cy), team, get_font(23), fill='#FDE68A', max_width=235)
+            draw_text(draw, (300, cy), str(r.get('player','')), get_font(23), fill='#E0F2FE', max_width=220)
+            draw_text(draw, (115, cy), status, get_font(22), fill=status_color, max_width=110)
+        if out:
+            try:
+                draw.line((x0+55, cy, x1-55, cy), fill='#FF5A5A', width=2)
+            except Exception:
+                pass
+        y += row_h
+    draw_text(draw, (width//2, height-60), 'مونديال المصيف 2026', get_font(28), fill='#FBBF24')
+    try:
+        ensure_generated_dir()
+    except Exception:
+        os.makedirs(globals().get('GENERATED_DIR','generated'), exist_ok=True)
+    out_dir = globals().get('GENERATED_DIR','generated')
+    out_path = os.path.join(out_dir, f"contest_{kind}_{sig}_fast.jpg")
+    img.save(out_path, quality=88, optimize=True)
+    _V8415_CONTEST_CACHE[cache_key] = out_path
+    try:
+        _V8410_CONTEST_CACHE[cache_key] = out_path
+    except Exception:
+        pass
+    return out_path
+
+def _v8415_manage_title(kind):
+    return 'مسابقة أبوخالد' if _v8415_kind(kind) == 'abokhaled' else 'مسابقة أبوياسر'
+
+def _v8415_manage_text(kind):
+    kind = _v8415_kind(kind)
+    rows = _v8415_rows(kind)
+    manual = []
+    for idx, r in enumerate(rows):
+        if _v8415_get_override(kind, idx) == 'out':
+            manual.append(f"{r.get('name','')} — {r.get('team','')}")
+    lines = [f'🛠️ إدارة {_v8415_manage_title(kind)}', '', f'المُستبعدين يدويًا: {len(manual)}']
+    if manual:
+        lines.append('')
+        lines.extend('• ' + x for x in manual[:10])
+        if len(manual) > 10:
+            lines.append(f'... و {len(manual)-10} أكثر')
+    lines.append('')
+    lines.append('اختر الإجراء:')
+    return '\n'.join(lines)
+
+def _v8415_manage_keyboard(kind):
+    kind = _v8415_kind(kind)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('🖼️ عرض الصورة', callback_data=f'v32adm|contest|{kind}')],
+        [InlineKeyboardButton('➖ استبعاد مشارك يدويًا', callback_data=f'v32adm|contest_pick|{kind}|out')],
+        [InlineKeyboardButton('♻️ إرجاع مشارك تلقائي', callback_data=f'v32adm|contest_pick|{kind}|auto')],
+        [InlineKeyboardButton('📋 قائمة المستبعدين يدويًا', callback_data=f'v32adm|contest_manual_list|{kind}')],
+        [InlineKeyboardButton('⬅️ رجوع للإشراف', callback_data='v32adm|home')],
+    ])
+
+def _v8415_pick_text(kind, mode):
+    if mode == 'auto':
+        return f'♻️ اختر من تريد إرجاعه للحساب التلقائي\n{_v8415_manage_title(kind)}'
+    return f'➖ اختر المشارك الذي تريد استبعاده يدويًا\n{_v8415_manage_title(kind)}'
+
+def _v8415_pick_keyboard(kind, mode):
+    kind = _v8415_kind(kind)
+    rows = _v8415_rows(kind)
+    if mode == 'auto':
+        items = [(i, r) for i, r in enumerate(rows) if _v8415_get_override(kind, i) == 'out']
+    else:
+        items = list(enumerate(rows))
+    kb = []
+    line = []
+    for idx, r in items:
+        label = str(r.get('name',''))[:23]
+        line.append(InlineKeyboardButton(label, callback_data=f'v32adm|contest_set|{kind}|{mode}|{idx}'))
+        if len(line) == 2:
+            kb.append(line); line = []
+    if line:
+        kb.append(line)
+    if not kb:
+        kb.append([InlineKeyboardButton('لا يوجد أسماء هنا', callback_data=f'v32adm|contest_manage|{kind}')])
+    kb.append([InlineKeyboardButton('⬅️ رجوع', callback_data=f'v32adm|contest_manage|{kind}')])
+    return InlineKeyboardMarkup(kb)
+
+def _v8415_manual_list_text(kind):
+    kind = _v8415_kind(kind)
+    rows = _v8415_rows(kind)
+    lines = [f'📋 المستبعدون يدويًا — {_v8415_manage_title(kind)}', '']
+    c = 0
+    for idx, r in enumerate(rows):
+        if _v8415_get_override(kind, idx) == 'out':
+            c += 1
+            lines.append(f"{c}- {r.get('name','')} — {r.get('team','')}")
+    if c == 0:
+        lines.append('لا يوجد مستبعدون يدويًا.')
+    return '\n'.join(lines)
+
+_V8415_PREV_ADMIN_KEYBOARD = globals().get('_v38e_admin_keyboard')
+def _v38e_admin_keyboard():
+    try:
+        kb = _V8415_PREV_ADMIN_KEYBOARD() if callable(_V8415_PREV_ADMIN_KEYBOARD) else InlineKeyboardMarkup([])
+        rows = [list(r) for r in (getattr(kb, 'inline_keyboard', None) or [])]
+    except Exception:
+        rows = []
+    def exists(cb):
+        return any(str(getattr(btn, 'callback_data', '') or '') == cb for row in rows for btn in row)
+    if not exists('v32adm|contest_manage|abokhaled'):
+        rows.append([
+            InlineKeyboardButton('🛠️ إدارة أبوخالد', callback_data='v32adm|contest_manage|abokhaled'),
+            InlineKeyboardButton('🛠️ إدارة أبوياسر', callback_data='v32adm|contest_manage|aboyaser'),
+        ])
+    return InlineKeyboardMarkup(rows)
+
+_V8415_PREV_ADMIN_CALLBACK = globals().get('v32_admin_callback')
+async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action.startswith('contest'):
+        if not is_admin_user(update):
+            try:
+                await q.answer('للمشرف فقط', show_alert=True)
+            except Exception:
+                pass
+            return
+    if action == 'home':
+        if not is_admin_user(update):
+            try:
+                await q.answer('للمشرف فقط', show_alert=True)
+            except Exception:
+                pass
+            return
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        try:
+            await q.edit_message_text('لوحة الإشراف:', reply_markup=_v38e_admin_keyboard())
+        except Exception:
+            await q.message.reply_text('لوحة الإشراف:', reply_markup=_v38e_admin_keyboard())
+        return
+    if action == 'contest_manage':
+        kind = _v8415_kind(parts[2] if len(parts) > 2 else 'abokhaled')
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        try:
+            await q.edit_message_text(_v8415_manage_text(kind), reply_markup=_v8415_manage_keyboard(kind))
+        except Exception:
+            await q.message.reply_text(_v8415_manage_text(kind), reply_markup=_v8415_manage_keyboard(kind))
+        return
+    if action == 'contest_pick':
+        kind = _v8415_kind(parts[2] if len(parts) > 2 else 'abokhaled')
+        mode = parts[3] if len(parts) > 3 else 'out'
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        try:
+            await q.edit_message_text(_v8415_pick_text(kind, mode), reply_markup=_v8415_pick_keyboard(kind, mode))
+        except Exception:
+            await q.message.reply_text(_v8415_pick_text(kind, mode), reply_markup=_v8415_pick_keyboard(kind, mode))
+        return
+    if action == 'contest_set':
+        kind = _v8415_kind(parts[2] if len(parts) > 2 else 'abokhaled')
+        mode = parts[3] if len(parts) > 3 else 'out'
+        try:
+            idx = int(parts[4])
+        except Exception:
+            idx = -1
+        rows = _v8415_rows(kind)
+        if idx < 0 or idx >= len(rows):
+            try:
+                await q.answer('اختيار غير صحيح', show_alert=True)
+            except Exception:
+                pass
+            return
+        _v8415_set_override(kind, idx, 'out' if mode == 'out' else None)
+        row = rows[idx]
+        if mode == 'out':
+            msg = f"✅ تم استبعاد {row.get('name','')} يدويًا"
+        else:
+            msg = f"✅ تم إرجاع {row.get('name','')} للحساب التلقائي"
+        try:
+            await q.answer('تم الحفظ')
+        except Exception:
+            pass
+        try:
+            await q.edit_message_text(msg + '\n\n' + _v8415_manage_text(kind), reply_markup=_v8415_manage_keyboard(kind))
+        except Exception:
+            await q.message.reply_text(msg + '\n\n' + _v8415_manage_text(kind), reply_markup=_v8415_manage_keyboard(kind))
+        return
+    if action == 'contest_manual_list':
+        kind = _v8415_kind(parts[2] if len(parts) > 2 else 'abokhaled')
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ رجوع', callback_data=f'v32adm|contest_manage|{kind}')]])
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        try:
+            await q.edit_message_text(_v8415_manual_list_text(kind), reply_markup=kb)
+        except Exception:
+            await q.message.reply_text(_v8415_manual_list_text(kind), reply_markup=kb)
+        return
+    if callable(_V8415_PREV_ADMIN_CALLBACK):
+        return await _V8415_PREV_ADMIN_CALLBACK(update, context)
+
+# ==================== END V84.0.15 CONTEST ADMIN MANUAL + PENALTY FIX — FAHAD ====================
 
 if __name__ == "__main__":
     main()
