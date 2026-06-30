@@ -56303,5 +56303,297 @@ async def v32_team_needs_command(update: Update, context: ContextTypes.DEFAULT_T
 # ==================== END V84.0.3 SAFE MENU PATCH ====================
 
 
+# ==================== V84.0.4 CONTEST PENALTY CACHE BRIDGE — FAHAD ====================
+# المشكلة التي ظهرت: النص يعرض "باراغواي فاز بركلات الترجيح" لكن صورة المسابقة
+# بقيت تعتبر ألمانيا مستمرة. السبب أن المسابقة كانت تبحث عن نتيجة المباراة بمفتاح R32-3
+# بينما نتيجة ESPN قد تُحفظ بمفتاح الفريقين/espn_event أو في snapshot مختصر لا ينقل winner/penalties.
+# هذا الجسر يجعل المسابقة تبحث في كل كاش النتائج بمفاتيح الآيدي + الفريقين، ويُبقي البلنتيات للفائز/الخاسر.
+
+_V8404_PREV_V83_RESULT_OBJ_FOR_MATCH_ID = globals().get('_v83_result_obj_for_match_id')
+_V8404_PREV_V81_MINIMAL_OBJ = globals().get('_v81_minimal_obj')
+_V8404_PREV_V83_WINNER_LOSER = globals().get('_v83_winner_loser')
+
+def _v8404_load_json_safe(path, default=None):
+    default = {} if default is None else default
+    try:
+        if '_v41_load_json_file' in globals():
+            return _v41_load_json_file(path, default)
+    except Exception:
+        pass
+    try:
+        if '_json_load_file' in globals():
+            return _json_load_file(path, default)
+    except Exception:
+        pass
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f) or default
+    except Exception:
+        pass
+    return default
+
+
+def _v8404_team_key_name(name):
+    try:
+        return _v83_team_key(name)
+    except Exception:
+        try:
+            return simple_key(canonical_team_name(name) or normalize_name(name) or '')
+        except Exception:
+            return str(name or '').strip().lower()
+
+
+def _v8404_obj_team_pair(obj):
+    if not isinstance(obj, dict):
+        return '', ''
+    keys1 = ['team1','home_team','homeTeam','home','teamA','competitor1','name1']
+    keys2 = ['team2','away_team','awayTeam','away','teamB','competitor2','name2']
+    t1 = t2 = ''
+    for k in keys1:
+        v = obj.get(k)
+        if isinstance(v, dict):
+            v = v.get('name') or v.get('displayName') or v.get('shortDisplayName') or v.get('team')
+        if v:
+            t1 = v; break
+    for k in keys2:
+        v = obj.get(k)
+        if isinstance(v, dict):
+            v = v.get('name') or v.get('displayName') or v.get('shortDisplayName') or v.get('team')
+        if v:
+            t2 = v; break
+    return t1 or '', t2 or ''
+
+
+def _v8404_pairs_match(obj, t1, t2):
+    try:
+        a, b = _v8404_obj_team_pair(obj)
+        if not a or not b:
+            return False
+        ak, bk = _v8404_team_key_name(a), _v8404_team_key_name(b)
+        t1k, t2k = _v8404_team_key_name(t1), _v8404_team_key_name(t2)
+        return (ak == t1k and bk == t2k) or (ak == t2k and bk == t1k)
+    except Exception:
+        return False
+
+
+def _v8404_normalize_obj_order(obj, t1, t2):
+    """أعد ترتيب score/penalty حسب ترتيب fixture t1,t2 إذا كان الكاش محفوظ بالعكس."""
+    if not isinstance(obj, dict):
+        return obj
+    out = dict(obj)
+    a, b = _v8404_obj_team_pair(out)
+    try:
+        ak, bk = _v8404_team_key_name(a), _v8404_team_key_name(b)
+        t1k, t2k = _v8404_team_key_name(t1), _v8404_team_key_name(t2)
+        if ak == t2k and bk == t1k:
+            # الكاش بالعكس: بدّل score1/score2 والبلنتيات فقط، واترك winner كما هو اسم.
+            for x, y in [('score1','score2'), ('home_score','away_score'), ('s1','s2'), ('penalty1','penalty2'), ('pen1','pen2'), ('shootout1','shootout2'), ('p1','p2')]:
+                if x in out or y in out:
+                    out[x], out[y] = out.get(y), out.get(x)
+            out['team1'], out['team2'] = t1, t2
+        else:
+            out.setdefault('team1', t1)
+            out.setdefault('team2', t2)
+    except Exception:
+        out.setdefault('team1', t1)
+        out.setdefault('team2', t2)
+    return out
+
+
+def _v8404_score_ok(obj):
+    try:
+        return bool(_v83_numeric_scores(obj))
+    except Exception:
+        try:
+            return bool(_patch6_numeric_score(obj))
+        except Exception:
+            return False
+
+
+def _v8404_candidate_from_cache(cache, t1, t2, match_id=None):
+    if not isinstance(cache, dict):
+        return None
+    # مفاتيح مباشرة محتملة
+    direct_keys = []
+    try:
+        direct_keys.append(f'id:{match_id}')
+        direct_keys.append(str(match_id))
+    except Exception:
+        pass
+    try:
+        t1s = simple_key(t1); t2s = simple_key(t2)
+        direct_keys.extend([
+            f'{t1s}|{t2s}', f'{t2s}|{t1s}',
+            f'29/06/2026|{t1s}|{t2s}', f'29/06/2026|{t2s}|{t1s}',
+        ])
+    except Exception:
+        pass
+    for k in direct_keys:
+        try:
+            obj = cache.get(k)
+            if isinstance(obj, dict) and _v8404_score_ok(obj):
+                return _v8404_normalize_obj_order(obj, t1, t2)
+        except Exception:
+            pass
+    # بحث كامل حسب أسماء الفريقين داخل الكاش
+    best = None
+    for k, obj in list(cache.items()):
+        if not isinstance(obj, dict) or not _v8404_score_ok(obj):
+            continue
+        try:
+            keytxt = str(k).lower()
+            if match_id and str(match_id).lower() in keytxt:
+                best = obj
+            if _v8404_pairs_match(obj, t1, t2):
+                best = obj
+        except Exception:
+            pass
+    return _v8404_normalize_obj_order(best, t1, t2) if isinstance(best, dict) else None
+
+
+def _v8404_search_all_result_caches(t1, t2, match_id=None):
+    paths = []
+    for nm, fallback in [
+        ('RESULT_MATCH_CACHE_FILE', 'match_results_by_fixture_cache.json'),
+        ('MATCH_RESULTS_CACHE_FILE', 'match_results_cache.json'),
+        ('V316_RESULTS_CACHE_FILE', 'match_results_cache.json'),
+    ]:
+        try:
+            p = globals().get(nm) or fallback
+            if p and p not in paths:
+                paths.append(p)
+        except Exception:
+            pass
+    for path in paths:
+        obj = _v8404_candidate_from_cache(_v8404_load_json_safe(path, {}), t1, t2, match_id)
+        if isinstance(obj, dict) and _v8404_score_ok(obj):
+            return obj
+    # snapshot: مهم نقرأ كامل rec/obj وليس المختصر فقط
+    try:
+        snap = _v81_load_snapshot() if '_v81_load_snapshot' in globals() else {}
+        for rec in (snap.get('matches') or []):
+            if not isinstance(rec, dict):
+                continue
+            for obj in [rec.get('obj'), rec, rec.get('fixture')]:
+                if isinstance(obj, dict):
+                    candidate = dict(obj)
+                    candidate.setdefault('team1', rec.get('team1') or (rec.get('fixture') or {}).get('team1'))
+                    candidate.setdefault('team2', rec.get('team2') or (rec.get('fixture') or {}).get('team2'))
+                    if _v8404_pairs_match(candidate, t1, t2) and _v8404_score_ok(candidate):
+                        return _v8404_normalize_obj_order(candidate, t1, t2)
+    except Exception:
+        pass
+    return None
+
+
+def _v81_minimal_obj(obj, m=None):
+    # حافظ على وظيفة النسخة السابقة، لكن لا تحذف حقول البلنتيات والفائز من snapshot.
+    base = _V8404_PREV_V81_MINIMAL_OBJ(obj, m) if callable(_V8404_PREV_V81_MINIMAL_OBJ) else {}
+    try:
+        obj = obj if isinstance(obj, dict) else {}
+        for k in ('winner','winner_team','winnerName','winnerTeam','qualified','advance_team','advanced_team','win_method',
+                  'penalty1','penalty2','pen1','pen2','shootout1','shootout2','p1','p2',
+                  'needs_penalty_winner'):
+            if k in obj and obj.get(k) not in (None, ''):
+                base[k] = obj.get(k)
+    except Exception:
+        pass
+    return base
+
+
+def _v83_result_obj_for_match_id(match_id):
+    base = _v83_fixture_base(match_id) if '_v83_fixture_base' in globals() else None
+    if not base:
+        return None
+    resolved = _v83_resolve_fixture_light(base) if '_v83_resolve_fixture_light' in globals() else dict(base or {})
+    t1 = _v83_canon_team(resolved.get('team1')) if '_v83_canon_team' in globals() else resolved.get('team1')
+    t2 = _v83_canon_team(resolved.get('team2')) if '_v83_canon_team' in globals() else resolved.get('team2')
+
+    # 1) جرّب النسخة السابقة أولًا
+    try:
+        obj = _V8404_PREV_V83_RESULT_OBJ_FOR_MATCH_ID(match_id) if callable(_V8404_PREV_V83_RESULT_OBJ_FOR_MATCH_ID) else None
+        if isinstance(obj, dict) and _v8404_score_ok(obj):
+            obj = _v8404_normalize_obj_order(obj, t1, t2)
+            # إذا النتيجة تعادل بدون بلنتيات، لا نكتفي بها؛ ابحث في الكاش الأوسع.
+            try:
+                ss = _v83_numeric_scores(obj)
+                has_pen = _v84p_has_penalty_info(obj) if '_v84p_has_penalty_info' in globals() else False
+                if not (ss and ss[0] == ss[1] and not has_pen and not obj.get('winner')):
+                    return obj
+            except Exception:
+                return obj
+    except Exception:
+        pass
+
+    # 2) جرّب كاش الفريقين بدل كاش R32 فقط
+    try:
+        obj = _v43_get_cached_match_result(resolved) if '_v43_get_cached_match_result' in globals() else None
+        if isinstance(obj, dict) and _v8404_score_ok(obj):
+            return _v8404_normalize_obj_order(obj, t1, t2)
+    except Exception:
+        pass
+    try:
+        obj = _v33_get_cached_match_result(resolved) if '_v33_get_cached_match_result' in globals() else None
+        if isinstance(obj, dict) and _v8404_score_ok(obj):
+            return _v8404_normalize_obj_order(obj, t1, t2)
+    except Exception:
+        pass
+
+    # 3) بحث شامل في كل كاش النتائج/snapshot
+    obj = _v8404_search_all_result_caches(t1, t2, match_id)
+    if isinstance(obj, dict) and _v8404_score_ok(obj):
+        return obj
+    return None
+
+
+def _v83_winner_loser(match_id):
+    """نسخة مسابقات أكثر صرامة: عند تعادل خروج المغلوب لا يعتمد التعادل، بل يبحث عن فائز البلنتيات بكل الكاش."""
+    try:
+        base = _v83_fixture_base(match_id) if '_v83_fixture_base' in globals() else None
+        m = _v83_resolve_fixture_light(base or {}) if '_v83_resolve_fixture_light' in globals() else dict(base or {})
+        if not m:
+            return None, None
+        obj = _v83_result_obj_for_match_id(match_id)
+        if not isinstance(obj, dict):
+            return None, None
+        if not _v83_status_is_final(obj):
+            return None, None
+        try:
+            obj = _v84p_enrich_match_obj(dict(obj), fixture=m) if '_v84p_enrich_match_obj' in globals() else dict(obj)
+        except Exception:
+            obj = dict(obj)
+        scores = _v83_numeric_scores(obj)
+        if not scores:
+            return None, None
+        s1, s2 = scores
+        t1 = _v83_canon_team(m.get('team1'))
+        t2 = _v83_canon_team(m.get('team2'))
+        if s1 > s2:
+            return t1, t2
+        if s2 > s1:
+            return t2, t1
+        p1 = _v8402_penalty_value(obj, 'penalty1', 'pen1', 'shootout1', 'p1') if '_v8402_penalty_value' in globals() else None
+        p2 = _v8402_penalty_value(obj, 'penalty2', 'pen2', 'shootout2', 'p2') if '_v8402_penalty_value' in globals() else None
+        if p1 is not None and p2 is not None and p1 != p2:
+            return (t1, t2) if p1 > p2 else (t2, t1)
+        w = _v8402_winner_name_from_obj(obj) if '_v8402_winner_name_from_obj' in globals() else None
+        if w:
+            if _v83_team_key(w) == _v83_team_key(t1):
+                return t1, t2
+            if _v83_team_key(w) == _v83_team_key(t2):
+                return t2, t1
+        # تعادل إقصائي بلا بلنتيات: لا تحسب أحد مستمر/خاسر من هذه المباراة.
+        return None, None
+    except Exception:
+        pass
+    try:
+        return _V8404_PREV_V83_WINNER_LOSER(match_id) if callable(_V8404_PREV_V83_WINNER_LOSER) else (None, None)
+    except Exception:
+        return None, None
+
+# ==================== END V84.0.4 CONTEST PENALTY CACHE BRIDGE ====================
+
+
 if __name__ == "__main__":
     main()
