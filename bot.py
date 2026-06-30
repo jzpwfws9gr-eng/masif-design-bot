@@ -21,7 +21,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CallbackQueryHandler, filters
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CallbackQueryHandler, CommandHandler, filters
 
 TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or os.getenv("TOKEN"))
 
@@ -7103,7 +7103,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تحديث_احتمالات_المغادرة|تحديث_مغادرة_البطولة|تحديث_المغادرة)(?:\s|$)"), admin_only(v48_refresh_exit_probs_command)))
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 
@@ -13662,8 +13662,10 @@ def main():
         pass
     app = builder.build()
 
-    # أساسيات
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start))
+    # أساسيات — V84.0.5: ستارت مضمون وخفيف قبل أي راوتر آخر
+    app.add_handler(CommandHandler("start", start), group=-100)
+    app.add_handler(CommandHandler("ping", ping_command), group=-100)
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start), group=-100)
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:من_انا|معرفي)"), who_am_i))
     app.add_handler(MessageHandler(filters.Document.ALL, remember_last_file))
 
@@ -56593,6 +56595,66 @@ def _v83_winner_loser(match_id):
         return None, None
 
 # ==================== END V84.0.4 CONTEST PENALTY CACHE BRIDGE ====================
+
+
+# ==================== V84.0.5 START RESCUE — FAHAD ====================
+# الهدف: /start يرد فورًا بدون الدخول في سلاسل راوترات قديمة أو كاشات ثقيلة.
+# أبقينا نتائج المباريات، مباشر الآن، الفانتزي، ومسابقات المصيف.
+# أبقينا لوحة/مسار التأهل ملغاة وخفيفة.
+
+async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.effective_message.reply_text("pong ✅ البوت شغال")
+    except Exception:
+        pass
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = getattr(update, 'effective_message', None)
+    if not msg:
+        return
+    try:
+        _v38e_track_user(update)
+    except Exception:
+        pass
+    try:
+        _v32_track_user(update)
+    except Exception:
+        pass
+    try:
+        await msg.reply_text(
+            "🏆 مونديال 2026\nحياك في بوت مونديال المصيف 2026 🏆\nاختر من القائمة",
+            reply_markup=_public_main_reply_keyboard()
+        )
+    except Exception as e:
+        try:
+            await msg.reply_text("البوت شغال ✅ لكن تعذر عرض القائمة: " + str(e)[:120])
+        except Exception:
+            pass
+
+# حماية إضافية: أي زر/أمر قديم من لوحة البطولة أو مسار التأهل يرجع رسالة خفيفة فقط.
+async def v32_tournament_board_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+async def v32_qualification_race_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+async def v32_qualification_pdf_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+async def v32_best_thirds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+async def v32_decisive_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+async def v32_team_needs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(_v8403_disabled_feature_text(), reply_markup=_public_main_reply_keyboard())
+
+# تعطيل كاش مباشر الآن الثقيل بالخلفية فقط؛ الأمر اليدوي /مباشر يبقى كما هو.
+async def v49_live_auto_refresh_job(context):
+    return
+
+# ==================== END V84.0.5 START RESCUE ====================
 
 
 if __name__ == "__main__":
