@@ -56657,5 +56657,480 @@ async def v49_live_auto_refresh_job(context):
 # ==================== END V84.0.5 START RESCUE ====================
 
 
+
+# ==================== V84.0.6 SPORTS-DAY FAST FIX — FAHAD ====================
+# اعتماد فهد: مباريات اليوم ليست بالتاريخ التقويمي فقط.
+# اليوم الرياضي = مباريات PM في تاريخ اليوم + مباريات AM بعد منتصف الليل في التاريخ التالي.
+# الهدف: المغرب/أي مباراة AM لا تختفي، وتصميم مباريات اليوم لا يسحب ESPN ولا يعلق.
+
+try:
+    _V8406_PREV_FIXTURES_FOR_DATE = globals().get('_fixtures_for_date')
+    _V8406_PREV_V46_FIXTURES_FOR_DATE = globals().get('_v46_fixtures_for_date')
+    _V8406_PREV_V29_ACTIVE_FIXTURE_DATE = globals().get('_v29_active_fixture_date')
+    _V8406_PREV_V41_ACTIVE_LIVE_DATE = globals().get('_v41_active_live_date')
+except Exception:
+    pass
+
+
+def _v8406_norm_date(d):
+    try:
+        return _normalize_date_arg(d)
+    except Exception:
+        return str(d or '').strip()
+
+
+def _v8406_date_obj(d):
+    d = _v8406_norm_date(d)
+    try:
+        dd, mm, yy = [int(x) for x in d.split('/')]
+        return datetime(yy, mm, dd).date()
+    except Exception:
+        return None
+
+
+def _v8406_date_shift(d, days=1):
+    base = _v8406_date_obj(d)
+    if not base:
+        return _v8406_norm_date(d)
+    try:
+        return (base + timedelta(days=int(days))).strftime('%d/%m/%Y')
+    except Exception:
+        return _v8406_norm_date(d)
+
+
+def _v8406_time_text(t):
+    return normalize_name(t) if 'normalize_name' in globals() else str(t or '').strip()
+
+
+def _v8406_is_am_time(t):
+    s = _v8406_time_text(t).lower()
+    return any(x in s for x in ['صباح', 'فجر', 'فجراً', 'منتصف الليل', 'am', 'a.m'])
+
+
+def _v8406_is_pm_time(t):
+    s = _v8406_time_text(t).lower()
+    # حرف م أو مساء أو PM. لا نعدّ كلمة منتصف الليل PM.
+    if 'منتصف الليل' in s:
+        return False
+    return any(x in s for x in ['مساء', 'pm', 'p.m']) or bool(re.search(r'\d\s*م\b', s))
+
+
+def _v8406_time_minutes(t):
+    s = _v8406_time_text(t)
+    m = re.search(r'(\d{1,2})(?::(\d{2}))?', s)
+    if not m:
+        return 0
+    h = int(m.group(1)); mi = int(m.group(2) or 0)
+    if _v8406_is_am_time(s):
+        if h == 12:
+            h = 0
+        return h * 60 + mi
+    if _v8406_is_pm_time(s):
+        if h != 12:
+            h += 12
+        return h * 60 + mi
+    return h * 60 + mi
+
+
+def _v8406_sports_sort_key(m):
+    # PM أولاً حسب الوقت، ثم AM بعد منتصف الليل حسب الوقت.
+    t = m.get('time') if isinstance(m, dict) else ''
+    bucket = 1 if _v8406_is_am_time(t) else 0
+    return (bucket, _v8406_time_minutes(t), str((m or {}).get('id') or ''))
+
+
+def _v8406_all_fixtures_raw():
+    """جدول خفيف بدون حلّ ديناميكي ثقيل: TOURNAMENT_FIXTURES + fixture_updates فقط."""
+    rows = []
+    try:
+        rows.extend([dict(x) for x in (globals().get('TOURNAMENT_FIXTURES') or [])])
+    except Exception:
+        rows = []
+    try:
+        # الأيام الأولى إن كانت مضافة خارج TOURNAMENT_FIXTURES.
+        existing = {str(x.get('id') or '') for x in rows if isinstance(x, dict)}
+        for x in (globals().get('_EARLY_GROUP_FIXTURES_1106_1906') or []):
+            if str(x.get('id') or '') not in existing:
+                rows.append(dict(x))
+    except Exception:
+        pass
+    try:
+        updates = _load_fixture_updates() if '_load_fixture_updates' in globals() else {}
+    except Exception:
+        updates = {}
+    fixed = []
+    for m in rows:
+        try:
+            x = dict(m or {})
+            upd = updates.get(x.get('id'), {}) if isinstance(updates, dict) else {}
+            if isinstance(upd, dict):
+                for k in ['team1', 'team2', 'time', 'note', 'date', 'day', 'stage', 'group']:
+                    if upd.get(k):
+                        x[k] = upd.get(k)
+            fixed.append(x)
+        except Exception:
+            pass
+    return fixed
+
+
+def _v8406_sports_day_rows(date_str):
+    """PM في date_str + AM في اليوم التالي. لا يستخدم ESPN."""
+    d = _v8406_norm_date(date_str)
+    nd = _v8406_date_shift(d, 1)
+    rows = []
+    for m in _v8406_all_fixtures_raw():
+        try:
+            md = _v8406_norm_date(m.get('date'))
+            tm = m.get('time') or ''
+            if md == d and not _v8406_is_am_time(tm):
+                rows.append(dict(m))
+            elif md == nd and _v8406_is_am_time(tm):
+                rows.append(dict(m))
+        except Exception:
+            pass
+    if not rows:
+        # احتياط: لا نخرب الأيام القديمة إذا ما وجدنا تقسيم PM/AM.
+        try:
+            rows = [dict(x) for x in (_V8406_PREV_FIXTURES_FOR_DATE(d) or [])]
+        except Exception:
+            rows = []
+    rows = sorted(rows, key=_v8406_sports_sort_key)
+    seen, out = set(), []
+    for i, m in enumerate(rows):
+        try:
+            key = (str(m.get('id') or ''), _v8406_norm_date(m.get('date')), simple_key(m.get('team1','')), simple_key(m.get('team2','')), _v8406_time_text(m.get('time')))
+        except Exception:
+            key = (str(i),)
+        if key in seen:
+            continue
+        seen.add(key)
+        x = dict(m)
+        x['v46_idx'] = str(len(out))
+        x['sports_day'] = d
+        out.append(x)
+    return out
+
+
+def _fixtures_for_date(date):
+    return _v8406_sports_day_rows(date)
+
+
+def _v46_fixtures_for_date(d):
+    return _v8406_sports_day_rows(d)
+
+
+def _v8406_available_sports_dates():
+    vals = set()
+    for m in _v8406_all_fixtures_raw():
+        try:
+            md = _v8406_norm_date(m.get('date'))
+            tm = m.get('time') or ''
+            if not md:
+                continue
+            if _v8406_is_am_time(tm):
+                vals.add(_v8406_date_shift(md, -1))
+            else:
+                vals.add(md)
+        except Exception:
+            pass
+    return sorted(vals, key=lambda x: _date_key(x) if '_date_key' in globals() else x)
+
+
+def _v8406_active_sports_date(now=None):
+    try:
+        now = now or (_v33_now_riyadh_dt() if '_v33_now_riyadh_dt' in globals() else (datetime.utcnow() + timedelta(hours=3)))
+    except Exception:
+        now = datetime.utcnow() + timedelta(hours=3)
+    try:
+        base = now.date()
+        # قبل 4 العصر نعتبره تابع لليوم الرياضي السابق.
+        if int(now.hour) < 16:
+            base = base - timedelta(days=1)
+        d = base.strftime('%d/%m/%Y')
+    except Exception:
+        d = ''
+    try:
+        if d and _v8406_sports_day_rows(d):
+            return d
+        target = _date_key(d) if '_date_key' in globals() else d
+        prev = None
+        for dd in _v8406_available_sports_dates():
+            try:
+                if (_date_key(dd) if '_date_key' in globals() else dd) <= target and _v8406_sports_day_rows(dd):
+                    prev = dd
+            except Exception:
+                pass
+        return prev or d
+    except Exception:
+        return d
+
+
+def _v29_active_fixture_date(now=None):
+    return _v8406_active_sports_date(now)
+
+
+def _v41_active_live_date(now=None):
+    return _v8406_active_sports_date(now)
+
+
+def _v40_active_live_date(now=None):
+    return _v8406_active_sports_date(now)
+
+
+def _v33_active_live_date(now=None):
+    return _v8406_active_sports_date(now)
+
+
+def _v40_live_rows(date_str=None):
+    active = _v8406_norm_date(date_str) if date_str else _v8406_active_sports_date()
+    return _v8406_sports_day_rows(active) if active else []
+
+
+def _v8406_fixture_title(date):
+    d = _v8406_norm_date(date)
+    try:
+        day = ''
+        for x, dy in _fixture_dates():
+            if _v8406_norm_date(x) == d:
+                day = dy or ''
+                break
+        if not day:
+            # حاول من أي مباراة PM في اليوم الرياضي
+            for m in _v8406_sports_day_rows(d):
+                if _v8406_norm_date(m.get('date')) == d and not _v8406_is_am_time(m.get('time')):
+                    day = m.get('day') or m.get('day_name') or ''
+                    break
+        return f"{day} {d[:5]}".strip()
+    except Exception:
+        return d
+
+
+def _v26_fixture_title(date):
+    return _v8406_fixture_title(date)
+
+
+def _fixture_title(date):
+    return _v8406_fixture_title(date)
+
+
+def _v8406_matches_caption(title, rows):
+    try:
+        return build_matches_today_v31_caption(title, rows)
+    except Exception:
+        lines = ["🏆 مونديال المصيف 2026 🏆", f"🔥 مباريات اليوم ( {title} ) 🔥", "", "المصدر: PDF جدول البطولة", "المصيف يضعكم بالحدث"]
+        return "\n".join(lines)
+
+
+def _v8406_cache_key(title, rows, style='full'):
+    try:
+        raw = json.dumps([[m.get('id'), m.get('date'), m.get('time'), m.get('team1'), m.get('team2'), m.get('note')] for m in rows], ensure_ascii=False, sort_keys=True)
+    except Exception:
+        raw = str(rows)
+    import hashlib
+    return hashlib.md5((style + '|' + title + '|' + raw).encode('utf-8')).hexdigest()[:16]
+
+
+def _v8406_render_matches_image(title, rows, style='full'):
+    ensure_generated_dir()
+    key = _v8406_cache_key(title, rows, style)
+    path = os.path.join(GENERATED_DIR, f"v8406_matches_{style}_{key}.png")
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > 10000:
+            return path
+    except Exception:
+        pass
+    if style == 'clean' and callable(globals().get('create_matches_today_v31_clean_image')):
+        out = create_matches_today_v31_clean_image(title, rows)
+    else:
+        out = create_matches_today_v31_full_image(title, rows)
+    try:
+        if out and out != path and os.path.exists(out):
+            import shutil
+            shutil.copyfile(out, path)
+            return path
+    except Exception:
+        pass
+    return out or path
+
+
+async def _v8406_send_matches_today(message, style='full'):
+    d = _v8406_active_sports_date()
+    rows = _v8406_sports_day_rows(d)
+    if not rows:
+        await message.reply_text("ما لقيت مباريات لهذا اليوم الرياضي.")
+        return
+    title = _v8406_fixture_title(d)
+    wait = await message.reply_text("⏳ جاري تصميم مباريات اليوم...")
+    try:
+        path = await asyncio.wait_for(asyncio.to_thread(_v8406_render_matches_image, title, rows, style), timeout=25)
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+        await send_photo_path(message, path, _v8406_matches_caption(title, rows))
+    except Exception as e:
+        # لا نعلق البوت: إذا فشل التصميم نرسل الجدول نصيًا.
+        try:
+            await wait.edit_text(_v8406_matches_text(title, rows, str(e)))
+        except Exception:
+            await message.reply_text(_v8406_matches_text(title, rows, str(e)))
+
+
+def _v8406_matches_text(title, rows, err=''):
+    lines = [f"🔥 مباريات اليوم الرياضي ({title})", ""]
+    for m in rows:
+        t1 = canonical_team_name(m.get('team1')) or m.get('team1') or ''
+        t2 = canonical_team_name(m.get('team2')) or m.get('team2') or ''
+        lines.append(f"⏰ {m.get('time','')} — {t1} × {t2}")
+    if err:
+        lines.append("")
+        lines.append("⚠️ تعذر التصميم مؤقتًا، أرسلت الجدول نصيًا بدل التعليق.")
+    return "\n".join(lines).strip()
+
+
+async def _send_public_matches_today(message):
+    await _v8406_send_matches_today(message, 'full')
+
+
+async def matches_today_v31_full_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _v8406_send_matches_today(update.effective_message, 'full')
+
+
+async def matches_today_v31_clean_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _v8406_send_matches_today(update.effective_message, 'clean')
+
+
+def _v29_live_today_text(date_str=None):
+    active = _v8406_norm_date(date_str) if date_str else _v8406_active_sports_date()
+    rows = _v8406_sports_day_rows(active)
+    title = _v8406_fixture_title(active)
+    if not rows:
+        return '🔄 مباشر الآن\n\nلا توجد مباريات في مباشر الآن حسب جدول البطولة.'
+    lines = [f'🔄 مباشر الآن — اليوم الرياضي {title}', '']
+    for m in rows:
+        try:
+            lines.append(_v40_live_button_label(m))
+        except Exception:
+            t1 = canonical_team_name(m.get('team1')) or m.get('team1') or ''
+            t2 = canonical_team_name(m.get('team2')) or m.get('team2') or ''
+            lines.append(f"⏳ {t1} × {t2}")
+    return '\n'.join(lines).strip()
+
+
+def _v29_live_today_keyboard(date_str=None):
+    active = _v8406_norm_date(date_str) if date_str else _v8406_active_sports_date()
+    rows = []
+    if active:
+        code = _v46_date_code(active) if '_v46_date_code' in globals() else active.replace('/','')
+        rows.append([InlineKeyboardButton("🧹 مسح كاش مباشر اليوم", callback_data=f"livefx|clearday|{code}")])
+        rows.append([InlineKeyboardButton("🔄 تحديث مباشر الآن من ESPN", callback_data=f"livefx|refreshday|{code}")])
+    matches = _v8406_sports_day_rows(active)
+    for idx, m in enumerate(matches):
+        try:
+            label = _v40_live_button_label(m)[:62]
+        except Exception:
+            label = f"{m.get('team1')} × {m.get('team2')}"[:62]
+        rows.append([InlineKeyboardButton(label, callback_data=f"livefx|match|{_v46_date_code(active)}|{idx}")])
+    if active and not matches:
+        rows.append([InlineKeyboardButton("لا توجد مباريات في مباشر الآن", callback_data="noop")])
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="mainmenu|home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _v8406_refresh_sports_day_results(d, force=True):
+    updated = 0; dbg_all = []
+    # نحدث تاريخ PM وتاريخ AM التالي، لأن اليوم الرياضي موزع على تاريخين تقويميين.
+    for td in [d, _v8406_date_shift(d, 1)]:
+        try:
+            u, dbg = _v41_update_day_results(td, bool(force))
+            updated += int(u or 0)
+            if dbg:
+                dbg_all.extend([f"{td}: {x}" for x in list(dbg)[-4:]])
+        except Exception as e:
+            dbg_all.append(f"{td}: {str(e)[:90]}")
+    return updated, dbg_all
+
+
+async def live_today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    data = q.data or ''
+    if data == 'noop':
+        return
+    parts = data.split('|')
+    try:
+        if len(parts) >= 3 and parts[1] == 'clearday':
+            d = _v46_date_from_code(parts[2]) if '_v46_date_from_code' in globals() else parts[2]
+            try:
+                if '_v44_clear_day_cache' in globals():
+                    _v44_clear_day_cache(d); _v44_clear_day_cache(_v8406_date_shift(d, 1))
+            except Exception:
+                pass
+            await _v45_try_edit_text(q.message, _v29_live_today_text(d), reply_markup=_v29_live_today_keyboard(d))
+            return
+
+        if len(parts) >= 3 and parts[1] == 'refreshday':
+            d = _v46_date_from_code(parts[2]) if '_v46_date_from_code' in globals() else parts[2]
+            wait_msg = await _v45_send_wait(q.message, f"⏳ تحديث مباشر الآن لليوم الرياضي {d}: PM + AM...")
+            try:
+                updated, dbg = await asyncio.wait_for(asyncio.to_thread(_v8406_refresh_sports_day_results, d, True), timeout=60)
+            except Exception as e:
+                updated, dbg = 0, [f"انتهى الوقت/خطأ: {str(e)[:80]}"]
+            txt = _v29_live_today_text(d)
+            try:
+                if '_is_admin' in globals() and _is_admin(q.from_user.id):
+                    txt += f"\n\n🔄 تم تحديث {updated} مباراة من تاريخي اليوم الرياضي."
+                    if dbg:
+                        txt += "\n🔎 " + " / ".join(dbg[-5:])
+            except Exception:
+                pass
+            await _v45_finish_wait(wait_msg, delete=True)
+            await _v45_try_edit_text(q.message, txt, reply_markup=_v29_live_today_keyboard(d))
+            return
+
+        if len(parts) >= 4 and parts[1] == 'match':
+            d = _v46_date_from_code(parts[2]) if '_v46_date_from_code' in globals() else parts[2]
+            mid = parts[3]
+        elif len(parts) >= 3 and parts[1] == 'match':
+            d = _v8406_active_sports_date()
+            mid = parts[2]
+        else:
+            return
+        m = _v46_find_fixture_by_mid(d, mid) if '_v46_find_fixture_by_mid' in globals() else None
+        if not m:
+            await q.message.reply_text("لم أجد المباراة في مباشر الآن.", reply_markup=_v29_live_today_keyboard(d))
+            return
+        wait_msg = await _v45_send_wait(q.message, f"⏳ جاري تحديث {m.get('team1')} × {m.get('team2')} من ESPN...")
+        try:
+            obj = await asyncio.wait_for(asyncio.to_thread(_v40_fetch_live_for_fixture, m, True), timeout=35)
+        except Exception as e:
+            obj = None
+            try:
+                _v43_cache_goal_debug(m, [f'V8406 live timeout/error: {str(e)[:80]}'])
+            except Exception:
+                pass
+        if not isinstance(obj, dict) or ('_patch6_numeric_score' in globals() and not _patch6_numeric_score(obj)):
+            await _v45_finish_wait(wait_msg, f"⚽ {m.get('team1')} × {m.get('team2')}\nالحالة: قيد التحديث\nالمصدر: ESPN/بحث خارجي")
+            return
+        label = obj.get('actual_source') or obj.get('source') or 'ESPN'
+        try:
+            path = render_live_match_card(obj, label)
+            await _v45_finish_wait(wait_msg, delete=True)
+            await send_photo_path(q.message, path, build_live_caption(obj, label))
+        except Exception:
+            await _v45_finish_wait(wait_msg, build_live_caption(obj, label))
+    except Exception as e:
+        try:
+            await q.message.reply_text(f"صار خطأ في مباشر الآن وما مسحت الأزرار.\nالخطأ: {str(e)[:120]}")
+        except Exception:
+            pass
+
+# ==================== END V84.0.6 SPORTS-DAY FAST FIX — FAHAD ====================
+
 if __name__ == "__main__":
     main()
