@@ -58569,5 +58569,408 @@ async def v32_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ==================== END V84.0.15 CONTEST ADMIN MANUAL + PENALTY FIX — FAHAD ====================
 
+
+# ==================== V84.0.16 MANUAL CONTEST MODE — FAHAD ====================
+# زر مستقل: مسابقة المصيف يدوي
+# لا يعتمد على مباشر الآن ولا ESPN ولا البلنتيات.
+# إدارة المتسابقين تظهر للجميع، لكنها برقم سري: الملحق
+# داخل الإدارة زرين فقط: منتخب غادر، استعادة منتخب.
+
+V8416_MANUAL_PASSWORD = 'الملحق'
+V8416_MANUAL_STATE_FILE = os.path.join(globals().get('DATA_DIR', '.'), 'v8416_manual_contest_state.json')
+_V8416_MANUAL_IMAGE_CACHE = {}
+
+# نبدأ بالحالات المعروفة الحالية حتى ما يضطر فهد يعيدها يدويًا من البداية.
+V8416_DEFAULT_OUT_TEAMS = ['جنوب أفريقيا', 'اليابان', 'ألمانيا', 'هولندا']
+
+def _v8416_kind(kind):
+    return 'aboyaser' if str(kind) == 'aboyaser' else 'abokhaled'
+
+def _v8416_rows(kind='abokhaled'):
+    return V83_ABOYASER if _v8416_kind(kind) == 'aboyaser' else V83_ABOKHALED
+
+def _v8416_team_key(team):
+    try:
+        return _v83_team_key(team)
+    except Exception:
+        try:
+            return simple_key(team)
+        except Exception:
+            return str(team or '').strip().lower().replace('أ','ا').replace('إ','ا').replace('آ','ا').replace('ى','ي').replace('ة','ه')
+
+def _v8416_load_state():
+    try:
+        if os.path.exists(V8416_MANUAL_STATE_FILE):
+            with open(V8416_MANUAL_STATE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                data.setdefault('out_teams', [])
+                data.setdefault('team_names', {})
+                return data
+    except Exception:
+        pass
+    data = {'out_teams': [], 'team_names': {}}
+    for t in V8416_DEFAULT_OUT_TEAMS:
+        k = _v8416_team_key(t)
+        if k:
+            data['out_teams'].append(k)
+            data['team_names'][k] = t
+    return data
+
+def _v8416_save_state(data):
+    try:
+        os.makedirs(os.path.dirname(V8416_MANUAL_STATE_FILE) or '.', exist_ok=True)
+        with open(V8416_MANUAL_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data or {}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+_V8416_MANUAL_STATE = _v8416_load_state()
+
+def _v8416_clear_cache():
+    try:
+        _V8416_MANUAL_IMAGE_CACHE.clear()
+    except Exception:
+        pass
+
+def _v8416_all_manual_teams():
+    teams = {}
+    for kind in ['abokhaled', 'aboyaser']:
+        for r in _v8416_rows(kind):
+            team = str(r.get('team','')).strip()
+            k = _v8416_team_key(team)
+            if k and team:
+                teams.setdefault(k, team)
+    return teams
+
+def _v8416_find_team(input_team):
+    raw = str(input_team or '').strip()
+    k = _v8416_team_key(raw)
+    teams = _v8416_all_manual_teams()
+    if k in teams:
+        return k, teams[k]
+    # مرادفات بسيطة للأخطاء الشائعة
+    aliases = {
+        'البرازيد': 'البرازيل',
+        'برازيد': 'البرازيل',
+        'برازل': 'البرازيل',
+        'امريكا': 'الولايات المتحدة',
+        'امريكا': 'الولايات المتحدة',
+        'ساحل العاج': 'ساحل العاج',
+        'هولاندا': 'هولندا',
+        'المانيا': 'ألمانيا',
+        'اسبانيا': 'إسبانيا',
+        'انجلترا': 'إنجلترا',
+    }
+    if raw in aliases:
+        ak = _v8416_team_key(aliases[raw])
+        if ak in teams:
+            return ak, teams[ak]
+    # مطابقة جزئية
+    for tk, name in teams.items():
+        if k and (k in tk or tk in k):
+            return tk, name
+    return k, raw
+
+def _v8416_team_is_manual_out(team):
+    try:
+        k = _v8416_team_key(team)
+        return k in set(_V8416_MANUAL_STATE.get('out_teams') or [])
+    except Exception:
+        return False
+
+def _v8416_apply_team(team_text, action='out'):
+    key, display = _v8416_find_team(team_text)
+    if not key:
+        return display or team_text, [], []
+    out_set = set(_V8416_MANUAL_STATE.get('out_teams') or [])
+    if action == 'out':
+        out_set.add(key)
+    else:
+        out_set.discard(key)
+    _V8416_MANUAL_STATE['out_teams'] = sorted(out_set)
+    names_map = _V8416_MANUAL_STATE.setdefault('team_names', {})
+    names_map[key] = display
+    _v8416_save_state(_V8416_MANUAL_STATE)
+    _v8416_clear_cache()
+    abok = [str(r.get('name','')) for r in V83_ABOKHALED if _v8416_team_key(r.get('team','')) == key]
+    aboy = [str(r.get('name','')) for r in V83_ABOYASER if _v8416_team_key(r.get('team','')) == key]
+    return display, abok, aboy
+
+def _v8416_manual_signature(kind='abokhaled'):
+    kind = _v8416_kind(kind)
+    rows = _v8416_rows(kind)
+    parts = [kind, json.dumps(_V8416_MANUAL_STATE, ensure_ascii=False, sort_keys=True)]
+    for r in rows:
+        team = str(r.get('team',''))
+        parts.append(f"{r.get('name','')}|{team}|{r.get('player','')}|{1 if _v8416_team_is_manual_out(team) else 0}")
+    return hashlib.md5('\n'.join(parts).encode('utf-8')).hexdigest()[:12]
+
+def _v8416_render_manual_contest(kind='abokhaled'):
+    kind = _v8416_kind(kind)
+    sig = _v8416_manual_signature(kind)
+    cache_key = f"manual:{kind}:{sig}"
+    old = _V8416_MANUAL_IMAGE_CACHE.get(cache_key)
+    if old and os.path.exists(old) and os.path.getsize(old) > 0:
+        return old
+    rows = _v8416_rows(kind)
+    title = 'مسابقة أبوخالد يدوي' if kind == 'abokhaled' else 'مسابقة أبوياسر يدوي'
+    subtitle = 'الوضع اليدوي — حسب المنتخبات التي تم إخراجها يدويًا'
+    width = 1080
+    row_h = 58 if kind == 'abokhaled' else 62
+    height = max(1500, 260 + len(rows)*row_h + 150)
+    img, draw = _v83_contest_bg(width, height)
+    draw_text(draw, (width//2, 70), title, get_font(54), fill='#FFFFFF', max_width=920)
+    draw_text(draw, (width//2, 132), subtitle, get_font(28), fill='#FDE68A', max_width=920)
+    try:
+        updated = _v81_now_text() if '_v81_now_text' in globals() else (_now_riyadh_text() if '_now_riyadh_text' in globals() else '')
+    except Exception:
+        updated = ''
+    draw_text(draw, (width//2, 178), f'آخر تحديث: {str(updated).replace("/", " ")}', get_font(24), fill='#CFE8FF', max_width=820)
+    x0, x1 = 60, width-60
+    y = 225
+    try:
+        rounded_rect(draw, (x0, y, x1, y+46), radius=18, fill='#0B2A5CCC', outline='#38BDF8', width=2)
+    except Exception:
+        draw.rounded_rectangle((x0, y, x1, y+46), radius=18, fill='#0B2A5C')
+    if kind == 'abokhaled':
+        draw_text(draw, (855, y+24), 'المشارك', get_font(24), fill='#FFFFFF')
+        draw_text(draw, (520, y+24), 'المنتخب', get_font(24), fill='#FFFFFF')
+        draw_text(draw, (215, y+24), 'الحالة', get_font(24), fill='#FFFFFF')
+    else:
+        draw_text(draw, (875, y+24), 'المشارك', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (575, y+24), 'المنتخب', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (300, y+24), 'اللاعب', get_font(23), fill='#FFFFFF')
+        draw_text(draw, (115, y+24), 'الحالة', get_font(23), fill='#FFFFFF')
+    y += 56
+    for r in rows:
+        team = _v83_canon_team(r.get('team','')) if '_v83_canon_team' in globals() else str(r.get('team',''))
+        out = _v8416_team_is_manual_out(team)
+        fill = '#071A36DD' if not out else '#2B1018DD'
+        outline = '#1D9BFF88' if not out else '#FF4B4B99'
+        try:
+            rounded_rect(draw, (x0, y, x1, y+row_h-8), radius=16, fill=fill, outline=outline, width=1)
+        except Exception:
+            draw.rounded_rectangle((x0, y, x1, y+row_h-8), radius=16, fill=fill)
+        cy = y + (row_h-8)//2
+        status = 'غادر' if out else 'مستمر'
+        status_color = '#FF5555' if out else '#A7F3D0'
+        if kind == 'abokhaled':
+            draw_text(draw, (855, cy), str(r.get('name','')), get_font(26), fill='#FFFFFF', max_width=380)
+            draw_text(draw, (520, cy), team, get_font(26), fill='#FDE68A', max_width=270)
+            draw_text(draw, (215, cy), status, get_font(24), fill=status_color, max_width=220)
+        else:
+            draw_text(draw, (875, cy), str(r.get('name','')), get_font(23), fill='#FFFFFF', max_width=330)
+            draw_text(draw, (575, cy), team, get_font(23), fill='#FDE68A', max_width=235)
+            draw_text(draw, (300, cy), str(r.get('player','')), get_font(23), fill='#E0F2FE', max_width=220)
+            draw_text(draw, (115, cy), status, get_font(22), fill=status_color, max_width=110)
+        if out:
+            try:
+                draw.line((x0+55, cy, x1-55, cy), fill='#FF5A5A', width=2)
+            except Exception:
+                pass
+        y += row_h
+    draw_text(draw, (width//2, height-60), 'مونديال المصيف 2026 — يدوي', get_font(28), fill='#FBBF24')
+    try:
+        ensure_generated_dir()
+    except Exception:
+        os.makedirs(globals().get('GENERATED_DIR','generated'), exist_ok=True)
+    out_dir = globals().get('GENERATED_DIR','generated')
+    out_path = os.path.join(out_dir, f"manual_contest_{kind}_{sig}.jpg")
+    img.save(out_path, quality=88, optimize=True)
+    _V8416_MANUAL_IMAGE_CACHE[cache_key] = out_path
+    return out_path
+
+async def _v8416_send_manual_contest_image(message, kind):
+    kind = _v8416_kind(kind)
+    cap = '🏆 مسابقة أبوخالد يدوي' if kind == 'abokhaled' else '🏆 مسابقة أبوياسر يدوي'
+    wait_msg = None
+    try:
+        wait_msg = await message.reply_text(f'⏳ جاري تجهيز صورة {cap}...')
+    except Exception:
+        pass
+    try:
+        path = await asyncio.to_thread(_v8416_render_manual_contest, kind)
+        try:
+            if wait_msg:
+                await wait_msg.delete()
+        except Exception:
+            pass
+        try:
+            await send_photo_path(message, path, cap)
+        except Exception:
+            with open(path, 'rb') as f:
+                await message.reply_photo(photo=f, caption=cap)
+    except Exception as e:
+        txt = f'❌ تعذر تجهيز صورة {cap}\n{str(e)[:180]}'
+        try:
+            if wait_msg:
+                await wait_msg.edit_text(txt)
+            else:
+                await message.reply_text(txt)
+        except Exception:
+            pass
+
+def _v8416_manual_menu_text():
+    return '🏆 مسابقة المصيف يدوي\n\nاختر:'
+
+def _v8416_manual_menu_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('🏆 مسابقة أبوياسر', callback_data='v32|manualcontest_image|aboyaser')],
+        [InlineKeyboardButton('🏆 مسابقة أبوخالد', callback_data='v32|manualcontest_image|abokhaled')],
+        [InlineKeyboardButton('🛠️ إدارة المتسابقين', callback_data='v32|manualcontest_admin_gate')],
+        [InlineKeyboardButton('⬅️ رجوع', callback_data='mainmenu|home')],
+    ])
+
+def _v8416_manual_admin_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('🚪 منتخب غادر', callback_data='v32|manualcontest_action|out')],
+        [InlineKeyboardButton('♻️ استعادة منتخب', callback_data='v32|manualcontest_action|restore')],
+    ])
+
+def _v8416_main_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ['📅 مباريات اليوم', '📺 مباشر الآن'],
+            ['🏆 مسابقات المصيف', '🏆 مسابقة المصيف يدوي'],
+            ['📋 نتائج المباريات'],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder='اختر من القائمة',
+    )
+
+def _public_main_reply_keyboard():
+    return _v8416_main_reply_keyboard()
+
+def _public_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('📅 مباريات اليوم', callback_data='mainmenu|today'), InlineKeyboardButton('📺 مباشر الآن', callback_data='mainmenu|live')],
+        [InlineKeyboardButton('🏆 مسابقات المصيف', callback_data='mainmenu|contests'), InlineKeyboardButton('🏆 مسابقة المصيف يدوي', callback_data='mainmenu|manual_contests')],
+        [InlineKeyboardButton('📋 نتائج المباريات', callback_data='mainmenu|results')],
+    ])
+
+_V8416_PREV_PUBLIC_MENU_CALLBACK = globals().get('public_menu_callback')
+async def public_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    if data == 'mainmenu|manual_contests':
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        try:
+            await q.edit_message_text(_v8416_manual_menu_text(), reply_markup=_v8416_manual_menu_keyboard())
+        except Exception:
+            await q.message.reply_text(_v8416_manual_menu_text(), reply_markup=_v8416_manual_menu_keyboard())
+        return
+    if callable(_V8416_PREV_PUBLIC_MENU_CALLBACK):
+        return await _V8416_PREV_PUBLIC_MENU_CALLBACK(update, context)
+
+_V8416_PREV_V32_CALLBACK = globals().get('v32_callback')
+async def v32_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    data = q.data or ''
+    parts = data.split('|')
+    action = parts[1] if len(parts) > 1 else ''
+    if action == 'manualcontest_image':
+        kind = _v8416_kind(parts[2] if len(parts) > 2 else 'abokhaled')
+        try:
+            await q.answer('جاري تجهيز الصورة...')
+        except Exception:
+            pass
+        await _v8416_send_manual_contest_image(q.message, kind)
+        return
+    if action == 'manualcontest_admin_gate':
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        try:
+            context.user_data['v8416_waiting_manual_password'] = True
+        except Exception:
+            pass
+        await q.message.reply_text('🔐 اكتب الرقم السري لإدارة المتسابقين:')
+        return
+    if action == 'manualcontest_action':
+        mode = parts[2] if len(parts) > 2 else 'out'
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        try:
+            context.user_data['v8416_manual_team_action'] = mode
+        except Exception:
+            pass
+        if mode == 'restore':
+            await q.message.reply_text('♻️ اكتب اسم المنتخب لاستعادته:\nمثال: البرازيل')
+        else:
+            await q.message.reply_text('🚪 اكتب اسم المنتخب الذي غادر:\nمثال: البرازيل')
+        return
+    if callable(_V8416_PREV_V32_CALLBACK):
+        return await _V8416_PREV_V32_CALLBACK(update, context)
+
+async def _v8416_process_manual_team_action(update, context, txt):
+    mode = None
+    try:
+        mode = context.user_data.pop('v8416_manual_team_action', None)
+    except Exception:
+        mode = None
+    if not mode:
+        return False
+    action = 'restore' if mode == 'restore' else 'out'
+    team_name, abok, aboy = _v8416_apply_team(txt, action)
+    verb = 'استعادة' if action == 'restore' else 'استبعاد'
+    status = 'مستمر' if action == 'restore' else 'غادر'
+    lines = [f'✅ تم {verb} مختاري {team_name}', '']
+    lines.append('🏆 أبوخالد:')
+    lines.extend([f'- {x}' for x in abok] or ['- لا يوجد'])
+    lines.append('')
+    lines.append('🏆 أبوياسر:')
+    lines.extend([f'- {x}' for x in aboy] or ['- لا يوجد'])
+    lines.append('')
+    lines.append(f'الحالة الآن: {status}')
+    await update.effective_message.reply_text('\n'.join(lines), reply_markup=_v8416_manual_admin_keyboard())
+    return True
+
+_V8416_PREV_TEXT_STATE_ROUTER = globals().get('text_state_router')
+async def text_state_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        txt = (update.effective_message.text or '').strip()
+    except Exception:
+        txt = ''
+    if txt in {'🏆 مسابقة المصيف يدوي', 'مسابقة المصيف يدوي', 'المسابقه اليدوي', 'المسابقة اليدوي'}:
+        await update.effective_message.reply_text(_v8416_manual_menu_text(), reply_markup=_v8416_manual_menu_keyboard())
+        return
+    try:
+        if context.user_data.get('v8416_waiting_manual_password'):
+            context.user_data.pop('v8416_waiting_manual_password', None)
+            if _v8416_team_key(txt) == _v8416_team_key(V8416_MANUAL_PASSWORD):
+                await update.effective_message.reply_text('✅ تم فتح إدارة المتسابقين', reply_markup=_v8416_manual_admin_keyboard())
+            else:
+                await update.effective_message.reply_text('❌ الرقم السري غير صحيح')
+            return
+    except Exception:
+        pass
+    try:
+        if context.user_data.get('v8416_manual_team_action'):
+            ok = await _v8416_process_manual_team_action(update, context, txt)
+            if ok:
+                return
+    except Exception as e:
+        try:
+            await update.effective_message.reply_text(f'❌ تعذر تنفيذ العملية: {str(e)[:160]}')
+            return
+        except Exception:
+            pass
+    if callable(_V8416_PREV_TEXT_STATE_ROUTER):
+        return await _V8416_PREV_TEXT_STATE_ROUTER(update, context)
+
+# ==================== END V84.0.16 MANUAL CONTEST MODE — FAHAD ====================
+
 if __name__ == "__main__":
     main()
