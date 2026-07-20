@@ -34,6 +34,7 @@ GOAL_POINTS = {1: 5, 2: 10, 3: 15, 4: 20, 5: 25, 6: 30}
 LOCKED_FILE = "locked_days.json"
 BACKUP_PREFIX = "backup_"
 CUP_FILE = "cup_state.json"
+MAX_FANTASY_DAY = 39
 
 # -------------------- أدوات عامة --------------------
 
@@ -87,7 +88,7 @@ def ordinal_day(day):
         return str(day)
 
 
-def get_existing_days(start_day=1, end_day=39):
+def get_existing_days(start_day=1, end_day=MAX_FANTASY_DAY):
     days = []
     for filename in os.listdir("."):
         m = re.match(r"fantasy_day_(\d+)\.xlsx$", filename)
@@ -474,7 +475,7 @@ def clear_day_points(day):
 
 # -------------------- تحليل البيانات --------------------
 
-def collect_stats(start_day=1, end_day=39):
+def collect_stats(start_day=1, end_day=MAX_FANTASY_DAY):
     days = get_existing_days(start_day, end_day)
     per_day = {}
     totals = {name: 0 for name in PARTICIPANTS}
@@ -591,7 +592,7 @@ def collect_stats(start_day=1, end_day=39):
     }
 
 
-def create_overall_ranking(start_day=1, end_day=31):
+def create_overall_ranking(start_day=1, end_day=MAX_FANTASY_DAY):
     stats = collect_stats(start_day, end_day)
     days_found = stats["days"]
 
@@ -618,7 +619,7 @@ def create_overall_ranking(start_day=1, end_day=31):
     return file_name, days_found, stats
 
 
-def build_ranking_text(stats, start_day=1, end_day=39):
+def build_ranking_text(stats, start_day=1, end_day=MAX_FANTASY_DAY):
     days = stats["days"]
     if not days:
         return "ما فيه أيام محسوبة."
@@ -640,7 +641,7 @@ def build_ranking_text(stats, start_day=1, end_day=39):
 
 # -------------------- الداشبورد --------------------
 
-def create_dashboard(start_day=1, end_day=31):
+def create_dashboard(start_day=1, end_day=MAX_FANTASY_DAY):
     from collections import defaultdict, Counter
     from openpyxl.utils import get_column_letter
     from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
@@ -1554,6 +1555,8 @@ def parse_import_excel(path):
             continue
 
         day = int(m.group(1))
+        if day < 1 or day > MAX_FANTASY_DAY:
+            continue
 
         # نبحث عن خانة "المشارك" في أول الصفوف
         header_row = None
@@ -1870,7 +1873,7 @@ async def restore_backup_zip(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def clean_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ينظف القفل من أيام ما لها ملف فعلي."""
     locked = load_locked_days()
-    existing = {str(d) for d in get_existing_days(1, 99)}
+    existing = {str(d) for d in get_existing_days(1, MAX_FANTASY_DAY)}
     cleaned = {d for d in locked if d in existing}
     removed = sorted(locked - cleaned, key=lambda x: int(x))
     save_locked_days(cleaned)
@@ -2304,8 +2307,13 @@ async def start_cup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("اكتبها كذا:\n/بدء_الكاس 5")
         return
     start_day = int(nums[0])
-    if start_day < 1:
-        await update.message.reply_text("رقم اليوم غير صحيح.")
+    if start_day < 1 or start_day > MAX_FANTASY_DAY:
+        await update.message.reply_text(f"رقم اليوم غير صحيح. البطولة من 1 إلى {MAX_FANTASY_DAY}.")
+        return
+    if start_day + 3 > MAX_FANTASY_DAY:
+        await update.message.reply_text(
+            f"الكأس مدتها 4 أيام، لذلك آخر يوم مسموح لبدء الكأس هو {MAX_FANTASY_DAY - 3}."
+        )
         return
 
     old = load_cup_state()
@@ -2818,7 +2826,7 @@ async def overall(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif len(nums) == 1:
         start_day, end_day = 1, nums[0]
     else:
-        start_day, end_day = 1, 31
+        start_day, end_day = 1, MAX_FANTASY_DAY
 
     file_name, days_found, stats = create_overall_ranking(start_day, end_day)
     if not days_found:
@@ -2846,13 +2854,13 @@ async def ranking_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif len(nums) == 1:
         start_day, end_day = 1, nums[0]
     else:
-        start_day, end_day = 1, 31
+        start_day, end_day = 1, MAX_FANTASY_DAY
     stats = collect_stats(start_day, end_day)
     await update.message.reply_text(build_ranking_text(stats, start_day, end_day))
 
 
 async def list_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    days = get_existing_days(1, 99)
+    days = get_existing_days(1, MAX_FANTASY_DAY)
     if not days:
         await update.message.reply_text("ما فيه أيام محفوظة.")
         return
@@ -3061,7 +3069,7 @@ async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif len(nums) == 1:
             start_day, end_day = 1, nums[0]
         else:
-            start_day, end_day = 1, 31
+            start_day, end_day = 1, MAX_FANTASY_DAY
 
         await update.message.reply_text("جاري إنشاء ملف الإحصائيات... ⏳")
         file_name, stats = create_dashboard(start_day, end_day)
@@ -3702,7 +3710,7 @@ def build_daily_summary_text(day):
     return "\n".join(lines)
 
 
-def create_overall_ranking_image(start_day=1, end_day=31):
+def create_overall_ranking_image(start_day=1, end_day=MAX_FANTASY_DAY):
     """
     V21: صورة ترتيب الفانتزي بنفس هوية التصاميم الجديدة
     بدال الجدول القديم اللي كانت بعض الخانات تطلع بيضاء/باهتة.
@@ -3788,7 +3796,7 @@ def create_overall_ranking_image(start_day=1, end_day=31):
     img.save(path, quality=95)
     return path
 
-def create_legends_image(start_day=1, end_day=31):
+def create_legends_image(start_day=1, end_day=MAX_FANTASY_DAY):
     ensure_generated_dir()
     stats = collect_stats(start_day, end_day)
     days = stats["days"]
@@ -3816,10 +3824,11 @@ def parse_range_from_text(text):
     nums = get_numbers(text or "")
     if len(nums) >= 2:
         a, b = nums[0], nums[1]
-        return (min(a, b), max(a, b))
+        a, b = min(a, b), max(a, b)
+        return (max(1, a), min(MAX_FANTASY_DAY, b))
     if len(nums) == 1:
-        return (1, nums[0])
-    return (1, 31)
+        return (1, min(MAX_FANTASY_DAY, max(1, nums[0])))
+    return (1, MAX_FANTASY_DAY)
 
 
 def page_name_from_command(text, default="لوحة عامة"):
@@ -4373,7 +4382,7 @@ def matchup_lines(day):
     return lines
 
 
-def matchup_wins_map(start_day=1, end_day=31):
+def matchup_wins_map(start_day=1, end_day=MAX_FANTASY_DAY):
     wins = Counter()
     for day in get_existing_days(start_day, end_day):
         data = generate_matchups_for_day(day)
@@ -4386,7 +4395,7 @@ def matchup_wins_map(start_day=1, end_day=31):
     return wins
 
 
-def add_matchups_sheet_to_dashboard(xlsx_path, start_day=1, end_day=31):
+def add_matchups_sheet_to_dashboard(xlsx_path, start_day=1, end_day=MAX_FANTASY_DAY):
     wb = load_workbook(xlsx_path)
     if "سجل المواجهات" in wb.sheetnames:
         del wb["سجل المواجهات"]
@@ -4702,7 +4711,7 @@ def find_participant_name(query):
     return None
 
 
-def participant_best_captain(name, start_day=1, end_day=31):
+def participant_best_captain(name, start_day=1, end_day=MAX_FANTASY_DAY):
     best = ("-", 0, "-")
     for day in get_existing_days(start_day, end_day):
         for r in read_day_rows(day):
@@ -4711,7 +4720,7 @@ def participant_best_captain(name, start_day=1, end_day=31):
     return best
 
 
-def create_participant_card_image(name, start_day=1, end_day=31):
+def create_participant_card_image(name, start_day=1, end_day=MAX_FANTASY_DAY):
     ensure_generated_dir()
     stats = collect_stats(start_day, end_day)
     if name not in PARTICIPANTS:
@@ -4943,7 +4952,7 @@ async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif len(nums) == 1:
             start_day, end_day = 1, nums[0]
         else:
-            start_day, end_day = 1, 31
+            start_day, end_day = 1, MAX_FANTASY_DAY
         await update.message.reply_text("جاري إنشاء ملف الإحصائيات... ⏳")
         file_name, stats = create_dashboard(start_day, end_day)
         if not stats.get("days"):
@@ -5462,7 +5471,7 @@ def _clean_display_name(value):
 
 def _parse_range_from_text(text):
     nums = get_numbers(text or "")
-    existing = get_existing_days(1, 999)
+    existing = get_existing_days(1, MAX_FANTASY_DAY)
     if not existing:
         return 1, 1
     if len(nums) >= 2:
@@ -5473,6 +5482,8 @@ def _parse_range_from_text(text):
         a, b = min(existing), max(existing)
     if a > b:
         a, b = b, a
+    a = max(1, min(MAX_FANTASY_DAY, a))
+    b = max(1, min(MAX_FANTASY_DAY, b))
     return max(min(existing), a), min(max(existing), b)
 
 
@@ -5522,7 +5533,7 @@ async def add_participant_command(update: Update, context: ContextTypes.DEFAULT_
         return
     PARTICIPANTS.append(name)
     save_participants_state()
-    for day in get_existing_days(1, 999):
+    for day in get_existing_days(1, MAX_FANTASY_DAY):
         try:
             wb, ws, filename = get_or_create_day_workbook(str(day))
             style_sheet(ws)
@@ -5544,7 +5555,7 @@ async def remove_participant_command(update: Update, context: ContextTypes.DEFAU
     backup_files(f"before_remove_participant_{name}")
     PARTICIPANTS.remove(name)
     save_participants_state()
-    for day in get_existing_days(1, 999):
+    for day in get_existing_days(1, MAX_FANTASY_DAY):
         _remove_participant_from_workbook(excel_file(day), name)
     await update.message.reply_text(f"تم حذف {name} من الفانتزي ✅")
 
@@ -5576,6 +5587,24 @@ async def fantasy_unknown_command(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text("هذا البوت مخصص لفانتزي المصيف فقط. اكتب /start لعرض الأوامر.")
 
 
+
+def fantasy_days_only(func):
+    """يرفض أي رقم يوم خارج نطاق البطولة (1 إلى 39)."""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        message = getattr(update, "effective_message", None)
+        text = ""
+        if message is not None:
+            text = (getattr(message, "text", None) or getattr(message, "caption", None) or "")
+        nums = get_numbers(text)
+        invalid = [n for n in nums if n < 1 or n > MAX_FANTASY_DAY]
+        if invalid:
+            await message.reply_text(
+                f"رقم اليوم غير صحيح. فانتزي المصيف من اليوم 1 إلى اليوم {MAX_FANTASY_DAY} فقط."
+            )
+            return
+        return await func(update, context)
+    return wrapper
+
 def main():
     if not TOKEN:
         raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN")
@@ -5586,31 +5615,31 @@ def main():
     # Public fantasy views
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^/start(?:@\w+)?(?:\s|$)"), start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:من_انا|معرفي)"), who_am_i))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), overall))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_نص"), ranking_text))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/?(?:احصائيات|إحصائيات)(?:\s|$)"), dashboard))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/الترتيب_العام"), fantasy_days_only(overall)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ترتيب_نص"), fantasy_days_only(ranking_text)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/?(?:احصائيات|إحصائيات)(?:\s|$)"), fantasy_days_only(dashboard)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:الأيام|الايام)"), list_days))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فحص(?:\s|$)"), inspect_day))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مشاركين"), participants_day))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اسطورة"), legend_day))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مقارنة"), compare_days))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_اليوم"), daily_image_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الترتيب"), overall_image_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الاساطير"), legends_image_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), dashboard_sheet_image_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), all_dashboard_images_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملف_الاحصائيات(?:\s|$)"), statistics_pdf_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فحص(?:\s|$)"), fantasy_days_only(inspect_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مشاركين"), fantasy_days_only(participants_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اسطورة"), fantasy_days_only(legend_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مقارنة"), fantasy_days_only(compare_days)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_اليوم"), fantasy_days_only(daily_image_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الترتيب"), fantasy_days_only(overall_image_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_الاساطير"), fantasy_days_only(legends_image_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صورة_احصائيات"), fantasy_days_only(dashboard_sheet_image_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/صور_الاحصائيات"), fantasy_days_only(all_dashboard_images_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملف_الاحصائيات(?:\s|$)"), fantasy_days_only(statistics_pdf_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بطاقة"), participant_card_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تقرير_الفترة"), period_report_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعلان_اليوم"), announcement_day_command))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملخص_اليوم"), summary_day_command))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تقرير_الفترة"), fantasy_days_only(period_report_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعلان_اليوم"), fantasy_days_only(announcement_day_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/ملخص_اليوم"), fantasy_days_only(summary_day_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قائمة_المتسابقين"), participants_list_command))
 
     # Admin fantasy operations
     app.add_handler(MessageHandler(filters.Document.ALL, admin_only(remember_last_file)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه(?:\s|$)"), admin_only(add_day)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_نتائج(?:\s|$)"), admin_only(approve_results_day)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج(?:\s|$)"), admin_only(results_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اضافه(?:\s|$)"), admin_only(fantasy_days_only(add_day))))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/اعتماد_نتائج(?:\s|$)"), admin_only(fantasy_days_only(approve_results_day))))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج(?:\s|$)"), admin_only(fantasy_days_only(results_day))))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:إضافة_متسابق|اضافة_متسابق|إضافة_مشارك|اضافة_مشارك)(?:\s|$)"), admin_only(add_participant_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:حذف_متسابق|حذف_مشارك)(?:\s|$)"), admin_only(remove_participant_command)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تفعيل_الصور_التلقائية"), admin_only(enable_auto_images)))
@@ -5623,18 +5652,18 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:تنظيف_الأيام|تنظيف_الايام)"), admin_only(clean_days)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/تنظيف_الملفات"), admin_only(clean_temp_files)))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_الكل"), admin_only(clear_all)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_يوم"), admin_only(clear_day)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_نتائج"), admin_only(clear_results)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_يوم"), admin_only(fantasy_days_only(clear_day))))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مسح_نتائج"), admin_only(fantasy_days_only(clear_results))))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/استرجاع_آخر"), admin_only(restore_last)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(lock_day)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(unlock_day)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/قفل_يوم"), admin_only(fantasy_days_only(lock_day))))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/فتح_يوم"), admin_only(fantasy_days_only(unlock_day))))
 
     # Fantasy cup remains part of fantasy.
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بدء_الكاس(?:\s|$)"), admin_only(start_cup_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/بدء_الكاس(?:\s|$)"), admin_only(fantasy_days_only(start_cup_command))))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/حالة_الكاس(?:\s|$)"), admin_only(cup_status_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_الكاس(?:\s|$)"), admin_only(cup_results_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مواجهات_الكاس(?:\s|$)"), admin_only(cup_matches_command)))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:إعادة|اعادة)_الكاس_من(?:\s|$)"), admin_only(reset_cup_from_day_command)))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/نتائج_الكاس(?:\s|$)"), admin_only(fantasy_days_only(cup_results_command))))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/مواجهات_الكاس(?:\s|$)"), admin_only(fantasy_days_only(cup_matches_command))))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:إعادة|اعادة)_الكاس_من(?:\s|$)"), admin_only(fantasy_days_only(reset_cup_from_day_command))))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(?:إلغاء|الغاء)_الكاس(?:\s|$)"), admin_only(cancel_cup_command)))
 
     app.add_handler(MessageHandler(filters.COMMAND, fantasy_unknown_command))
